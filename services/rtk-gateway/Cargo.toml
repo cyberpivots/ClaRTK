@@ -1,0 +1,11 @@
+[package]
+name = "clartk-rtk-gateway"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clartk-ns-raw = { path = "../../core/devices/ns-raw" }
+clartk-px1122r = { path = "../../core/devices/px1122r" }
+

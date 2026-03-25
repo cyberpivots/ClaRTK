@@ -1,0 +1,17 @@
+{
+  "name": "@clartk/api-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@clartk/domain": "workspace:*",
+    "fastify": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10"
+  },
+  "scripts": {
+    "dev": "node --enable-source-maps src/index.ts",
+    "typecheck": "tsc -b --pretty false"
+  }
+}

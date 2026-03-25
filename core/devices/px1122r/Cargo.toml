@@ -1,0 +1,10 @@
+[package]
+name = "clartk-px1122r"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+clartk-skytraq-phoenix = { path = "../../protocols/skytraq-phoenix" }
+serde.workspace = true
+

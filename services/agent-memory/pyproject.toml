@@ -1,0 +1,24 @@
+[project]
+name = "clartk-agent-memory"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "pgvector>=0.3.6",
+  "psycopg[binary]>=3.2.6"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5"
+]
+
+[build-system]
+requires = ["setuptools>=75.8.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

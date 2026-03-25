@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.shared.json",
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/design-tokens" },
+    { "path": "../../packages/ui-native" }
+  ],
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "types": ["react", "react-native"],
+    "allowJs": true
+  }
+}

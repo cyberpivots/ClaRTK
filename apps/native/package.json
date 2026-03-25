@@ -1,0 +1,18 @@
+{
+  "name": "@clartk/native",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@clartk/design-tokens": "workspace:*",
+    "@clartk/ui-native": "workspace:*",
+    "react": "^19.0.0",
+    "react-native": "0.82.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.12"
+  },
+  "scripts": {
+    "start": "react-native start",
+    "typecheck": "tsc -b --pretty false"
+  }
+}

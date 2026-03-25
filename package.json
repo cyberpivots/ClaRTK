@@ -1,0 +1,20 @@
+{
+  "name": "clartk",
+  "private": true,
+  "packageManager": "yarn@4.9.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/api"
+  ],
+  "scripts": {
+    "lint": "tsc -b tsconfig.base.json --pretty false",
+    "typecheck": "tsc -b tsconfig.base.json --pretty false",
+    "test": "node scripts/run-js-tests.mjs",
+    "build": "tsc -b tsconfig.base.json --pretty false"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2"
+  }
+}

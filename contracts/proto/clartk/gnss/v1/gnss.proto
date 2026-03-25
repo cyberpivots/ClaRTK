@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package clartk.gnss.v1;
+
+message RawFrameRef {
+  string fixture_name = 1;
+  uint64 byte_offset = 2;
+  uint32 byte_length = 3;
+  string protocol_family = 4;
+}
+
+enum MeasurementSource {
+  MEASUREMENT_SOURCE_UNSPECIFIED = 0;
+  MEASUREMENT_SOURCE_NS_RAW = 1;
+  MEASUREMENT_SOURCE_PX1122R = 2;
+  MEASUREMENT_SOURCE_RTCM = 3;
+}
+
+enum FixQuality {
+  FIX_QUALITY_UNSPECIFIED = 0;
+  FIX_QUALITY_NO_FIX = 1;
+  FIX_QUALITY_SINGLE = 2;
+  FIX_QUALITY_DGPS = 3;
+  FIX_QUALITY_FLOAT_RTK = 4;
+  FIX_QUALITY_FIXED_RTK = 5;
+  FIX_QUALITY_PPP = 6;
+}
+
+message PositionFix {
+  string fix_id = 1;
+  string device_id = 2;
+  MeasurementSource source = 3;
+  FixQuality quality = 4;
+  double latitude_deg = 5;
+  double longitude_deg = 6;
+  double altitude_m = 7;
+  double horizontal_accuracy_m = 8;
+  double vertical_accuracy_m = 9;
+  uint32 satellites_used = 10;
+  string observed_at = 11;
+  RawFrameRef frame = 12;
+}
+
+message DeviceSnapshot {
+  string device_id = 1;
+  string hardware_family = 2;
+  string firmware_version = 3;
+  map<string, string> attributes = 4;
+}
+

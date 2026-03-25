@@ -1,0 +1,21 @@
+[project]
+name = "clartk-workspace"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["clartk-agent-memory"]
+
+[tool.uv.sources]
+clartk-agent-memory = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+  "services/agent-memory"
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.5"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["services/agent-memory/tests"]

@@ -1,0 +1,18 @@
+:root {
+  background: linear-gradient(180deg, #eef4f1 0%, #f9fbfb 100%);
+  color: #123238;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #d9e6e3;
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgba(18, 50, 56, 0.08);
+  padding: 24px;
+}
+

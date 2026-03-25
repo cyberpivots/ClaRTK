@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: clartk-agent-memory
+Version: 0.1.0
+Requires-Python: >=3.12
+Requires-Dist: pgvector>=0.3.6
+Requires-Dist: psycopg[binary]>=3.2.6
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.5; extra == "dev"

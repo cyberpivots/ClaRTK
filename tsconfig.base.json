@@ -1,0 +1,15 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/domain" },
+    { "path": "./packages/design-tokens" },
+    { "path": "./packages/ui-native" },
+    { "path": "./packages/ui-web" },
+    { "path": "./packages/state" },
+    { "path": "./packages/api-client" },
+    { "path": "./services/api" },
+    { "path": "./apps/dashboard-web" },
+    { "path": "./apps/native" }
+  ]
+}
+

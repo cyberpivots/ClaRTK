@@ -1,0 +1,10 @@
+[package]
+name = "clartk-ns-raw"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+clartk-skytraq-venus8 = { path = "../../protocols/skytraq-venus8" }
+serde.workspace = true
+

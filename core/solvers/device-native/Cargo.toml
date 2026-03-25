@@ -1,0 +1,10 @@
+[package]
+name = "clartk-device-native"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+clartk-geo = { path = "../../geo" }
+serde.workspace = true
+

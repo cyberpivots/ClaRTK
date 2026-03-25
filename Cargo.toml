@@ -1,0 +1,26 @@
+[workspace]
+members = [
+  "core/protocols/skytraq-venus8",
+  "core/protocols/skytraq-phoenix",
+  "core/devices/ns-raw",
+  "core/devices/px1122r",
+  "core/solvers/rtklib-bridge",
+  "core/solvers/device-native",
+  "core/transforms/rtcm",
+  "core/transforms/nmea",
+  "core/transforms/rinex",
+  "core/geo",
+  "services/rtk-gateway"
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "Proprietary"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0.97"
+serde = { version = "1.0.219", features = ["derive"] }
+thiserror = "2.0.12"
+
