@@ -6,6 +6,7 @@
   "dependencies": {
     "@clartk/api-client": "workspace:*",
     "@clartk/design-tokens": "workspace:*",
+    "@clartk/domain": "workspace:*",
     "@clartk/ui-web": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

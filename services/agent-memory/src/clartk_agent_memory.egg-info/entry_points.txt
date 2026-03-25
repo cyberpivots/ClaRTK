@@ -1,0 +1,2 @@
+[console_scripts]
+clartk-agent-memory = agent_memory.service:main

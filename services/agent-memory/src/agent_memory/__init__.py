@@ -1,4 +1,15 @@
-from .service import ClaimCandidate, summarize_claim
+from .service import (
+    ClaimCandidate,
+    SourceDocumentCandidate,
+    build_health_payload,
+    chunk_document,
+    summarize_claim,
+)
 
-__all__ = ["ClaimCandidate", "summarize_claim"]
-
+__all__ = [
+    "ClaimCandidate",
+    "SourceDocumentCandidate",
+    "build_health_payload",
+    "chunk_document",
+    "summarize_claim",
+]

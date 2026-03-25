@@ -4,6 +4,7 @@
   "references": [
     { "path": "../../packages/api-client" },
     { "path": "../../packages/design-tokens" },
+    { "path": "../../packages/domain" },
     { "path": "../../packages/ui-web" }
   ],
   "compilerOptions": {

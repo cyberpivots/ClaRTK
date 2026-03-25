@@ -8,6 +8,14 @@
     "services/api"
   ],
   "scripts": {
+    "dev:db:up": "scripts/dev-db-up.sh",
+    "dev:db:down": "scripts/dev-db-down.sh",
+    "dev:db:init": "scripts/dev-db-init.sh",
+    "dev:api": "scripts/dev-api.sh",
+    "dev:dashboard": "scripts/dev-dashboard.sh",
+    "dev:memory": "scripts/dev-agent-memory.sh",
+    "dev:gateway": "scripts/dev-gateway.sh",
+    "dev:status": "scripts/dev-status.sh",
     "lint": "tsc -b tsconfig.base.json --pretty false",
     "typecheck": "tsc -b tsconfig.base.json --pretty false",
     "test": "node scripts/run-js-tests.mjs",

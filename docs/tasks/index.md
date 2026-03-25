@@ -12,3 +12,5 @@
   Status: pending
 - `TASK-0400-agent-memory.md`: Implement development memory service, embeddings/evals, and ML/mapping pipelines
   Status: pending
+- `TASK-0500-development-servers.md`: Implement the local-first development server stack, bootstrap flow, and provisional service boundaries
+  Status: in progress

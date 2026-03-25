@@ -19,5 +19,10 @@ ClaRTK is a host-first monorepo for RTK/GNSS tooling, shared app interfaces, bro
 - Rust: Cargo workspace
 - Python: `uv` workspace
 
-See `AGENTS.md` for repo-specific operating rules and exact verification expectations.
+## Development Servers
 
+- Default local model: `docker compose up -d postgres`, then run the host-side dev scripts in `scripts/`
+- Single Postgres server hosts both `clartk_runtime` and `clartk_dev`
+- Startup order, port registry, env contract, and degraded-mode behavior live in `docs/operations/development-servers.md`
+
+See `AGENTS.md` for repo-specific operating rules and exact verification expectations.

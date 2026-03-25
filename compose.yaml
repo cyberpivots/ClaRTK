@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: clartk-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-clartk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clartk}
+      POSTGRES_DB: postgres
+    ports:
+      - "${CLARTK_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - clartk-postgres:/var/lib/postgresql/data
+      - ./db/bootstrap/0000_create_logical_databases.sql:/docker-entrypoint-initdb.d/0000_create_logical_databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  clartk-postgres:

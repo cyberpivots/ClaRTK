@@ -7,6 +7,9 @@ dependencies = [
   "psycopg[binary]>=3.2.6"
 ]
 
+[project.scripts]
+clartk-agent-memory = "agent_memory.service:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.5"
@@ -21,4 +24,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
