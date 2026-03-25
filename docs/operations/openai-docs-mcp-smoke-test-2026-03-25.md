@@ -1,6 +1,6 @@
 # OpenAI Docs MCP Smoke Test Attempt 2026-03-25
 
-- Status: retry required
+- Status: retry required for tools-picker screenshot only
 - Date: 2026-03-25
 - Owner: initial agent
 - Scope: verify that `openaiDeveloperDocs` is active in VS Code Copilot Chat Agent mode and capture a clean transcript plus a tools-picker artifact
@@ -10,7 +10,8 @@
 - The smoke-test prompt was launched in VS Code Agent mode from the ClaRTK workspace using the supported Windows CLI path.
 - VS Code loaded the OpenAI Docs MCP search-tool schema during the session.
 - GitHub Copilot Chat completed the related agent request.
-- The session was later contaminated by desktop automation that injected `Developer: Reload Window` into the active chat, so the artifact set is incomplete.
+- The original UI attempt was later contaminated by desktop automation that injected `Developer: Reload Window` into the active chat.
+- A clean transcript artifact was later recovered from the Windows VS Code workspace session store for the ClaRTK workspace.
 
 ## Verified Evidence
 
@@ -25,16 +26,21 @@
 - Non-canonical UI capture:
   `C:\Users\cyber\AppData\Local\Temp\vscode-smoke.png`
   shows the relevant chat session title, but it is not a clean acceptance artifact because the visible response is from the accidental reload-window prompt.
+- Clean transcript artifact:
+  `docs/operations/openai-docs-mcp-smoke-test-2026-03-25-transcript.md`
+  extracts request `0` from the ClaRTK workspace session JSONL at
+  `/mnt/c/Users/cyber/AppData/Roaming/Code/User/workspaceStorage/6ce9276ac101848fdfb7ca9ae2149cb9/chatSessions/bfe364ba-8b10-4b15-b8f5-dc00459e4023.jsonl`.
+  That request records the original prompt, `openaiDeveloperDocs` MCP tool calls, and the final answer.
 
 ## Why This Is Not Yet A Pass
 
-- The clean smoke-test prompt and answer were not preserved as a readable transcript artifact.
+- The clean smoke-test prompt and answer are now preserved as a readable transcript artifact.
 - The required screenshot showing `openaiDeveloperDocs` enabled in the VS Code tools picker was not captured.
-- Because those acceptance artifacts are missing, this attempt must not be treated as a final smoke-test pass.
+- Because that screenshot artifact is still missing, this attempt must not be treated as a final smoke-test pass.
 
 ## Retry Exit Criteria
 
-- Capture a clean transcript containing the smoke-test prompt and the corresponding answer.
-- Capture a screenshot showing `openaiDeveloperDocs` enabled in the VS Code Copilot Chat tools picker for the same session.
-- Confirm the answer is docs-grounded and materially consistent with the current OpenAI Responses API documentation.
-- Link the final artifacts back into `docs/tasks/TASK-0050-openai-docs-mcp.md`.
+- Keep the captured transcript artifact as the canonical prompt-and-answer record for this smoke test.
+- Capture a screenshot showing `openaiDeveloperDocs` enabled in the VS Code Copilot Chat tools picker.
+- Confirm the screenshot is linked together with the transcript artifact from `docs/operations/openai-docs-mcp-smoke-test-2026-03-25-transcript.md`.
+- Link the final artifact set back into `docs/tasks/TASK-0050-openai-docs-mcp.md`.

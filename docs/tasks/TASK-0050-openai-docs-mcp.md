@@ -5,7 +5,7 @@
 - Worktree: separate worktree required for write-capable agent
 - Depends On: TASK-0001
 - Checks: `codex mcp list`, `codex mcp get openaiDeveloperDocs`, AGENTS.md/reference doc review, VS Code Agent-mode smoke test
-- Status: completed for MCP installation; retry required for clean VS Code smoke-test artifacts
+- Status: completed for MCP installation; clean transcript captured; retry required for tools-picker screenshot artifact
 
 ## Goal
 
@@ -29,12 +29,13 @@
 - Launched the VS Code Agent-mode smoke-test prompt through the supported Windows CLI path with `code.cmd chat -m agent -r --maximize`.
 - Verified that VS Code loaded the OpenAI Docs MCP tool schema `vscode://schemas/lm/tool/mcp_openaidevelop_search_openai_docs`.
 - Verified that GitHub Copilot Chat executed the agent request successfully in `panel/editAgent`.
-- Current evidence is still not sufficient to mark the smoke test cleanly passed because desktop automation contaminated the active session with a later `Developer: Reload Window` prompt.
-- No clean prompt/answer transcript was captured.
+- Recovered a clean transcript artifact for request `0` from the ClaRTK workspace session store:
+  `docs/operations/openai-docs-mcp-smoke-test-2026-03-25-transcript.md`
+- The later `Developer: Reload Window` contamination remains present as a separate request in the same session file, but the extracted transcript artifact preserves the original smoke-test prompt and answer cleanly.
 - No tools-picker screenshot showing `openaiDeveloperDocs` enabled was captured.
 - Follow-on record: `docs/operations/openai-docs-mcp-smoke-test-2026-03-25.md`
 
 ## Notes
 
 - VS Code Copilot Chat in Agent mode still requires enabling `openaiDeveloperDocs` in the tools picker for the session.
-- Treat the smoke test as `retry required` until a clean transcript artifact and a tools-picker artifact are both captured and linked from the repo.
+- Treat the smoke test as `retry required` until a tools-picker artifact is captured and linked together with the recorded transcript artifact.
