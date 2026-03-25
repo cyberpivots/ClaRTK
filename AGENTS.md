@@ -69,7 +69,8 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
 - Prefer local files, fixtures, tests, and configured MCP servers before browsing.
 - Browse when information is time-sensitive, citation-sensitive, or absent from the repo.
 - Keep internet usage narrowly scoped to the task.
-- For OpenAI/Codex/API questions, prefer the `openai-docs` skill and the OpenAI docs MCP server once installed.
+- Always use the OpenAI developer documentation MCP server if you need to work with the OpenAI API, ChatGPT Apps SDK, Codex, or related OpenAI product questions without the user having to ask explicitly.
+- If the OpenAI developer documentation MCP server is unavailable, fall back to the `openai-docs` skill and official OpenAI web sources only.
 
 ## Skills
 
@@ -84,4 +85,3 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
 - Task or ADR docs are updated when the change affects workflow or architecture.
 - The exact verification status is reported.
 - No unrelated files are modified without reason.
-

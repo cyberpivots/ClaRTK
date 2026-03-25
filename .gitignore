@@ -2,7 +2,8 @@
 .env
 .env.*
 .idea/
-.vscode/
+.vscode/*
+!.vscode/mcp.json
 .yarn/*
 !.yarn/plugins
 !.yarn/releases
@@ -25,4 +26,3 @@ __pycache__/
 *.swo
 *.log
 db/data/
-
