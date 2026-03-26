@@ -22,3 +22,4 @@
 
 - Runtime auth, profile, and payload hardening continues under `TASK-0210`.
 - Dev-memory suggestion storage, retrieval, evaluation, and publication-gate hardening continues under `TASK-0410` and `TASK-0420`.
+- Contract-generation verification now lives with `TASK-0110`, `TASK-0210`, and `TASK-0410`; this completed vertical slice predates the repo-wide contract-authority gate.

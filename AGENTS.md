@@ -7,6 +7,7 @@ ClaRTK is a host-first monorepo for RTK/GNSS tooling, protocol adapters, shared 
 ## Repository Map
 
 - `contracts/proto`: public contract source of truth for generated TS, Python, and Rust types
+- `generated`: derived contract outputs for Python and Rust
 - `core`: GNSS protocols, device adapters, transforms, solvers, and geospatial helpers
 - `services`: deployable applications
 - `packages`: shared TS packages for UI, state, tokens, and API access
@@ -20,6 +21,8 @@ ClaRTK is a host-first monorepo for RTK/GNSS tooling, protocol adapters, shared 
 
 Use repo-local or language-native tooling. Prefer these commands exactly:
 
+- Contracts generate: `node scripts/generate-contracts.mjs`
+- Contracts check: `node scripts/generate-contracts.mjs --check`
 - JS install: `corepack yarn install`
 - JS lint: `corepack yarn lint`
 - JS typecheck: `corepack yarn typecheck`
@@ -30,6 +33,14 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
 - Python test: `uv run pytest`
 - Database docs check: `scripts/check-sql.sh`
 - Full repo check: `scripts/check-all.sh`
+
+## Development Data Planes
+
+- Local development uses one PostgreSQL server with two logical databases:
+  - `clartk_runtime` for operator-facing runtime state
+  - `clartk_dev` for agent-memory, evaluations, embeddings, and agentic coordination state
+- Host-run services must consume the resolved PostgreSQL endpoint produced by `scripts/dev-db-up.sh`; do not assume `127.0.0.1:5432` is always reachable on the host.
+- The `clartk_dev` schema already includes `agent.run`, `agent.event`, and `agent.artifact` tables plus `vector` support. Treat that as the baseline coordination plane for future work rather than creating more transient file-based scheduler artifacts.
 
 ## Verification Rules
 
@@ -60,9 +71,22 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
 
 ## Task Tracking
 
-- Create or update a task file in `docs/tasks/TASK-####-slug.md` for any non-trivial work.
+- Prefer updating an existing active task file when the work already fits a tracked umbrella or child task.
+- Create a new task file only when no active task fits or when a new milestone, hardening slice, or architecture-affecting follow-on needs explicit ownership.
+- Use `docs/tasks/` for durable milestones, handoffs, and architecture-facing scope. Do not create per-run task files for transient scheduling or execution state.
+- DB-backed coordination refactors belong in `clartk_dev` under `TASK-0430`, not in growing sets of one-off planning files.
 - Each task file must declare: `Owner`, `Write Set`, `Worktree`, `Depends On`, `Checks`, and `Status`.
 - Record architectural decisions in `docs/adr/ADR-###-slug.md`.
+
+## Agent Coordination Direction
+
+- Keep durable project guidance in `AGENTS.md`, ADRs, and milestone task files.
+- Move ephemeral agent scheduling, leases, retries, run logs, and execution artifacts toward PostgreSQL-backed coordination in `clartk_dev`.
+- When extending the coordination plane, prefer ordinary PostgreSQL primitives over new infrastructure by default:
+  - row leasing with `FOR UPDATE SKIP LOCKED`
+  - wakeups with `LISTEN` and `NOTIFY`
+  - singleton scheduler or reconciler ownership with advisory locks
+- Keep ML and embedding work in Python workers and store resulting artifacts, evaluations, and vectors in `clartk_dev`; do not let those jobs mutate canonical runtime state directly.
 
 ## Internet and MCP
 

@@ -16,3 +16,9 @@
 - Treat the current source-document, claim, evaluation, and preference-suggestion surfaces as hardening targets.
 - Keep canonical runtime mutation out of dev-memory ownership.
 - Preserve the runtime API brokering pattern for browser-visible suggestion flows.
+
+## Verified Current Gaps
+
+- The agent proto files cover source documents, claims, evaluations, and preference suggestion primitives, but they do not yet capture the richer fields the service currently stores and returns.
+- `services/agent-memory/src/agent_memory/service.py` still owns fields such as source-document body and metadata, evaluation detail, observation signatures and payloads, and suggestion confidence, evidence, and review detail.
+- `packages/domain/src/compat.ts` now retains the handwritten dev-memory compatibility DTOs that must be replaced or narrowed once generated contract ownership lands.

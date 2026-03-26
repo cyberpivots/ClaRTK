@@ -6,6 +6,11 @@
 - The dashboard talks only to the runtime API.
 - Agent-memory never writes runtime preferences directly.
 
+## Contract Authority
+
+- `contracts/proto` is the canonical source for public auth, profile, and suggestion payloads.
+- Treat the preference shape below as operator-facing guidance only; generated language outputs remain the authoritative transport definition.
+
 ## Dev-Memory Review Flow
 
 1. The dashboard signs in through runtime auth.

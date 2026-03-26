@@ -8,6 +8,8 @@
     "services/api"
   ],
   "scripts": {
+    "contracts:generate": "node scripts/generate-contracts.mjs",
+    "contracts:check": "node scripts/generate-contracts.mjs --check",
     "dev:db:up": "scripts/dev-db-up.sh",
     "dev:db:down": "scripts/dev-db-down.sh",
     "dev:db:init": "scripts/dev-db-init.sh",

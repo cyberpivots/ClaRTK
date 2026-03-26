@@ -32,6 +32,8 @@
   Status: in progress
 - `TASK-0420-evaluation-and-promotion-pipeline.md`: Implement validation, promotion, and publication-gate workflows
   Status: in progress
+- `TASK-0430-postgres-agent-coordination.md`: Move transient agent scheduling and ML job orchestration into `clartk_dev`
+  Status: pending
 - `TASK-0500-development-servers.md`: Umbrella milestone for the local-first development stack and verification tooling
   Status: in progress
 - `TASK-0510-dev-stack-verification-and-toolchain-integration.md`: Integrate codegen prerequisites and authoritative repo checks into local bring-up

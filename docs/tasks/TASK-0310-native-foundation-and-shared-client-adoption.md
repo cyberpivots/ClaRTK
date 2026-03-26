@@ -16,3 +16,8 @@
 - Treat the existing React Native shell as partial foundation.
 - Reuse the same generated client contracts and shared state surfaces as the web dashboard.
 - Keep Windows on the shared app line rather than forking a separate desktop client.
+
+## Verified Current Gaps
+
+- `apps/native/src/App.tsx` is still a presentational shell and does not yet consume `@clartk/domain`, generated contracts, or the shared runtime API client.
+- Native adoption is therefore blocked on the runtime and dashboard contract-hardening work rather than on GNSS or gateway feature depth.

@@ -10,6 +10,13 @@ for linker in cc clang gcc; do
   fi
 done
 
+if command -v node >/dev/null 2>&1; then
+  echo "[check-all] Contracts"
+  node scripts/generate-contracts.mjs --check
+else
+  echo "[check-all] Contracts skipped: install Node.js for contract generation checks"
+fi
+
 echo "[check-all] SQL"
 scripts/check-sql.sh
 

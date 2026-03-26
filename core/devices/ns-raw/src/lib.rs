@@ -14,3 +14,32 @@ pub fn sample_from_frame(frame: Venus8Frame) -> NsRawSample {
     }
 }
 
+pub fn sample_from_bytes(bytes: &[u8]) -> Result<NsRawSample, clartk_skytraq_venus8::DecodeError> {
+    let frame = clartk_skytraq_venus8::decode_frame(bytes)?;
+    Ok(sample_from_frame(frame))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sample_from_bytes;
+
+    fn decode_hex_fixture(contents: &str) -> Vec<u8> {
+        let hex = contents.split_whitespace().collect::<String>();
+        assert_eq!(hex.len() % 2, 0, "fixture hex length must be even");
+        hex.as_bytes()
+            .chunks(2)
+            .map(|chunk| {
+                let text = std::str::from_utf8(chunk).expect("fixture chunk must be utf-8");
+                u8::from_str_radix(text, 16).expect("fixture chunk must be hex")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tags_ns_raw_fixture_transport() {
+        let bytes = decode_hex_fixture(include_str!("../../../../fixtures/skytraq/venus8-nav.hex"));
+        let sample = sample_from_bytes(&bytes).expect("fixture should decode");
+        assert_eq!(sample.transport, "usb-or-txd1");
+        assert_eq!(sample.frame.message_id, 0xDC);
+    }
+}

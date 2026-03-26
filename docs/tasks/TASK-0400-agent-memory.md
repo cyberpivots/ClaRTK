@@ -16,8 +16,10 @@
 - Treat the current agent-memory service and the preference suggestion/review slice as the baseline to harden, not as a future service to create from scratch.
 - Keep storage and retrieval hardening separate from evaluation and promotion-gate work.
 - Document how dev-memory outputs inform future work without auto-editing `AGENTS.md`, ADRs, or runtime state.
+- Reduce file-sprawl for transient coordination by moving agentic scheduling and execution metadata toward the `clartk_dev` control plane rather than more per-run docs artifacts.
 
 ## Child Tasks
 
 - `TASK-0410`: agent-memory storage and retrieval hardening
 - `TASK-0420`: evaluation and promotion pipeline
+- `TASK-0430`: PostgreSQL-backed agent coordination and ML control plane

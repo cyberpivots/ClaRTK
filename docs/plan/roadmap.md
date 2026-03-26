@@ -35,8 +35,9 @@
 - Active child tasks:
   - `TASK-0410` for storage and retrieval hardening
   - `TASK-0420` for evaluation, validation, and promotion gates
+  - `TASK-0430` for PostgreSQL-backed coordination, scheduling, and ML job orchestration
 - Exit condition:
-  - dev-memory retrieval and evaluation flows are contract-backed and cannot mutate canonical runtime state directly
+  - dev-memory retrieval, evaluation, and agentic coordination flows are contract-backed where needed, PostgreSQL-backed for transient scheduling state, and cannot mutate canonical runtime state directly
 
 ### GNSS And Gateway Data Plane
 

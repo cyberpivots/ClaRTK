@@ -16,3 +16,9 @@
 - Remove provisional transport-type ownership from handwritten TS models.
 - Align runtime API resources, auth/profile payloads, and API health metadata to generated contracts.
 - Keep the runtime API as the only browser-facing backend surface.
+
+## Verified Current Gaps
+
+- `packages/domain/src/compat.ts` now retains the runtime compatibility DTOs for auth, profile, health, and resource collections while downstream callers migrate.
+- `services/api/src/index.ts` and `packages/api-client/src/index.ts` both depend directly on those handwritten shapes today.
+- The current runtime proto files cover auth and preference slices only; health payloads, resource envelopes, and runtime device/telemetry/RTK/view payloads are not yet proto-backed.
