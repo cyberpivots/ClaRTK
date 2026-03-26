@@ -9,6 +9,7 @@ Primary table families:
 
 - agent runs and events
 - agent artifacts and future coordination state
+- agent task queue and dependency state
 - source documents and validated knowledge
 - embeddings and evaluations
 
@@ -16,4 +17,5 @@ Requires the `vector` extension for embedding storage.
 
 Current implementation note:
 
-- The schema is coordination-ready, but the current Python service only stages embedding chunks with `pending_vector` metadata. Actual vector generation and DB-backed agent scheduling remain follow-on work.
+- The schema now includes a PostgreSQL-backed task queue baseline in `agent.task` and `agent.task_dependency`.
+- The current Python service now writes deterministic development vectors into `memory.embedding_chunk.embedding` and can process embedding/evaluation jobs through the `agent.*` control plane.

@@ -8,6 +8,7 @@
   - runtime API on `3000`
   - dashboard Vite dev server on `5173`
   - agent-memory HTTP service on `3100`
+  - agent-memory worker with no public port
   - RTK gateway diagnostics on `3200`
   - React Native Metro on `8081`
 
@@ -17,10 +18,11 @@ Default bring-up model:
 2. `scripts/dev-db-init.sh`
 3. `scripts/dev-api.sh`
 4. `scripts/dev-agent-memory.sh`
-5. `scripts/dev-auth:bootstrap` or `scripts/dev-bootstrap-auth.sh`
-6. `scripts/dev-gateway.sh`
-7. `scripts/dev-dashboard.sh`
-8. `scripts/dev-status.sh`
+5. `scripts/dev-agent-memory-worker.sh`
+6. `scripts/dev-auth:bootstrap` or `scripts/dev-bootstrap-auth.sh`
+7. `scripts/dev-gateway.sh`
+8. `scripts/dev-dashboard.sh`
+9. `scripts/dev-status.sh`
 
 Fallback model:
 
@@ -50,6 +52,7 @@ services/api -----------------------> localhost:3000
 apps/dashboard-web -----------------> services/api
 apps/native (later app integration) -> services/api
 services/agent-memory --------------> localhost:3100
+agent-memory worker ---------------> clartk_dev
 ```
 
 ## Port Registry
@@ -88,6 +91,9 @@ services/agent-memory --------------> localhost:3100
 | `CLARTK_AGENT_MEMORY_HOST` | `0.0.0.0` | agent-memory |
 | `CLARTK_AGENT_MEMORY_PORT` | `3100` | agent-memory |
 | `CLARTK_AGENT_MEMORY_REVIEW_TOKEN` | `dev-review-token` | runtime API and agent-memory internal review calls |
+| `CLARTK_AGENT_TASK_QUEUE` | `default` | agent-memory worker |
+| `CLARTK_AGENT_TASK_LEASE_SECONDS` | `60` | agent-memory worker |
+| `CLARTK_AGENT_TASK_IDLE_TIMEOUT` | `30` | agent-memory worker |
 | `CLARTK_GATEWAY_DIAGNOSTICS_HOST` | `0.0.0.0` | gateway |
 | `CLARTK_GATEWAY_DIAGNOSTICS_PORT` | `3200` | gateway |
 | `CLARTK_GATEWAY_MODE` | `hybrid` | gateway |
@@ -105,6 +111,7 @@ services/agent-memory --------------> localhost:3100
 - Gateway diagnostics: `/health`, `/v1/inputs`
 - Runtime auth/profile: `/v1/auth/*`, `/v1/me`, `/v1/me/profile`, `/v1/me/views`, `/v1/me/preference-observations`, `/v1/me/suggestions`, `/v1/admin/accounts`
 - Internal review flow: runtime API brokers suggestion review and publication into agent-memory
+- Background job flow: `uv run clartk-agent-memory run-worker` claims `clartk_dev` tasks with PostgreSQL leasing and processes embeddings/evaluations without exposing a browser-facing surface
 
 These boundaries are provisional until generated contracts land in `contracts/proto`.
 

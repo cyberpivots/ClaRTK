@@ -1,11 +1,11 @@
 # TASK-0430 PostgreSQL-Backed Agent Coordination
 
-- Owner: unassigned
+- Owner: initial agent
 - Write Set: `db/**` via serialized database owner, `services/agent-memory/`, `scripts/`, `docs/operations/`, `docs/research/`, `AGENTS.md`
 - Worktree: separate worktree required for write-capable agent
 - Depends On: TASK-0410, TASK-0500
 - Checks: migration apply/rollback, queue lease and retry smoke tests, `LISTEN`/`NOTIFY` wakeup smoke tests, ML job orchestration smoke tests, `uv run pytest`
-- Status: pending
+- Status: in progress
 
 ## Goal
 
@@ -22,8 +22,19 @@
 ## Verified Current Baseline
 
 - `clartk_dev` already includes `agent.run`, `agent.event`, `agent.artifact`, `memory.*`, and `eval.*` tables plus the `vector` extension.
-- `services/agent-memory` currently uses the memory and evaluation tables and stages embedding chunks with `pending_vector` metadata, but it does not yet use the `agent.*` coordination tables.
+- `services/agent-memory` initially used the memory and evaluation tables only and staged embedding chunks with `pending_vector` metadata, without using the `agent.*` coordination tables.
 - The current coordination process still relies on `docs/tasks/` updates for durable planning and handoff, which is too heavy for transient scheduling state.
+
+## Verified Current Progress
+
+- `db/migrations/0005_agent_task_queue.sql` now adds `agent.task` and `agent.task_dependency` as the initial queue and dependency baseline.
+- `services/agent-memory` now supports worker leasing with `FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY` wakeups, and transaction-scoped advisory locks for scheduler and lease-repair duties.
+- `agent.run`, `agent.event`, and `agent.artifact` are now used as execution history for queued embedding and evaluation jobs.
+
+## Remaining Gaps
+
+- The current queue handles embeddings and evaluations only; broader multi-agent scheduling, dependency release, and richer retry policy still remain to be implemented.
+- The worker currently uses periodic maintenance scheduling inside the Python process; there is not yet a separate reconciler or dependency-release service.
 
 ## Initial Plan
 

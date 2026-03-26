@@ -27,7 +27,7 @@
 
 ## PostgreSQL Coordination Direction
 
-- The current `clartk_dev` schema already has `agent.run`, `agent.event`, and `agent.artifact` tables plus `vector` support.
+- The current `clartk_dev` schema already has `agent.task`, `agent.task_dependency`, `agent.run`, `agent.event`, and `agent.artifact` tables plus `vector` support.
 - `TASK-0430` owns the follow-on refactor that moves scheduling, leases, retries, and run-event tracking toward PostgreSQL-backed coordination instead of more file proliferation.
 - Default primitives for that refactor are:
   - `FOR UPDATE SKIP LOCKED` for concurrent task leasing

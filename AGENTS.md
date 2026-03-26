@@ -40,7 +40,7 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
   - `clartk_runtime` for operator-facing runtime state
   - `clartk_dev` for agent-memory, evaluations, embeddings, and agentic coordination state
 - Host-run services must consume the resolved PostgreSQL endpoint produced by `scripts/dev-db-up.sh`; do not assume `127.0.0.1:5432` is always reachable on the host.
-- The `clartk_dev` schema already includes `agent.run`, `agent.event`, and `agent.artifact` tables plus `vector` support. Treat that as the baseline coordination plane for future work rather than creating more transient file-based scheduler artifacts.
+- The `clartk_dev` schema already includes `agent.task`, `agent.task_dependency`, `agent.run`, `agent.event`, and `agent.artifact` tables plus `vector` support. Treat that as the baseline coordination plane for future work rather than creating more transient file-based scheduler artifacts.
 
 ## Verification Rules
 

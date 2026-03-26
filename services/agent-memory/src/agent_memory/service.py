@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
+import socket
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -11,13 +14,30 @@ from typing import Any, Iterator
 from urllib.parse import parse_qs, urlparse
 
 import psycopg
+from pgvector import Vector
+from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 DEFAULT_AGENT_MEMORY_HOST = "0.0.0.0"
 DEFAULT_AGENT_MEMORY_PORT = 3100
-DEFAULT_AGENT_MEMORY_JOBS = ["run-embeddings", "run-evals"]
+DEFAULT_AGENT_MEMORY_JOBS = [
+    "run-embeddings",
+    "run-evals",
+    "run-scheduler-once",
+    "run-worker",
+]
 DEFAULT_INTERNAL_REVIEW_TOKEN = "dev-review-token"
+DEFAULT_AGENT_TASK_QUEUE = "default"
+DEFAULT_AGENT_TASK_LEASE_SECONDS = 60
+DEFAULT_AGENT_TASK_IDLE_TIMEOUT = 30.0
+DEFAULT_EMBEDDING_BATCH_LIMIT = 128
+EMBEDDING_DIMENSIONS = 1536
+EMBEDDING_PROVIDER = "deterministic-dev"
+TASK_READY_CHANNEL = "agent_task_ready"
+SCHEDULER_LOCK_NAMESPACE = 43
+SCHEDULER_LOCK_KEY = 1
+LEASE_REPAIR_LOCK_KEY = 2
 SUGGESTION_THRESHOLD = 2
 
 
@@ -76,6 +96,64 @@ def build_health_payload(database_url: str | None) -> dict[str, Any]:
         "devDatabaseConfigured": bool(database_url),
         "devDatabaseName": "clartk_dev",
         "jobs": DEFAULT_AGENT_MEMORY_JOBS,
+        "coordinationMode": "postgres",
+        "embeddingProvider": EMBEDDING_PROVIDER,
+        "embeddingDimensions": EMBEDDING_DIMENSIONS,
+    }
+
+
+def build_default_worker_name() -> str:
+    return f"{socket.gethostname()}-{os.getpid()}"
+
+
+def build_development_embedding(text: str, dimensions: int = EMBEDDING_DIMENSIONS) -> list[float]:
+    if dimensions <= 0:
+        raise ValueError("dimensions must be greater than zero")
+
+    tokens = [token for token in text.lower().split() if token]
+    if not tokens:
+        return [0.0] * dimensions
+
+    vector = [0.0] * dimensions
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        for index in range(0, len(digest), 4):
+            window = digest[index : index + 4]
+            if len(window) < 4:
+                break
+
+            slot = int.from_bytes(window[:2], "big") % dimensions
+            magnitude = 0.25 + (window[2] / 255.0)
+            sign = 1.0 if (window[3] % 2) == 0 else -1.0
+            vector[slot] += sign * magnitude
+
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0:
+        return [0.0] * dimensions
+
+    return [value / norm for value in vector]
+
+
+def task_retry_delay_seconds(attempt_count: int) -> int:
+    bounded_attempt = max(1, attempt_count)
+    return min(300, 2 ** bounded_attempt)
+
+
+def maintenance_task_specs(chunk_size: int) -> dict[str, dict[str, Any]]:
+    return {
+        "memory.run_embeddings": {
+            "payload": {
+                "chunkSize": chunk_size,
+                "batchLimit": DEFAULT_EMBEDDING_BATCH_LIMIT,
+            },
+            "priority": 100,
+            "intervalSeconds": 60,
+        },
+        "memory.run_evaluations": {
+            "payload": {},
+            "priority": 50,
+            "intervalSeconds": 300,
+        },
     }
 
 
@@ -88,11 +166,17 @@ class MemoryRepository:
         return bool(self.database_url)
 
     @contextmanager
-    def connect(self) -> Iterator[psycopg.Connection[Any]]:
+    def connect(
+        self,
+        *,
+        register_vectors: bool = False,
+    ) -> Iterator[psycopg.Connection[Any]]:
         if not self.database_url:
             raise RuntimeError("CLARTK_DEV_DATABASE_URL is not configured")
 
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            if register_vectors:
+                register_vector(connection)
             yield connection
 
     def list_source_documents(self, limit: int = 50) -> list[dict[str, Any]]:
@@ -375,60 +459,42 @@ class MemoryRepository:
             raise LookupError("suggestion not found")
         return refreshed
 
-    def run_embedding_job(self, chunk_size: int = 120) -> dict[str, Any]:
+    def run_embedding_job(
+        self,
+        chunk_size: int = 120,
+        batch_limit: int = DEFAULT_EMBEDDING_BATCH_LIMIT,
+    ) -> dict[str, Any]:
         if not self.configured:
             return {
                 "configured": False,
                 "documentsProcessed": 0,
                 "chunksCreated": 0,
+                "chunksVectorized": 0,
             }
 
-        documents_processed = 0
-        chunks_created = 0
-
-        with self.connect() as connection:
-            rows = connection.execute(
+        with self.connect(register_vectors=True) as connection:
+            documents_processed, chunks_created = self._stage_embedding_chunks(
+                connection,
+                chunk_size,
+            )
+            chunks_vectorized = self._vectorize_pending_chunks(connection, batch_limit)
+            pending_row = connection.execute(
                 """
-                SELECT source_document_id, body
-                FROM memory.source_document
-                ORDER BY captured_at ASC
+                SELECT COUNT(*) AS pending_vector_count
+                FROM memory.embedding_chunk
+                WHERE embedding IS NULL
                 """
-            ).fetchall()
-
-            for row in rows:
-                documents_processed += 1
-                for chunk in chunk_document(row["body"], chunk_size):
-                    exists = connection.execute(
-                        """
-                        SELECT 1
-                        FROM memory.embedding_chunk
-                        WHERE source_document_id = %s AND content = %s
-                        LIMIT 1
-                        """,
-                        (row["source_document_id"], chunk),
-                    ).fetchone()
-                    if exists:
-                        continue
-
-                    connection.execute(
-                        """
-                        INSERT INTO memory.embedding_chunk (source_document_id, content, metadata)
-                        VALUES (%s, %s, %s)
-                        """,
-                        (
-                            row["source_document_id"],
-                            chunk,
-                            Jsonb({"status": "pending_vector"}),
-                        ),
-                    )
-                    chunks_created += 1
-
+            ).fetchone()
             connection.commit()
 
         return {
             "configured": True,
             "documentsProcessed": documents_processed,
             "chunksCreated": chunks_created,
+            "chunksVectorized": chunks_vectorized,
+            "pendingVectorCount": int(pending_row["pending_vector_count"]),
+            "embeddingProvider": EMBEDDING_PROVIDER,
+            "embeddingDimensions": EMBEDDING_DIMENSIONS,
         }
 
     def run_evaluation_job(self) -> dict[str, Any]:
@@ -446,6 +512,8 @@ class MemoryRepository:
                   (SELECT COUNT(*) FROM memory.source_document) AS source_document_count,
                   (SELECT COUNT(*) FROM memory.knowledge_claim) AS claim_count,
                   (SELECT COUNT(*) FROM memory.embedding_chunk) AS embedding_chunk_count,
+                  (SELECT COUNT(*) FROM memory.embedding_chunk WHERE embedding IS NOT NULL) AS vectorized_embedding_chunk_count,
+                  (SELECT COUNT(*) FROM memory.embedding_chunk WHERE embedding IS NULL) AS pending_embedding_chunk_count,
                   (SELECT COUNT(*) FROM memory.preference_suggestion) AS preference_suggestion_count
                 """
             ).fetchone()
@@ -454,7 +522,10 @@ class MemoryRepository:
                 "sourceDocumentCount": row["source_document_count"],
                 "claimCount": row["claim_count"],
                 "embeddingChunkCount": row["embedding_chunk_count"],
+                "vectorizedEmbeddingChunkCount": row["vectorized_embedding_chunk_count"],
+                "pendingEmbeddingChunkCount": row["pending_embedding_chunk_count"],
                 "preferenceSuggestionCount": row["preference_suggestion_count"],
+                "embeddingProvider": EMBEDDING_PROVIDER,
             }
 
             evaluation = connection.execute(
@@ -468,6 +539,657 @@ class MemoryRepository:
             connection.commit()
 
         return map_evaluation(evaluation)
+
+    def run_scheduler_once(
+        self,
+        *,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        chunk_size: int = 120,
+    ) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "configured": False,
+                "created": [],
+                "requeuedCount": 0,
+            }
+
+        scheduled = self.schedule_maintenance_tasks(queue_name=queue_name, chunk_size=chunk_size)
+        requeued = self.requeue_expired_tasks()
+        return {
+            "configured": True,
+            "created": scheduled["created"],
+            "lockAcquired": scheduled["lockAcquired"],
+            "requeuedCount": requeued["requeuedCount"],
+            "requeueLockAcquired": requeued["lockAcquired"],
+        }
+
+    def run_worker(
+        self,
+        *,
+        worker_name: str,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        lease_seconds: int = DEFAULT_AGENT_TASK_LEASE_SECONDS,
+        idle_timeout: float = DEFAULT_AGENT_TASK_IDLE_TIMEOUT,
+        chunk_size: int = 120,
+        once: bool = False,
+        stop_after: int | None = None,
+    ) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "configured": False,
+                "processedCount": 0,
+            }
+
+        processed_count = 0
+        with self.connect() as listener:
+            listener.execute(f"LISTEN {TASK_READY_CHANNEL}")
+            listener.commit()
+
+            while True:
+                self.schedule_maintenance_tasks(queue_name=queue_name, chunk_size=chunk_size)
+                self.requeue_expired_tasks()
+                task = self.claim_task(
+                    queue_name=queue_name,
+                    worker_name=worker_name,
+                    lease_seconds=lease_seconds,
+                )
+
+                if task is not None:
+                    self.process_task(task, worker_name=worker_name, chunk_size=chunk_size)
+                    processed_count += 1
+                    if once or (stop_after is not None and processed_count >= stop_after):
+                        break
+                    continue
+
+                if once:
+                    break
+
+                for _notify in listener.notifies(timeout=idle_timeout, stop_after=1):
+                    break
+
+        return {
+            "configured": True,
+            "processedCount": processed_count,
+            "workerName": worker_name,
+            "queueName": queue_name,
+        }
+
+    def schedule_maintenance_tasks(
+        self,
+        *,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        chunk_size: int = 120,
+    ) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "configured": False,
+                "lockAcquired": False,
+                "created": [],
+            }
+
+        created: list[dict[str, Any]] = []
+        with self.connect() as connection:
+            locked_row = connection.execute(
+                "SELECT pg_try_advisory_xact_lock(%s, %s) AS locked",
+                (SCHEDULER_LOCK_NAMESPACE, SCHEDULER_LOCK_KEY),
+            ).fetchone()
+            lock_acquired = bool(locked_row["locked"])
+            if lock_acquired:
+                for task_kind, spec in maintenance_task_specs(chunk_size).items():
+                    task_row = self._enqueue_maintenance_task_if_due(
+                        connection,
+                        queue_name=queue_name,
+                        task_kind=task_kind,
+                        payload=spec["payload"],
+                        priority=spec["priority"],
+                        interval_seconds=spec["intervalSeconds"],
+                    )
+                    if task_row is not None:
+                        created.append(map_agent_task(task_row))
+            connection.commit()
+
+        return {
+            "configured": True,
+            "lockAcquired": lock_acquired,
+            "created": created,
+        }
+
+    def requeue_expired_tasks(self) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "configured": False,
+                "lockAcquired": False,
+                "requeuedCount": 0,
+            }
+
+        with self.connect() as connection:
+            locked_row = connection.execute(
+                "SELECT pg_try_advisory_xact_lock(%s, %s) AS locked",
+                (SCHEDULER_LOCK_NAMESPACE, LEASE_REPAIR_LOCK_KEY),
+            ).fetchone()
+            lock_acquired = bool(locked_row["locked"])
+            requeued_rows: list[dict[str, Any]] = []
+
+            if lock_acquired:
+                requeued_rows = connection.execute(
+                    """
+                    UPDATE agent.task
+                    SET
+                      status = 'queued',
+                      lease_owner = NULL,
+                      lease_expires_at = NULL,
+                      available_at = NOW(),
+                      last_error = 'lease expired and task was requeued',
+                      updated_at = NOW()
+                    WHERE status = 'leased'
+                      AND lease_expires_at IS NOT NULL
+                      AND lease_expires_at < NOW()
+                    RETURNING
+                      agent_task_id,
+                      task_kind,
+                      queue_name,
+                      status,
+                      priority,
+                      payload,
+                      available_at,
+                      lease_owner,
+                      lease_expires_at,
+                      attempt_count,
+                      max_attempts,
+                      last_error,
+                      created_at,
+                      updated_at,
+                      completed_at
+                    """
+                ).fetchall()
+                for row in requeued_rows:
+                    self._notify_task_ready(
+                        connection,
+                        queue_name=str(row["queue_name"]),
+                        task_kind=str(row["task_kind"]),
+                    )
+
+            connection.commit()
+
+        return {
+            "configured": True,
+            "lockAcquired": lock_acquired,
+            "requeuedCount": len(requeued_rows),
+        }
+
+    def claim_task(
+        self,
+        *,
+        queue_name: str,
+        worker_name: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                WITH next_task AS (
+                  SELECT task.agent_task_id
+                  FROM agent.task AS task
+                  WHERE task.queue_name = %s
+                    AND task.status = 'queued'
+                    AND task.available_at <= NOW()
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM agent.task_dependency AS dependency
+                      JOIN agent.task AS prerequisite
+                        ON prerequisite.agent_task_id = dependency.depends_on_agent_task_id
+                      WHERE dependency.agent_task_id = task.agent_task_id
+                        AND prerequisite.status <> 'succeeded'
+                    )
+                  ORDER BY task.priority DESC, task.available_at ASC, task.agent_task_id ASC
+                  FOR UPDATE SKIP LOCKED
+                  LIMIT 1
+                )
+                UPDATE agent.task AS task
+                SET
+                  status = 'leased',
+                  lease_owner = %s,
+                  lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
+                  attempt_count = task.attempt_count + 1,
+                  updated_at = NOW()
+                FROM next_task
+                WHERE task.agent_task_id = next_task.agent_task_id
+                RETURNING
+                  task.agent_task_id,
+                  task.task_kind,
+                  task.queue_name,
+                  task.status,
+                  task.priority,
+                  task.payload,
+                  task.available_at,
+                  task.lease_owner,
+                  task.lease_expires_at,
+                  task.attempt_count,
+                  task.max_attempts,
+                  task.last_error,
+                  task.created_at,
+                  task.updated_at,
+                  task.completed_at
+                """,
+                (queue_name, worker_name, lease_seconds),
+            ).fetchone()
+            connection.commit()
+
+        return map_agent_task(row) if row is not None else None
+
+    def process_task(
+        self,
+        task: dict[str, Any],
+        *,
+        worker_name: str,
+        chunk_size: int,
+    ) -> dict[str, Any]:
+        run_id = self._start_agent_run(worker_name, task)
+
+        try:
+            result = self._execute_task(task, chunk_size=chunk_size)
+        except Exception as error:
+            return self._record_failed_task(
+                task,
+                run_id=run_id,
+                error=error,
+            )
+
+        return self._record_completed_task(
+            task,
+            run_id=run_id,
+            result=result,
+        )
+
+    def _stage_embedding_chunks(
+        self,
+        connection: psycopg.Connection[Any],
+        chunk_size: int,
+    ) -> tuple[int, int]:
+        documents_processed = 0
+        chunks_created = 0
+
+        rows = connection.execute(
+            """
+            SELECT source_document_id, body
+            FROM memory.source_document
+            ORDER BY captured_at ASC
+            """
+        ).fetchall()
+
+        for row in rows:
+            documents_processed += 1
+            for chunk in chunk_document(row["body"], chunk_size):
+                exists = connection.execute(
+                    """
+                    SELECT 1
+                    FROM memory.embedding_chunk
+                    WHERE source_document_id = %s AND content = %s
+                    LIMIT 1
+                    """,
+                    (row["source_document_id"], chunk),
+                ).fetchone()
+                if exists:
+                    continue
+
+                connection.execute(
+                    """
+                    INSERT INTO memory.embedding_chunk (source_document_id, content, metadata)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (
+                        row["source_document_id"],
+                        chunk,
+                        Jsonb(
+                            {
+                                "status": "pending_vector",
+                                "provider": EMBEDDING_PROVIDER,
+                                "dimensions": EMBEDDING_DIMENSIONS,
+                            }
+                        ),
+                    ),
+                )
+                chunks_created += 1
+
+        return documents_processed, chunks_created
+
+    def _vectorize_pending_chunks(
+        self,
+        connection: psycopg.Connection[Any],
+        batch_limit: int,
+    ) -> int:
+        rows = connection.execute(
+            """
+            SELECT embedding_chunk_id, content, metadata
+            FROM memory.embedding_chunk
+            WHERE embedding IS NULL
+            ORDER BY created_at ASC, embedding_chunk_id ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT %s
+            """,
+            (batch_limit,),
+        ).fetchall()
+
+        for row in rows:
+            metadata = dict(row["metadata"] or {})
+            metadata.update(
+                {
+                    "status": "vectorized",
+                    "provider": EMBEDDING_PROVIDER,
+                    "dimensions": EMBEDDING_DIMENSIONS,
+                }
+            )
+            connection.execute(
+                """
+                UPDATE memory.embedding_chunk
+                SET embedding = %s, metadata = %s
+                WHERE embedding_chunk_id = %s
+                """,
+                (
+                    Vector(build_development_embedding(str(row["content"]))),
+                    Jsonb(metadata),
+                    row["embedding_chunk_id"],
+                ),
+            )
+
+        return len(rows)
+
+    def _enqueue_maintenance_task_if_due(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        queue_name: str,
+        task_kind: str,
+        payload: dict[str, Any],
+        priority: int,
+        interval_seconds: int,
+    ) -> dict[str, Any] | None:
+        open_row = connection.execute(
+            """
+            SELECT 1
+            FROM agent.task
+            WHERE queue_name = %s
+              AND task_kind = %s
+              AND status IN ('queued', 'leased')
+            LIMIT 1
+            """,
+            (queue_name, task_kind),
+        ).fetchone()
+        if open_row:
+            return None
+
+        latest_row = connection.execute(
+            """
+            SELECT COALESCE(completed_at, updated_at, created_at) AS last_activity_at
+            FROM agent.task
+            WHERE queue_name = %s
+              AND task_kind = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (queue_name, task_kind),
+        ).fetchone()
+        if latest_row is not None:
+            last_activity_at = latest_row["last_activity_at"]
+            age_row = connection.execute(
+                "SELECT EXTRACT(EPOCH FROM (NOW() - %s)) AS seconds_since_last_activity",
+                (last_activity_at,),
+            ).fetchone()
+            if age_row and float(age_row["seconds_since_last_activity"]) < interval_seconds:
+                return None
+
+        row = connection.execute(
+            """
+            INSERT INTO agent.task (task_kind, queue_name, priority, payload)
+            VALUES (%s, %s, %s, %s)
+            RETURNING
+              agent_task_id,
+              task_kind,
+              queue_name,
+              status,
+              priority,
+              payload,
+              available_at,
+              lease_owner,
+              lease_expires_at,
+              attempt_count,
+              max_attempts,
+              last_error,
+              created_at,
+              updated_at,
+              completed_at
+            """,
+            (task_kind, queue_name, priority, Jsonb(payload)),
+        ).fetchone()
+        self._notify_task_ready(connection, queue_name=queue_name, task_kind=task_kind)
+        return row
+
+    def _notify_task_ready(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        queue_name: str,
+        task_kind: str,
+    ) -> None:
+        connection.execute(
+            "SELECT pg_notify(%s, %s)",
+            (
+                TASK_READY_CHANNEL,
+                json.dumps(
+                    {
+                        "queueName": queue_name,
+                        "taskKind": task_kind,
+                    }
+                ),
+            ),
+        )
+
+    def _start_agent_run(self, worker_name: str, task: dict[str, Any]) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent.run (agent_name, task_slug, status)
+                VALUES (%s, %s, %s)
+                RETURNING agent_run_id
+                """,
+                (worker_name, task["taskKind"], "running"),
+            ).fetchone()
+            run_id = int(row["agent_run_id"])
+            self._record_agent_event(
+                connection,
+                run_id,
+                "task_claimed",
+                {
+                    "agentTaskId": task["agentTaskId"],
+                    "taskKind": task["taskKind"],
+                    "attemptCount": task["attemptCount"],
+                    "queueName": task["queueName"],
+                },
+            )
+            connection.commit()
+        return run_id
+
+    def _execute_task(
+        self,
+        task: dict[str, Any],
+        *,
+        chunk_size: int,
+    ) -> dict[str, Any]:
+        task_kind = str(task["taskKind"])
+        payload = dict(task["payload"] or {})
+
+        if task_kind == "memory.run_embeddings":
+            requested_chunk_size = int(payload.get("chunkSize", chunk_size))
+            batch_limit = int(payload.get("batchLimit", DEFAULT_EMBEDDING_BATCH_LIMIT))
+            return self.run_embedding_job(
+                chunk_size=requested_chunk_size,
+                batch_limit=batch_limit,
+            )
+
+        if task_kind == "memory.run_evaluations":
+            return self.run_evaluation_job()
+
+        raise ValueError(f"unsupported task kind: {task_kind}")
+
+    def _record_completed_task(
+        self,
+        task: dict[str, Any],
+        *,
+        run_id: int,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent.task
+                SET
+                  status = 'succeeded',
+                  lease_owner = NULL,
+                  lease_expires_at = NULL,
+                  last_error = NULL,
+                  completed_at = NOW(),
+                  updated_at = NOW()
+                WHERE agent_task_id = %s
+                """,
+                (task["agentTaskId"],),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "task_completed",
+                result,
+            )
+            self._record_agent_artifact(
+                connection,
+                run_id,
+                artifact_kind="result",
+                uri=f"clartk://agent-task/{task['agentTaskId']}/result",
+                metadata=result,
+            )
+            self._finish_agent_run(connection, run_id, status="succeeded")
+            connection.commit()
+
+        return {
+            "status": "succeeded",
+            "agentTaskId": task["agentTaskId"],
+            "result": result,
+        }
+
+    def _record_failed_task(
+        self,
+        task: dict[str, Any],
+        *,
+        run_id: int,
+        error: Exception,
+    ) -> dict[str, Any]:
+        attempt_count = int(task["attemptCount"])
+        max_attempts = int(task["maxAttempts"])
+        exhausted = attempt_count >= max_attempts
+        next_status = "failed" if exhausted else "queued"
+        retry_delay_seconds = task_retry_delay_seconds(attempt_count)
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent.task
+                SET
+                  status = %s,
+                  lease_owner = NULL,
+                  lease_expires_at = NULL,
+                  available_at = CASE
+                    WHEN %s = 'queued' THEN NOW() + (%s * INTERVAL '1 second')
+                    ELSE available_at
+                  END,
+                  last_error = %s,
+                  completed_at = CASE
+                    WHEN %s = 'failed' THEN NOW()
+                    ELSE NULL
+                  END,
+                  updated_at = NOW()
+                WHERE agent_task_id = %s
+                """,
+                (
+                    next_status,
+                    next_status,
+                    retry_delay_seconds,
+                    str(error),
+                    next_status,
+                    task["agentTaskId"],
+                ),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "task_failed",
+                {
+                    "error": str(error),
+                    "nextStatus": next_status,
+                    "retryDelaySeconds": retry_delay_seconds if next_status == "queued" else None,
+                },
+            )
+            if next_status == "queued":
+                self._notify_task_ready(
+                    connection,
+                    queue_name=str(task["queueName"]),
+                    task_kind=str(task["taskKind"]),
+                )
+            self._finish_agent_run(connection, run_id, status=next_status)
+            connection.commit()
+
+        return {
+            "status": next_status,
+            "agentTaskId": task["agentTaskId"],
+            "error": str(error),
+            "retryDelaySeconds": retry_delay_seconds if next_status == "queued" else None,
+        }
+
+    def _record_agent_event(
+        self,
+        connection: psycopg.Connection[Any],
+        agent_run_id: int,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO agent.event (agent_run_id, event_type, payload)
+            VALUES (%s, %s, %s)
+            """,
+            (agent_run_id, event_type, Jsonb(payload)),
+        )
+
+    def _record_agent_artifact(
+        self,
+        connection: psycopg.Connection[Any],
+        agent_run_id: int,
+        *,
+        artifact_kind: str,
+        uri: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO agent.artifact (agent_run_id, artifact_kind, uri, metadata)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (agent_run_id, artifact_kind, uri, Jsonb(metadata)),
+        )
+
+    def _finish_agent_run(
+        self,
+        connection: psycopg.Connection[Any],
+        agent_run_id: int,
+        *,
+        status: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE agent.run
+            SET status = %s, finished_at = NOW()
+            WHERE agent_run_id = %s
+            """,
+            (status, agent_run_id),
+        )
 
     def _ensure_preference_suggestion(
         self,
@@ -793,6 +1515,30 @@ def map_preference_suggestion(
     }
 
 
+def map_agent_task(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "agentTaskId": int(row["agent_task_id"]),
+        "taskKind": row["task_kind"],
+        "queueName": row["queue_name"],
+        "status": row["status"],
+        "priority": int(row["priority"]),
+        "payload": row["payload"] or {},
+        "availableAt": row["available_at"].isoformat(),
+        "leaseOwner": row["lease_owner"],
+        "leaseExpiresAt": row["lease_expires_at"].isoformat()
+        if row["lease_expires_at"] is not None
+        else None,
+        "attemptCount": int(row["attempt_count"]),
+        "maxAttempts": int(row["max_attempts"]),
+        "lastError": row["last_error"],
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+        "completedAt": row["completed_at"].isoformat()
+        if row["completed_at"] is not None
+        else None,
+    }
+
+
 def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -1029,12 +1775,65 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("CLARTK_DEV_DATABASE_URL"),
     )
     embeddings_parser.add_argument("--chunk-size", type=int, default=120)
+    embeddings_parser.add_argument(
+        "--batch-limit",
+        type=int,
+        default=DEFAULT_EMBEDDING_BATCH_LIMIT,
+    )
 
     evals_parser = subparsers.add_parser("run-evals")
     evals_parser.add_argument(
         "--database-url",
         default=os.environ.get("CLARTK_DEV_DATABASE_URL"),
     )
+
+    scheduler_parser = subparsers.add_parser("run-scheduler-once")
+    scheduler_parser.add_argument(
+        "--database-url",
+        default=os.environ.get("CLARTK_DEV_DATABASE_URL"),
+    )
+    scheduler_parser.add_argument(
+        "--queue-name",
+        default=os.environ.get("CLARTK_AGENT_TASK_QUEUE", DEFAULT_AGENT_TASK_QUEUE),
+    )
+    scheduler_parser.add_argument("--chunk-size", type=int, default=120)
+
+    worker_parser = subparsers.add_parser("run-worker")
+    worker_parser.add_argument(
+        "--database-url",
+        default=os.environ.get("CLARTK_DEV_DATABASE_URL"),
+    )
+    worker_parser.add_argument(
+        "--queue-name",
+        default=os.environ.get("CLARTK_AGENT_TASK_QUEUE", DEFAULT_AGENT_TASK_QUEUE),
+    )
+    worker_parser.add_argument(
+        "--worker-name",
+        default=os.environ.get("CLARTK_AGENT_MEMORY_WORKER_NAME", build_default_worker_name()),
+    )
+    worker_parser.add_argument(
+        "--lease-seconds",
+        type=int,
+        default=int(
+            os.environ.get(
+                "CLARTK_AGENT_TASK_LEASE_SECONDS",
+                str(DEFAULT_AGENT_TASK_LEASE_SECONDS),
+            )
+        ),
+    )
+    worker_parser.add_argument(
+        "--idle-timeout",
+        type=float,
+        default=float(
+            os.environ.get(
+                "CLARTK_AGENT_TASK_IDLE_TIMEOUT",
+                str(DEFAULT_AGENT_TASK_IDLE_TIMEOUT),
+            )
+        ),
+    )
+    worker_parser.add_argument("--chunk-size", type=int, default=120)
+    worker_parser.add_argument("--once", action="store_true")
+    worker_parser.add_argument("--stop-after", type=int)
 
     return parser
 
@@ -1052,12 +1851,36 @@ def main() -> None:
         return
 
     if args.command == "run-embeddings":
-        result = MemoryRepository(args.database_url).run_embedding_job(args.chunk_size)
+        result = MemoryRepository(args.database_url).run_embedding_job(
+            args.chunk_size,
+            args.batch_limit,
+        )
         print(json.dumps(result))
         return
 
     if args.command == "run-evals":
         result = MemoryRepository(args.database_url).run_evaluation_job()
+        print(json.dumps(result))
+        return
+
+    if args.command == "run-scheduler-once":
+        result = MemoryRepository(args.database_url).run_scheduler_once(
+            queue_name=args.queue_name,
+            chunk_size=args.chunk_size,
+        )
+        print(json.dumps(result))
+        return
+
+    if args.command == "run-worker":
+        result = MemoryRepository(args.database_url).run_worker(
+            worker_name=args.worker_name,
+            queue_name=args.queue_name,
+            lease_seconds=args.lease_seconds,
+            idle_timeout=args.idle_timeout,
+            chunk_size=args.chunk_size,
+            once=args.once,
+            stop_after=args.stop_after,
+        )
         print(json.dumps(result))
         return
 

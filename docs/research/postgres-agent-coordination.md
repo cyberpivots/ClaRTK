@@ -4,8 +4,14 @@
 
 - `clartk_dev` is the development-plane logical database on the shared local PostgreSQL server.
 - `db/migrations/0002_init_dev.sql` already creates `agent.run`, `agent.event`, `agent.artifact`, `memory.*`, and `eval.*` tables and enables the `vector` extension.
-- `services/agent-memory` currently uses `memory.*` and `eval.*`, and its embedding job inserts `memory.embedding_chunk` rows with `metadata = {"status": "pending_vector"}`. It does not yet write actual vectors or use the `agent.*` coordination tables.
+- `services/agent-memory` initially used `memory.*` and `eval.*`, and its embedding job inserted `memory.embedding_chunk` rows with `metadata = {"status": "pending_vector"}` without writing actual vectors or using the `agent.*` coordination tables.
 - `docs/tasks/` is currently carrying both durable roadmap ownership and some transient coordination burden, which is the file-sprawl problem this refactor is meant to reduce.
+
+## Implementation Update
+
+- `db/migrations/0005_agent_task_queue.sql` now adds `agent.task` and `agent.task_dependency` as the initial queue baseline.
+- `services/agent-memory` now uses `agent.*` execution history for queued embedding and evaluation jobs, and the worker path claims tasks with `FOR UPDATE SKIP LOCKED`, listens for `NOTIFY` wakeups, and uses advisory locks for scheduler and lease-repair duties.
+- `run-embeddings` now writes deterministic development vectors into `memory.embedding_chunk.embedding` instead of leaving chunks permanently at `pending_vector`.
 
 ## External Research Findings
 

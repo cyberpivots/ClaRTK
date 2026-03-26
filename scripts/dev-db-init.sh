@@ -55,3 +55,4 @@ run_psql "$runtime_url" db/migrations/0001_init_runtime.sql
 run_psql "$runtime_url" db/migrations/0003_runtime_auth_preferences.sql
 run_psql "$dev_url" db/migrations/0002_init_dev.sql
 run_psql "$dev_url" db/migrations/0004_dev_preference_suggestions.sql
+run_psql "$dev_url" db/migrations/0005_agent_task_queue.sql

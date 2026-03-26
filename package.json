@@ -17,6 +17,7 @@
     "dev:api": "scripts/dev-api.sh",
     "dev:dashboard": "scripts/dev-dashboard.sh",
     "dev:memory": "scripts/dev-agent-memory.sh",
+    "dev:memory:worker": "scripts/dev-agent-memory-worker.sh",
     "dev:gateway": "scripts/dev-gateway.sh",
     "dev:status": "scripts/dev-status.sh",
     "lint": "tsc -b tsconfig.base.json --pretty false",

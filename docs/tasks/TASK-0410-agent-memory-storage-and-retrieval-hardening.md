@@ -22,3 +22,13 @@
 - The agent proto files cover source documents, claims, evaluations, and preference suggestion primitives, but they do not yet capture the richer fields the service currently stores and returns.
 - `services/agent-memory/src/agent_memory/service.py` still owns fields such as source-document body and metadata, evaluation detail, observation signatures and payloads, and suggestion confidence, evidence, and review detail.
 - `packages/domain/src/compat.ts` now retains the handwritten dev-memory compatibility DTOs that must be replaced or narrowed once generated contract ownership lands.
+
+## Verified Current Progress
+
+- The embedding job no longer stops at `pending_vector` metadata only; it now writes deterministic development vectors into `memory.embedding_chunk.embedding`.
+- Evaluation output now distinguishes total, vectorized, and pending embedding chunk counts so dev-memory state is observable during hardening.
+
+## Remaining Gaps
+
+- The current embedding provider is a deterministic development baseline, not a production semantic embedding model.
+- Vector-backed retrieval and contract-backed exposure of the richer embedding/evaluation payloads still remain follow-on work.
