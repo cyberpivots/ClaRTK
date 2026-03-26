@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package clartk.runtime.v1;
+
+enum AccountRole {
+  ACCOUNT_ROLE_UNSPECIFIED = 0;
+  ACCOUNT_ROLE_OPERATOR = 1;
+  ACCOUNT_ROLE_ADMIN = 2;
+}
+
+enum SessionTransport {
+  SESSION_TRANSPORT_UNSPECIFIED = 0;
+  SESSION_TRANSPORT_COOKIE = 1;
+  SESSION_TRANSPORT_BEARER = 2;
+}
+
+message Account {
+  string account_id = 1;
+  string email = 2;
+  string display_name = 3;
+  AccountRole role = 4;
+  string provider_kind = 5;
+  string created_at = 6;
+}
+
+message Session {
+  string session_id = 1;
+  string account_id = 2;
+  SessionTransport transport = 3;
+  string created_at = 4;
+  string expires_at = 5;
+}
+
+message ApiToken {
+  string api_token_id = 1;
+  string account_id = 2;
+  string label = 3;
+  string created_at = 4;
+  string last_used_at = 5;
+}

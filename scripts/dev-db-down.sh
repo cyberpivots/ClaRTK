@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if docker compose version >/dev/null 2>&1; then
-  exec docker compose down
-fi
+source "$(dirname "$0")/lib/dev-env.sh"
 
-if command -v docker-compose >/dev/null 2>&1; then
-  exec docker-compose down
-fi
-
-echo "docker compose is required for the default Postgres teardown flow" >&2
-exit 1
+clartk_clear_runtime_resolution
+clartk_compose down

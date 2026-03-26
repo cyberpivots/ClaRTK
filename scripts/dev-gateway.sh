@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-set -a
-if [[ -f ./.env ]]; then
-  . ./.env
-fi
-set +a
+source "$(dirname "$0")/lib/dev-env.sh"
+
+clartk_load_env
 
 postgres_user="${POSTGRES_USER:-clartk}"
 postgres_password="${POSTGRES_PASSWORD:-clartk}"
-postgres_host="${CLARTK_POSTGRES_HOST:-127.0.0.1}"
-postgres_port="${CLARTK_POSTGRES_PORT:-5432}"
+postgres_host="${CLARTK_RESOLVED_POSTGRES_HOST:-${CLARTK_POSTGRES_HOST:-127.0.0.1}}"
+postgres_port="${CLARTK_RESOLVED_POSTGRES_PORT:-${CLARTK_POSTGRES_PORT:-5432}}"
 
 export CLARTK_GATEWAY_DIAGNOSTICS_HOST="${CLARTK_GATEWAY_DIAGNOSTICS_HOST:-0.0.0.0}"
 export CLARTK_GATEWAY_DIAGNOSTICS_PORT="${CLARTK_GATEWAY_DIAGNOSTICS_PORT:-3200}"
 export CLARTK_GATEWAY_MODE="${CLARTK_GATEWAY_MODE:-hybrid}"
-export CLARTK_RUNTIME_DATABASE_URL="${CLARTK_RUNTIME_DATABASE_URL:-postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/clartk_runtime}"
+export CLARTK_RUNTIME_DATABASE_URL="${CLARTK_RESOLVED_RUNTIME_DATABASE_URL:-${CLARTK_RUNTIME_DATABASE_URL:-postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/clartk_runtime}}"
 
 has_linker=false
 for linker in cc clang gcc; do

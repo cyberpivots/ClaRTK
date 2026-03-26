@@ -15,4 +15,5 @@
 
 - Add single-Postgres bootstrap and host-run development scripts.
 - Wire the API, dashboard, gateway diagnostics, and memory service to shared port and env conventions.
+- Automate resolution of the reachable PostgreSQL host port for host-run services, with a documented fallback when Docker does not publish the compose port into the current host environment.
 - Document startup order, health checks, degraded mode, and ownership boundaries for later multi-agent implementation work.

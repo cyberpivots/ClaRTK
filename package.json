@@ -11,6 +11,7 @@
     "dev:db:up": "scripts/dev-db-up.sh",
     "dev:db:down": "scripts/dev-db-down.sh",
     "dev:db:init": "scripts/dev-db-init.sh",
+    "dev:auth:bootstrap": "scripts/dev-bootstrap-auth.sh",
     "dev:api": "scripts/dev-api.sh",
     "dev:dashboard": "scripts/dev-dashboard.sh",
     "dev:memory": "scripts/dev-agent-memory.sh",

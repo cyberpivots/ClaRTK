@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package clartk.runtime.v1;
+
+message ProfileDefaults {
+  string units = 1;
+  uint32 telemetry_window_minutes = 2;
+  repeated string pinned_device_ids = 3;
+  repeated string preferred_group_ids = 4;
+  repeated string default_map_layers = 5;
+  string default_sort = 6;
+  string default_view_id = 7;
+  bool notifications_enabled = 8;
+}
+
+message OperatorProfile {
+  string operator_profile_id = 1;
+  string account_id = 2;
+  uint32 version = 3;
+  ProfileDefaults defaults = 4;
+  string updated_at = 5;
+}
+
+message ViewOverride {
+  string view_id = 1;
+  string owner_account_id = 2;
+  string scope_kind = 3;
+  string context_key = 4;
+  string name = 5;
+  string created_at = 6;
+}

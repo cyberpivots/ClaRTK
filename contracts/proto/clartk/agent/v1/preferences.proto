@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package clartk.agent.v1;
+
+enum SuggestionStatus {
+  SUGGESTION_STATUS_UNSPECIFIED = 0;
+  SUGGESTION_STATUS_PROPOSED = 1;
+  SUGGESTION_STATUS_APPROVED = 2;
+  SUGGESTION_STATUS_REJECTED = 3;
+  SUGGESTION_STATUS_PUBLISHED = 4;
+}
+
+message PreferenceObservation {
+  string preference_observation_id = 1;
+  string runtime_account_id = 2;
+  string event_kind = 3;
+  string observed_at = 4;
+}
+
+message PreferenceSuggestion {
+  string preference_suggestion_id = 1;
+  string runtime_account_id = 2;
+  string suggestion_kind = 3;
+  SuggestionStatus status = 4;
+  string rationale = 5;
+  string created_at = 6;
+}
+
+message SuggestionReview {
+  string preference_review_id = 1;
+  string preference_suggestion_id = 2;
+  string reviewer_runtime_account_id = 3;
+  string reviewer_role = 4;
+  string outcome = 5;
+  string created_at = 6;
+}
+
+message PublishedProfileChange {
+  string preference_publication_id = 1;
+  string preference_suggestion_id = 2;
+  string published_by_runtime_account_id = 3;
+  string published_at = 4;
+}

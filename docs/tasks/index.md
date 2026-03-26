@@ -14,3 +14,5 @@
   Status: pending
 - `TASK-0500-development-servers.md`: Implement the local-first development server stack, bootstrap flow, and provisional service boundaries
   Status: in progress
+- `TASK-0600-user-preference-profile.md`: Implement real-account operator profiles, reviewable preference suggestions, and dashboard-first preference management
+  Status: completed
