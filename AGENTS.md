@@ -32,6 +32,10 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
 - Python sync: `uv sync --all-packages`
 - Python test: `uv run pytest`
 - Database docs check: `scripts/check-sql.sh`
+- DB bring-up: `corepack yarn dev:db:up`
+- DB init: `corepack yarn dev:db:init`
+- DB smoke: `corepack yarn dev:db:smoke`
+- DB backup: `corepack yarn dev:db:backup`
 - Full repo check: `scripts/check-all.sh`
 
 ## Development Data Planes
@@ -40,6 +44,8 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
   - `clartk_runtime` for operator-facing runtime state
   - `clartk_dev` for agent-memory, evaluations, embeddings, and agentic coordination state
 - Host-run services must consume the resolved PostgreSQL endpoint produced by `scripts/dev-db-up.sh`; do not assume `127.0.0.1:5432` is always reachable on the host.
+- DB backups live under `.clartk/dev/backups/`. Treat logical dumps as the primary portable recovery artifact; use volume archives only for compose-backed local recovery.
+- Volume-level DB commands resolve the actual mounted Docker volume from the running PostgreSQL container; treat `CLARTK_POSTGRES_VOLUME_NAME` as the compose volume key, not as a hard-coded raw Docker volume name.
 - The `clartk_dev` schema already includes `agent.task`, `agent.task_dependency`, `agent.run`, `agent.event`, and `agent.artifact` tables plus `vector` support. Treat that as the baseline coordination plane for future work rather than creating more transient file-based scheduler artifacts.
 
 ## Verification Rules

@@ -16,13 +16,14 @@ Default bring-up model:
 
 1. `scripts/dev-db-up.sh`
 2. `scripts/dev-db-init.sh`
-3. `scripts/dev-api.sh`
-4. `scripts/dev-agent-memory.sh`
-5. `scripts/dev-agent-memory-worker.sh`
-6. `scripts/dev-auth:bootstrap` or `scripts/dev-bootstrap-auth.sh`
-7. `scripts/dev-gateway.sh`
-8. `scripts/dev-dashboard.sh`
-9. `scripts/dev-status.sh`
+3. `scripts/dev-db-smoke.sh`
+4. `scripts/dev-api.sh`
+5. `scripts/dev-agent-memory.sh`
+6. `scripts/dev-agent-memory-worker.sh`
+7. `scripts/dev-auth:bootstrap` or `scripts/dev-bootstrap-auth.sh`
+8. `scripts/dev-gateway.sh`
+9. `scripts/dev-dashboard.sh`
+10. `scripts/dev-status.sh`
 
 Fallback model:
 
@@ -39,6 +40,19 @@ Fallback model:
 - The resolved env file is consumed by `scripts/dev-db-init.sh`, `scripts/dev-api.sh`, `scripts/dev-agent-memory.sh`, `scripts/dev-gateway.sh`, and `scripts/dev-status.sh`.
 - `scripts/dev-status.sh` prints the active PostgreSQL endpoint and its source as `compose_published`, `docker_exec_proxy`, or `configured_env`.
 - `scripts/dev-db-down.sh` stops the compose stack, removes any generated proxy, and clears `.clartk/dev/resolved.env`.
+
+## PostgreSQL Operations
+
+- `scripts/dev-db-smoke.sh` is the DB-only readiness check. It verifies the resolved endpoint, both logical databases, the `vector` extension in `clartk_dev`, and representative runtime/dev migration tables.
+- `scripts/dev-db-backup.sh` always writes logical dumps for `clartk_runtime` and `clartk_dev` into `.clartk/dev/backups/<timestamp>/`.
+- `scripts/dev-db-backup.sh --with-volume` adds `postgres-volume.tar` for compose-backed local PostgreSQL only. The script stops PostgreSQL temporarily before archiving the volume and then reruns `scripts/dev-db-up.sh` so the resolved endpoint stays authoritative.
+- `scripts/dev-db-restore.sh --from <backup-dir> --mode logical --yes` is the portable restore path for both compose-backed and host-managed PostgreSQL endpoints.
+- `scripts/dev-db-restore.sh --from <backup-dir> --mode volume --yes` is available only for compose-backed PostgreSQL and restores the named Docker volume before recomputing the reachable host endpoint.
+- Volume operations treat `CLARTK_POSTGRES_VOLUME_NAME` as the compose volume key. The scripts resolve the actual mounted Docker volume name from the running PostgreSQL container before backup, restore, or hard reset.
+- `scripts/dev-db-reset-soft.sh --yes` drops and recreates `clartk_runtime` and `clartk_dev`, reruns `scripts/dev-db-init.sh`, and finishes with `scripts/dev-db-smoke.sh`.
+- `scripts/dev-db-reset-hard.sh --yes` is the compose-backed destructive wipe. It removes only the repo-owned named volume, reruns `scripts/dev-db-up.sh` and `scripts/dev-db-init.sh`, and finishes with `scripts/dev-db-smoke.sh`.
+- Destructive DB commands are non-interactive and require `--yes`.
+- Reset commands return the databases to migrated state only. If the dashboard/API flow needs an admin account again, rerun `scripts/dev-bootstrap-auth.sh` after the API is up.
 
 ## Startup Graph
 
@@ -72,6 +86,8 @@ agent-memory worker ---------------> clartk_dev
 | --- | --- | --- |
 | `CLARTK_POSTGRES_HOST` | `127.0.0.1` | API, agent-memory, gateway, bootstrap |
 | `CLARTK_POSTGRES_PORT` | `5432` | API, agent-memory, gateway, bootstrap |
+| `CLARTK_POSTGRES_VOLUME_NAME` | `clartk-postgres` | compose volume key for volume backup, restore, and hard reset |
+| `CLARTK_DB_BACKUP_DIR` | `.clartk/dev/backups` | local DB backup artifacts |
 | `CLARTK_POSTGRES_SUPERUSER_URL` | `postgresql://clartk:clartk@127.0.0.1:5432/postgres` | bootstrap and migrations |
 | `CLARTK_RUNTIME_DATABASE_URL` | `postgresql://clartk:clartk@127.0.0.1:5432/clartk_runtime` | API, gateway |
 | `CLARTK_DEV_DATABASE_URL` | `postgresql://clartk:clartk@127.0.0.1:5432/clartk_dev` | agent-memory |
@@ -119,3 +135,9 @@ These boundaries are provisional until generated contracts land in `contracts/pr
 
 - If the host cannot build Rust binaries because `cc`, `clang`, or `gcc` is missing, `scripts/dev-gateway.sh` falls back to a diagnostics stand-in on the same port.
 - The rest of the stack keeps the same DSNs, ports, and URLs so dashboard and API work can continue without topology drift.
+
+## Recovery Notes
+
+- Logical dumps are the primary portable recovery artifact. They work for compose-backed local PostgreSQL and for host-managed fallback PostgreSQL with the same DB names and role configuration.
+- Volume archives are a fast local recovery shortcut only. They are valid for the compose-backed local model and are intentionally unavailable when PostgreSQL comes from `configured_env`.
+- `scripts/dev-status.sh` reports the active PostgreSQL endpoint and the newest backup directory, including whether that backup is logical-only or hybrid.

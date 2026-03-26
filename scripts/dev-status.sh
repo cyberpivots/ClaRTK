@@ -11,6 +11,12 @@ gateway_port="${CLARTK_GATEWAY_DIAGNOSTICS_PORT:-3200}"
 postgres_host="${CLARTK_RESOLVED_POSTGRES_HOST:-${CLARTK_POSTGRES_HOST:-127.0.0.1}}"
 postgres_port="${CLARTK_RESOLVED_POSTGRES_PORT:-${CLARTK_POSTGRES_PORT:-5432}}"
 postgres_source="${CLARTK_RESOLVED_POSTGRES_SOURCE:-configured_env}"
+latest_backup_dir="$(clartk_latest_backup_dir || true)"
+latest_backup_kind=""
+
+if [[ -n "$latest_backup_dir" ]]; then
+  latest_backup_kind="$(clartk_latest_backup_kind "$latest_backup_dir")"
+fi
 
 clartk_compose ps postgres || true
 
@@ -20,6 +26,11 @@ if command -v curl >/dev/null 2>&1; then
     echo "reachable"
   else
     echo "unreachable"
+  fi
+  if [[ -n "$latest_backup_dir" ]]; then
+    echo "latest backup: ${latest_backup_dir} (${latest_backup_kind})"
+  else
+    echo "latest backup: none"
   fi
   echo
   echo "[api] http://127.0.0.1:${api_port}/health"
