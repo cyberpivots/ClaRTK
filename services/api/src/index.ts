@@ -58,10 +58,12 @@ const config = {
   agentMemoryBaseUrl: process.env.CLARTK_AGENT_MEMORY_BASE_URL ?? "http://localhost:3100",
   agentMemoryReviewToken: process.env.CLARTK_AGENT_MEMORY_REVIEW_TOKEN ?? "",
   dashboardOrigin: process.env.CLARTK_DASHBOARD_ORIGIN ?? "http://localhost:5173",
+  devConsoleOrigin: process.env.CLARTK_DEV_CONSOLE_ORIGIN ?? "http://localhost:5180",
   sessionCookieName: process.env.CLARTK_SESSION_COOKIE_NAME ?? "clartk_session",
   sessionTtlHours: Number(process.env.CLARTK_SESSION_TTL_HOURS ?? "168"),
   secureCookies: process.env.CLARTK_SESSION_COOKIE_SECURE === "1"
 };
+const allowedBrowserOrigins = new Set([config.dashboardOrigin, config.devConsoleOrigin]);
 
 const pool = config.runtimeDatabaseUrl
   ? new Pool({
@@ -113,7 +115,7 @@ interface AgentMemorySuggestionRecord {
 
 app.addHook("onRequest", async (request, reply) => {
   const origin = request.headers.origin;
-  if (origin && origin === config.dashboardOrigin) {
+  if (origin && allowedBrowserOrigins.has(origin)) {
     reply.header("Access-Control-Allow-Origin", origin);
     reply.header("Access-Control-Allow-Credentials", "true");
     reply.header("Access-Control-Allow-Headers", "authorization, content-type");

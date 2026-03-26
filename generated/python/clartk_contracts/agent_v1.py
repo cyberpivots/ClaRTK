@@ -19,6 +19,188 @@ class SuggestionStatus(IntEnum):
     SUGGESTION_STATUS_PUBLISHED = 4
 
 @dataclass(slots=True, kw_only=True)
+class WorkspaceServiceHealth:
+    service: str
+    status: str
+    url: str
+    detail_json: str
+
+@dataclass(slots=True, kw_only=True)
+class BackupSummary:
+    latest_backup_dir: str
+    latest_backup_kind: str
+    latest_backup_created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class WorkspaceHealth:
+    status: str
+    postgres_host: str
+    postgres_port: int
+    postgres_source: str
+    postgres_reachable: bool
+    backup: BackupSummary
+    services: List[WorkspaceServiceHealth] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class AgentTaskDependency:
+    agent_task_id: int
+    depends_on_agent_task_id: int
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class AgentTask:
+    agent_task_id: int
+    task_kind: str
+    queue_name: str
+    status: str
+    priority: int
+    payload_json: str
+    available_at: str
+    lease_owner: str
+    lease_expires_at: str
+    attempt_count: int
+    max_attempts: int
+    last_error: str
+    created_at: str
+    updated_at: str
+    completed_at: str
+
+@dataclass(slots=True, kw_only=True)
+class QueueSnapshot:
+    queue_name: str
+    queued_count: int
+    leased_count: int
+    succeeded_count: int
+    failed_count: int
+    recent_tasks: List[AgentTask] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class AgentTaskCollection:
+    items: List[AgentTask] = field(default_factory=list)
+    queues: List[QueueSnapshot] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class EnqueueTaskRequest:
+    task_kind: str
+    queue_name: str
+    priority: int
+    payload_json: str
+
+@dataclass(slots=True, kw_only=True)
+class RetryTaskRequest:
+    note: str
+
+@dataclass(slots=True, kw_only=True)
+class AgentRun:
+    agent_run_id: int
+    agent_name: str
+    task_slug: str
+    status: str
+    started_at: str
+    finished_at: str
+
+@dataclass(slots=True, kw_only=True)
+class AgentRunCollection:
+    items: List[AgentRun] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class AgentEvent:
+    agent_event_id: int
+    agent_run_id: int
+    event_type: str
+    payload_json: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class AgentArtifact:
+    artifact_id: int
+    agent_run_id: int
+    artifact_kind: str
+    uri: str
+    metadata_json: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class AgentRunDetail:
+    run: AgentRun
+    task: AgentTask
+    dependencies: List[AgentTaskDependency] = field(default_factory=list)
+    events: List[AgentEvent] = field(default_factory=list)
+    artifacts: List[AgentArtifact] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class DocsCatalogItem:
+    path: str
+    title: str
+    kind: str
+    summary: str
+    updated_at: str
+    tags: List[str] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class DocsCatalog:
+    items: List[DocsCatalogItem] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class SkillDescriptor:
+    skill_id: str
+    name: str
+    description: str
+    path: str
+    source: str
+    available: bool
+
+@dataclass(slots=True, kw_only=True)
+class SkillCatalog:
+    items: List[SkillDescriptor] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class DevPreferenceSignal:
+    dev_preference_signal_id: int
+    runtime_account_id: str
+    signal_kind: str
+    surface: str
+    panel_key: str
+    payload_json: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class DevPreferenceDecision:
+    dev_preference_decision_id: int
+    runtime_account_id: str
+    dev_preference_signal_id: int
+    decision_kind: str
+    subject_kind: str
+    subject_key: str
+    chosen_value: str
+    payload_json: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class DevPreferenceScore:
+    runtime_account_id: str
+    feature_summary_json: str
+    scorecard_json: str
+    computed_from_signal_count: int
+    updated_at: str
+
+@dataclass(slots=True, kw_only=True)
+class DevPreferenceSignalCreateRequest:
+    signal_kind: str
+    surface: str
+    panel_key: str
+    payload_json: str
+
+@dataclass(slots=True, kw_only=True)
+class DevPreferenceDecisionCreateRequest:
+    dev_preference_signal_id: int
+    decision_kind: str
+    subject_kind: str
+    subject_key: str
+    chosen_value: str
+    payload_json: str
+
+@dataclass(slots=True, kw_only=True)
 class SourceDocument:
     source_document_id: str
     source_kind: str

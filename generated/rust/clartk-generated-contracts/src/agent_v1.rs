@@ -20,6 +20,211 @@ pub enum SuggestionStatus {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceServiceHealth {
+    pub service: String,
+    pub status: String,
+    pub url: String,
+    pub detail_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackupSummary {
+    pub latest_backup_dir: String,
+    pub latest_backup_kind: String,
+    pub latest_backup_created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceHealth {
+    pub status: String,
+    pub postgres_host: String,
+    pub postgres_port: u32,
+    pub postgres_source: String,
+    pub postgres_reachable: bool,
+    pub backup: BackupSummary,
+    pub services: Vec<WorkspaceServiceHealth>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentTaskDependency {
+    pub agent_task_id: i64,
+    pub depends_on_agent_task_id: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentTask {
+    pub agent_task_id: i64,
+    pub task_kind: String,
+    pub queue_name: String,
+    pub status: String,
+    pub priority: i32,
+    pub payload_json: String,
+    pub available_at: String,
+    pub lease_owner: String,
+    pub lease_expires_at: String,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub last_error: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueueSnapshot {
+    pub queue_name: String,
+    pub queued_count: i32,
+    pub leased_count: i32,
+    pub succeeded_count: i32,
+    pub failed_count: i32,
+    pub recent_tasks: Vec<AgentTask>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentTaskCollection {
+    pub items: Vec<AgentTask>,
+    pub queues: Vec<QueueSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnqueueTaskRequest {
+    pub task_kind: String,
+    pub queue_name: String,
+    pub priority: i32,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetryTaskRequest {
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentRun {
+    pub agent_run_id: i64,
+    pub agent_name: String,
+    pub task_slug: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentRunCollection {
+    pub items: Vec<AgentRun>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentEvent {
+    pub agent_event_id: i64,
+    pub agent_run_id: i64,
+    pub event_type: String,
+    pub payload_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentArtifact {
+    pub artifact_id: i64,
+    pub agent_run_id: i64,
+    pub artifact_kind: String,
+    pub uri: String,
+    pub metadata_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentRunDetail {
+    pub run: AgentRun,
+    pub task: AgentTask,
+    pub dependencies: Vec<AgentTaskDependency>,
+    pub events: Vec<AgentEvent>,
+    pub artifacts: Vec<AgentArtifact>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocsCatalogItem {
+    pub path: String,
+    pub title: String,
+    pub kind: String,
+    pub summary: String,
+    pub updated_at: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocsCatalog {
+    pub items: Vec<DocsCatalogItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillDescriptor {
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub source: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillCatalog {
+    pub items: Vec<SkillDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DevPreferenceSignal {
+    pub dev_preference_signal_id: i64,
+    pub runtime_account_id: String,
+    pub signal_kind: String,
+    pub surface: String,
+    pub panel_key: String,
+    pub payload_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DevPreferenceDecision {
+    pub dev_preference_decision_id: i64,
+    pub runtime_account_id: String,
+    pub dev_preference_signal_id: i64,
+    pub decision_kind: String,
+    pub subject_kind: String,
+    pub subject_key: String,
+    pub chosen_value: String,
+    pub payload_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DevPreferenceScore {
+    pub runtime_account_id: String,
+    pub feature_summary_json: String,
+    pub scorecard_json: String,
+    pub computed_from_signal_count: u32,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DevPreferenceSignalCreateRequest {
+    pub signal_kind: String,
+    pub surface: String,
+    pub panel_key: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DevPreferenceDecisionCreateRequest {
+    pub dev_preference_signal_id: i64,
+    pub decision_kind: String,
+    pub subject_kind: String,
+    pub subject_key: String,
+    pub chosen_value: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SourceDocument {
     pub source_document_id: String,
     pub source_kind: String,

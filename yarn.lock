@@ -424,6 +424,33 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@clartk/dev-console-api@workspace:services/dev-console-api":
+  version: 0.0.0-use.local
+  resolution: "@clartk/dev-console-api@workspace:services/dev-console-api"
+  dependencies:
+    "@clartk/domain": "workspace:*"
+    "@types/node": "npm:^22.13.10"
+    fastify: "npm:^5.2.1"
+  languageName: unknown
+  linkType: soft
+
+"@clartk/dev-console-web@workspace:apps/dev-console-web":
+  version: 0.0.0-use.local
+  resolution: "@clartk/dev-console-web@workspace:apps/dev-console-web"
+  dependencies:
+    "@clartk/api-client": "workspace:*"
+    "@clartk/design-tokens": "workspace:*"
+    "@clartk/domain": "workspace:*"
+    "@clartk/ui-web": "workspace:*"
+    "@types/react": "npm:^19.0.12"
+    "@types/react-dom": "npm:^19.0.4"
+    "@vitejs/plugin-react": "npm:^4.3.4"
+    react: "npm:^19.0.0"
+    react-dom: "npm:^19.0.0"
+    vite: "npm:^6.2.1"
+  languageName: unknown
+  linkType: soft
+
 "@clartk/domain@workspace:*, @clartk/domain@workspace:packages/domain":
   version: 0.0.0-use.local
   resolution: "@clartk/domain@workspace:packages/domain"

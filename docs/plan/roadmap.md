@@ -69,5 +69,6 @@
   - one-server local PostgreSQL topology, host-run services, and automatic reachable-port resolution
 - Active child task:
   - `TASK-0510` for codegen prerequisites, authoritative repo checks, and documented host prerequisites
+  - `TASK-0520` for the separate development-only interface, browser broker, and dev-console wiring
 - Exit condition:
-  - local bring-up, verification, and developer tooling match the contract-first architecture
+  - local bring-up, verification, developer tooling, and the development interface all match the contract-first architecture

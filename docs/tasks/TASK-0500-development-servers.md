@@ -20,3 +20,4 @@
 ## Child Tasks
 
 - `TASK-0510`: dev-stack verification and toolchain integration
+- `TASK-0520`: development interface and dev console

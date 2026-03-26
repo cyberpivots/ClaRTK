@@ -5,7 +5,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "services/api"
+    "services/api",
+    "services/dev-console-api"
   ],
   "scripts": {
     "contracts:generate": "node scripts/generate-contracts.mjs",
@@ -21,6 +22,8 @@
     "dev:auth:bootstrap": "scripts/dev-bootstrap-auth.sh",
     "dev:api": "scripts/dev-api.sh",
     "dev:dashboard": "scripts/dev-dashboard.sh",
+    "dev:console": "scripts/dev-console.sh",
+    "dev:console:api": "scripts/dev-console-api.sh",
     "dev:memory": "scripts/dev-agent-memory.sh",
     "dev:memory:worker": "scripts/dev-agent-memory-worker.sh",
     "dev:gateway": "scripts/dev-gateway.sh",

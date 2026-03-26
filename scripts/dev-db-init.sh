@@ -15,3 +15,4 @@ clartk_psql_file "$runtime_url" "clartk_runtime" "db/migrations/0003_runtime_aut
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0002_init_dev.sql"
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0004_dev_preference_suggestions.sql"
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0005_agent_task_queue.sql"
+clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0006_dev_console_preferences.sql"

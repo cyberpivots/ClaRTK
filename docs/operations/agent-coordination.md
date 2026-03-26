@@ -18,6 +18,7 @@
 - Keep `docs/tasks/` for durable milestones, handoffs, and architecture-facing ownership.
 - Do not create one file per transient agent run, scheduler tick, or queue state change.
 - Use `clartk_dev` for ephemeral coordination data as that control plane lands, keeping runtime state and human-authored guidance out of the scheduling path.
+- The development interface follows the same rule: it may surface transient queue state and run history, but it does not justify new per-run planning files.
 
 ## Contract-Owned Write Sets
 

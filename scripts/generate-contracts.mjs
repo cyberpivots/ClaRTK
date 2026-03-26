@@ -48,6 +48,7 @@ const scalarRustTypes = {
 };
 
 const protoFiles = [
+  "clartk/agent/v1/dev_console.proto",
   "clartk/agent/v1/memory.proto",
   "clartk/agent/v1/preferences.proto",
   "clartk/gnss/v1/gnss.proto",

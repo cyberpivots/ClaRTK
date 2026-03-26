@@ -8,8 +8,10 @@ import os
 import socket
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, urlparse
 
@@ -39,6 +41,12 @@ SCHEDULER_LOCK_NAMESPACE = 43
 SCHEDULER_LOCK_KEY = 1
 LEASE_REPAIR_LOCK_KEY = 2
 SUGGESTION_THRESHOLD = 2
+REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_SKILLS_ROOT = REPO_ROOT / ".agents" / "skills"
+SYSTEM_SKILLS_ROOT = Path.home() / ".codex" / "skills" / ".system"
+DEV_PREFERENCE_TASK_KIND = "preferences.compute_dev_preference_scores"
+REFRESH_DOC_CATALOG_TASK_KIND = "catalog.refresh_doc_catalog"
+REFRESH_SKILL_CATALOG_TASK_KIND = "catalog.refresh_skill_catalog"
 
 
 @dataclass(frozen=True)
@@ -137,6 +145,210 @@ def build_development_embedding(text: str, dimensions: int = EMBEDDING_DIMENSION
 def task_retry_delay_seconds(attempt_count: int) -> int:
     bounded_attempt = max(1, attempt_count)
     return min(300, 2 ** bounded_attempt)
+
+
+def timestamp_from_mtime(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+
+
+def scan_markdown_catalog() -> dict[str, Any]:
+    counts = {
+        "task": 0,
+        "adr": 0,
+        "operations": 0,
+        "research": 0,
+        "plan": 0,
+        "other": 0,
+    }
+
+    docs_root = REPO_ROOT / "docs"
+    for markdown_path in docs_root.rglob("*.md"):
+        relative = markdown_path.relative_to(docs_root).as_posix()
+        if relative.startswith("tasks/"):
+            counts["task"] += 1
+        elif relative.startswith("adr/"):
+            counts["adr"] += 1
+        elif relative.startswith("operations/"):
+            counts["operations"] += 1
+        elif relative.startswith("research/"):
+            counts["research"] += 1
+        elif relative.startswith("plan/"):
+            counts["plan"] += 1
+        else:
+            counts["other"] += 1
+
+    return {
+        "repoRoot": str(REPO_ROOT),
+        "counts": counts,
+        "total": sum(counts.values()),
+    }
+
+
+def scan_skill_catalog() -> dict[str, Any]:
+    skills: list[dict[str, Any]] = []
+
+    for source, root in (("repo", REPO_SKILLS_ROOT), ("system", SYSTEM_SKILLS_ROOT)):
+        if not root.exists():
+            continue
+        for skill_path in sorted(root.rglob("SKILL.md")):
+            description = ""
+            try:
+                lines = skill_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                if line.startswith("description:"):
+                    description = line.split(":", 1)[1].strip()
+                    break
+            skill_id = skill_path.parent.name
+            skills.append(
+                {
+                    "skillId": skill_id,
+                    "source": source,
+                    "path": str(skill_path),
+                    "description": description,
+                }
+            )
+
+    return {
+        "repoRoot": str(REPO_ROOT),
+        "skillCount": len(skills),
+        "skills": skills,
+    }
+
+
+def choose_top_value(values: list[str]) -> tuple[str | None, float]:
+    filtered = [value for value in values if value]
+    if not filtered:
+        return None, 0.0
+
+    counts: dict[str, int] = {}
+    for value in filtered:
+        counts[value] = counts.get(value, 0) + 1
+
+    winner = max(counts.items(), key=lambda item: (item[1], item[0]))
+    confidence = round(winner[1] / len(filtered), 2)
+    return winner[0], confidence
+
+
+def extract_string(payload: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def build_dev_preference_scorecard(
+    signals: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    landing_panels = [
+        signal.get("panelKey")
+        for signal in signals
+        if signal.get("signalKind") == "landing_panel_selected" and signal.get("panelKey")
+    ]
+    detail_depths = [
+        extract_string(signal.get("payload", {}), "detailDepth", "value")
+        for signal in signals
+        if signal.get("signalKind") == "detail_depth_selected"
+    ]
+    queue_filters = [
+        extract_string(signal.get("payload", {}), "queueName", "value")
+        for signal in signals
+        if signal.get("signalKind") == "queue_filter_selected"
+    ]
+    explanation_density = [
+        extract_string(signal.get("payload", {}), "density", "value")
+        for signal in signals
+        if signal.get("signalKind") == "explanation_density_selected"
+    ]
+    evidence_formats = [
+        extract_string(signal.get("payload", {}), "evidenceFormat", "value")
+        for signal in signals
+        if signal.get("signalKind") == "evidence_format_selected"
+    ]
+
+    accepted_actions = [
+        decision
+        for decision in decisions
+        if decision.get("subjectKind") == "recommended_action"
+        and decision.get("decisionKind") == "accepted"
+    ]
+    rejected_actions = [
+        decision
+        for decision in decisions
+        if decision.get("subjectKind") == "recommended_action"
+        and decision.get("decisionKind") == "rejected"
+    ]
+    overridden_actions = [
+        decision
+        for decision in decisions
+        if decision.get("subjectKind") == "recommended_action"
+        and decision.get("decisionKind") == "overridden"
+    ]
+
+    preferred_landing_panel, landing_confidence = choose_top_value(
+        [value for value in landing_panels if value]
+    )
+    preferred_detail_depth, detail_confidence = choose_top_value(
+        [value for value in detail_depths if value]
+    )
+    preferred_queue_name, queue_confidence = choose_top_value(
+        [value for value in queue_filters if value]
+    )
+    preferred_density, density_confidence = choose_top_value(
+        [value for value in explanation_density if value]
+    )
+    preferred_evidence_format, evidence_confidence = choose_top_value(
+        [value for value in evidence_formats if value]
+    )
+
+    total_action_decisions = (
+        len(accepted_actions) + len(rejected_actions) + len(overridden_actions)
+    )
+    if total_action_decisions == 0:
+        automation_style = "supervised"
+        automation_confidence = 0.4
+    else:
+        acceptance_ratio = len(accepted_actions) / total_action_decisions
+        automation_style = "assisted" if acceptance_ratio >= 0.5 else "supervised"
+        automation_confidence = round(max(0.4, acceptance_ratio), 2)
+
+    feature_summary = {
+        "signalCount": len(signals),
+        "decisionCount": len(decisions),
+        "acceptedActionCount": len(accepted_actions),
+        "rejectedActionCount": len(rejected_actions),
+        "overriddenActionCount": len(overridden_actions),
+    }
+    scorecard = {
+        "preferredLandingPanel": {
+            "value": preferred_landing_panel,
+            "confidence": landing_confidence,
+        },
+        "preferredDetailDepth": {
+            "value": preferred_detail_depth,
+            "confidence": detail_confidence,
+        },
+        "preferredQueueName": {
+            "value": preferred_queue_name,
+            "confidence": queue_confidence,
+        },
+        "preferredExplanationDensity": {
+            "value": preferred_density,
+            "confidence": density_confidence,
+        },
+        "preferredEvidenceFormat": {
+            "value": preferred_evidence_format,
+            "confidence": evidence_confidence,
+        },
+        "automationStyle": {
+            "value": automation_style,
+            "confidence": automation_confidence,
+        },
+    }
+    return feature_summary, scorecard
 
 
 def maintenance_task_specs(chunk_size: int) -> dict[str, dict[str, Any]]:
@@ -286,6 +498,501 @@ class MemoryRepository:
                 (limit,),
             ).fetchall()
         return [map_evaluation(row) for row in rows]
+
+    def list_agent_tasks(
+        self,
+        queue_name: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "items": [],
+                "queues": [],
+                "source": "unconfigured",
+            }
+
+        where_sql = ""
+        params: list[Any] = []
+        if queue_name:
+            where_sql = "WHERE queue_name = %s"
+            params.append(queue_name)
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                  agent_task_id,
+                  task_kind,
+                  queue_name,
+                  status,
+                  priority,
+                  payload,
+                  available_at,
+                  lease_owner,
+                  lease_expires_at,
+                  attempt_count,
+                  max_attempts,
+                  last_error,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM agent.task
+                {where_sql}
+                ORDER BY created_at DESC, agent_task_id DESC
+                LIMIT %s
+                """,
+                tuple(params + [limit]),
+            ).fetchall()
+            queue_rows = connection.execute(
+                f"""
+                SELECT
+                  queue_name,
+                  COUNT(*) FILTER (WHERE status = 'queued') AS queued_count,
+                  COUNT(*) FILTER (WHERE status = 'leased') AS leased_count,
+                  COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_count,
+                  COUNT(*) FILTER (WHERE status = 'failed') AS failed_count
+                FROM agent.task
+                {where_sql}
+                GROUP BY queue_name
+                ORDER BY queue_name ASC
+                """,
+                tuple(params),
+            ).fetchall()
+
+        recent_by_queue: dict[str, list[dict[str, Any]]] = {}
+        for task in [map_agent_task(row) for row in rows]:
+            recent_by_queue.setdefault(str(task["queueName"]), [])
+            if len(recent_by_queue[str(task["queueName"])]) < 5:
+                recent_by_queue[str(task["queueName"])].append(task)
+
+        queues = [
+            {
+                "queueName": row["queue_name"],
+                "queuedCount": int(row["queued_count"]),
+                "leasedCount": int(row["leased_count"]),
+                "succeededCount": int(row["succeeded_count"]),
+                "failedCount": int(row["failed_count"]),
+                "recentTasks": recent_by_queue.get(str(row["queue_name"]), []),
+            }
+            for row in queue_rows
+        ]
+
+        return {
+            "items": [map_agent_task(row) for row in rows],
+            "queues": queues,
+            "source": "dev-memory",
+        }
+
+    def get_agent_task(self, agent_task_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  agent_task_id,
+                  task_kind,
+                  queue_name,
+                  status,
+                  priority,
+                  payload,
+                  available_at,
+                  lease_owner,
+                  lease_expires_at,
+                  attempt_count,
+                  max_attempts,
+                  last_error,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM agent.task
+                WHERE agent_task_id = %s
+                """,
+                (agent_task_id,),
+            ).fetchone()
+        return map_agent_task(row) if row is not None else None
+
+    def enqueue_agent_task(
+        self,
+        *,
+        task_kind: str,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        priority: int = 0,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent.task (task_kind, queue_name, priority, payload)
+                VALUES (%s, %s, %s, %s)
+                RETURNING
+                  agent_task_id,
+                  task_kind,
+                  queue_name,
+                  status,
+                  priority,
+                  payload,
+                  available_at,
+                  lease_owner,
+                  lease_expires_at,
+                  attempt_count,
+                  max_attempts,
+                  last_error,
+                  created_at,
+                  updated_at,
+                  completed_at
+                """,
+                (task_kind, queue_name, priority, Jsonb(payload or {})),
+            ).fetchone()
+            self._notify_task_ready(connection, queue_name=queue_name, task_kind=task_kind)
+            connection.commit()
+
+        return map_agent_task(row)
+
+    def retry_agent_task(
+        self,
+        agent_task_id: int,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            current = connection.execute(
+                """
+                SELECT task_kind, queue_name, status
+                FROM agent.task
+                WHERE agent_task_id = %s
+                """,
+                (agent_task_id,),
+            ).fetchone()
+            if current is None:
+                raise LookupError("agent task not found")
+            if str(current["status"]) not in {"failed", "succeeded"}:
+                raise ValueError("only failed or completed tasks may be retried")
+
+            row = connection.execute(
+                """
+                UPDATE agent.task
+                SET
+                  status = 'queued',
+                  lease_owner = NULL,
+                  lease_expires_at = NULL,
+                  available_at = NOW(),
+                  last_error = %s,
+                  completed_at = NULL,
+                  updated_at = NOW()
+                WHERE agent_task_id = %s
+                RETURNING
+                  agent_task_id,
+                  task_kind,
+                  queue_name,
+                  status,
+                  priority,
+                  payload,
+                  available_at,
+                  lease_owner,
+                  lease_expires_at,
+                  attempt_count,
+                  max_attempts,
+                  last_error,
+                  created_at,
+                  updated_at,
+                  completed_at
+                """,
+                (note, agent_task_id),
+            ).fetchone()
+            self._notify_task_ready(
+                connection,
+                queue_name=str(current["queue_name"]),
+                task_kind=str(current["task_kind"]),
+            )
+            connection.commit()
+
+        return map_agent_task(row)
+
+    def list_agent_runs(self, limit: int = 50) -> dict[str, Any]:
+        if not self.configured:
+            return {"items": [], "source": "unconfigured"}
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT agent_run_id, agent_name, task_slug, status, started_at, finished_at
+                FROM agent.run
+                ORDER BY started_at DESC, agent_run_id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+
+        return {
+            "items": [map_agent_run(row) for row in rows],
+            "source": "dev-memory",
+        }
+
+    def get_agent_run_detail(self, agent_run_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT agent_run_id, agent_name, task_slug, status, started_at, finished_at
+                FROM agent.run
+                WHERE agent_run_id = %s
+                """,
+                (agent_run_id,),
+            ).fetchone()
+            if run_row is None:
+                return None
+
+            event_rows = connection.execute(
+                """
+                SELECT agent_event_id, agent_run_id, event_type, payload, created_at
+                FROM agent.event
+                WHERE agent_run_id = %s
+                ORDER BY created_at ASC, agent_event_id ASC
+                """,
+                (agent_run_id,),
+            ).fetchall()
+            artifact_rows = connection.execute(
+                """
+                SELECT artifact_id, agent_run_id, artifact_kind, uri, metadata, created_at
+                FROM agent.artifact
+                WHERE agent_run_id = %s
+                ORDER BY created_at ASC, artifact_id ASC
+                """,
+                (agent_run_id,),
+            ).fetchall()
+
+            mapped_events = [map_agent_event(row) for row in event_rows]
+            mapped_artifacts = [map_agent_artifact(row) for row in artifact_rows]
+
+            task_id: int | None = None
+            for event in mapped_events:
+                if event["eventType"] == "task_claimed":
+                    task_id = as_optional_int(event["payload"].get("agentTaskId"))
+                    if task_id is not None:
+                        break
+
+            mapped_task = None
+            mapped_dependencies: list[dict[str, Any]] = []
+            if task_id is not None:
+                task_row = connection.execute(
+                    """
+                    SELECT
+                      agent_task_id,
+                      task_kind,
+                      queue_name,
+                      status,
+                      priority,
+                      payload,
+                      available_at,
+                      lease_owner,
+                      lease_expires_at,
+                      attempt_count,
+                      max_attempts,
+                      last_error,
+                      created_at,
+                      updated_at,
+                      completed_at
+                    FROM agent.task
+                    WHERE agent_task_id = %s
+                    """,
+                    (task_id,),
+                ).fetchone()
+                mapped_task = map_agent_task(task_row) if task_row is not None else None
+                dependency_rows = connection.execute(
+                    """
+                    SELECT agent_task_id, depends_on_agent_task_id, created_at
+                    FROM agent.task_dependency
+                    WHERE agent_task_id = %s
+                    ORDER BY created_at ASC, depends_on_agent_task_id ASC
+                    """,
+                    (task_id,),
+                ).fetchall()
+                mapped_dependencies = [map_agent_task_dependency(row) for row in dependency_rows]
+
+        return {
+            "run": map_agent_run(run_row),
+            "task": mapped_task,
+            "dependencies": mapped_dependencies,
+            "events": mapped_events,
+            "artifacts": mapped_artifacts,
+            "source": "dev-memory",
+        }
+
+    def create_dev_preference_signal(
+        self,
+        *,
+        runtime_account_id: str,
+        signal_kind: str,
+        surface: str,
+        panel_key: str | None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent.dev_preference_signal (
+                  runtime_account_id,
+                  signal_kind,
+                  surface,
+                  panel_key,
+                  payload
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING
+                  dev_preference_signal_id,
+                  runtime_account_id,
+                  signal_kind,
+                  surface,
+                  panel_key,
+                  payload,
+                  created_at
+                """,
+                (
+                    runtime_account_id,
+                    signal_kind,
+                    surface,
+                    panel_key,
+                    Jsonb(payload or {}),
+                ),
+            ).fetchone()
+            self._enqueue_internal_task(
+                connection,
+                task_kind=DEV_PREFERENCE_TASK_KIND,
+                payload={"runtimeAccountId": str(runtime_account_id)},
+                priority=90,
+            )
+            connection.commit()
+        return map_dev_preference_signal(row)
+
+    def create_dev_preference_decision(
+        self,
+        *,
+        runtime_account_id: str,
+        dev_preference_signal_id: int | None,
+        decision_kind: str,
+        subject_kind: str,
+        subject_key: str,
+        chosen_value: str | None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent.dev_preference_decision (
+                  runtime_account_id,
+                  dev_preference_signal_id,
+                  decision_kind,
+                  subject_kind,
+                  subject_key,
+                  chosen_value,
+                  payload
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING
+                  dev_preference_decision_id,
+                  runtime_account_id,
+                  dev_preference_signal_id,
+                  decision_kind,
+                  subject_kind,
+                  subject_key,
+                  chosen_value,
+                  payload,
+                  created_at
+                """,
+                (
+                    runtime_account_id,
+                    dev_preference_signal_id,
+                    decision_kind,
+                    subject_kind,
+                    subject_key,
+                    chosen_value,
+                    Jsonb(payload or {}),
+                ),
+            ).fetchone()
+            self._enqueue_internal_task(
+                connection,
+                task_kind=DEV_PREFERENCE_TASK_KIND,
+                payload={"runtimeAccountId": str(runtime_account_id)},
+                priority=95,
+            )
+            connection.commit()
+        return map_dev_preference_decision(row)
+
+    def get_dev_preference_profile(
+        self,
+        runtime_account_id: str,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "score": None,
+                "recentSignals": [],
+                "recentDecisions": [],
+                "source": "unconfigured",
+            }
+
+        with self.connect() as connection:
+            score_row = connection.execute(
+                """
+                SELECT
+                  runtime_account_id,
+                  feature_summary,
+                  scorecard,
+                  computed_from_signal_count,
+                  updated_at
+                FROM agent.dev_preference_score
+                WHERE runtime_account_id = %s
+                """,
+                (runtime_account_id,),
+            ).fetchone()
+            signal_rows = connection.execute(
+                """
+                SELECT
+                  dev_preference_signal_id,
+                  runtime_account_id,
+                  signal_kind,
+                  surface,
+                  panel_key,
+                  payload,
+                  created_at
+                FROM agent.dev_preference_signal
+                WHERE runtime_account_id = %s
+                ORDER BY created_at DESC, dev_preference_signal_id DESC
+                LIMIT %s
+                """,
+                (runtime_account_id, limit),
+            ).fetchall()
+            decision_rows = connection.execute(
+                """
+                SELECT
+                  dev_preference_decision_id,
+                  runtime_account_id,
+                  dev_preference_signal_id,
+                  decision_kind,
+                  subject_kind,
+                  subject_key,
+                  chosen_value,
+                  payload,
+                  created_at
+                FROM agent.dev_preference_decision
+                WHERE runtime_account_id = %s
+                ORDER BY created_at DESC, dev_preference_decision_id DESC
+                LIMIT %s
+                """,
+                (runtime_account_id, limit),
+            ).fetchall()
+
+        return {
+            "score": map_dev_preference_score(score_row) if score_row is not None else None,
+            "recentSignals": [map_dev_preference_signal(row) for row in signal_rows],
+            "recentDecisions": [map_dev_preference_decision(row) for row in decision_rows],
+            "source": "dev-memory",
+        }
 
     def create_preference_observation(
         self,
@@ -964,6 +1671,41 @@ class MemoryRepository:
         self._notify_task_ready(connection, queue_name=queue_name, task_kind=task_kind)
         return row
 
+    def _enqueue_internal_task(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        task_kind: str,
+        payload: dict[str, Any],
+        priority: int,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            INSERT INTO agent.task (task_kind, queue_name, priority, payload)
+            VALUES (%s, %s, %s, %s)
+            RETURNING
+              agent_task_id,
+              task_kind,
+              queue_name,
+              status,
+              priority,
+              payload,
+              available_at,
+              lease_owner,
+              lease_expires_at,
+              attempt_count,
+              max_attempts,
+              last_error,
+              created_at,
+              updated_at,
+              completed_at
+            """,
+            (task_kind, queue_name, priority, Jsonb(payload)),
+        ).fetchone()
+        self._notify_task_ready(connection, queue_name=queue_name, task_kind=task_kind)
+        return map_agent_task(row)
+
     def _notify_task_ready(
         self,
         connection: psycopg.Connection[Any],
@@ -1029,7 +1771,133 @@ class MemoryRepository:
         if task_kind == "memory.run_evaluations":
             return self.run_evaluation_job()
 
+        if task_kind == DEV_PREFERENCE_TASK_KIND:
+            return self.compute_dev_preference_scores(
+                runtime_account_id=extract_string(payload, "runtimeAccountId"),
+            )
+
+        if task_kind == REFRESH_DOC_CATALOG_TASK_KIND:
+            return scan_markdown_catalog()
+
+        if task_kind == REFRESH_SKILL_CATALOG_TASK_KIND:
+            return scan_skill_catalog()
+
         raise ValueError(f"unsupported task kind: {task_kind}")
+
+    def compute_dev_preference_scores(
+        self,
+        *,
+        runtime_account_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            if runtime_account_id is None:
+                account_rows = connection.execute(
+                    """
+                    SELECT runtime_account_id
+                    FROM (
+                      SELECT runtime_account_id, MAX(created_at) AS activity_at
+                      FROM agent.dev_preference_signal
+                      GROUP BY runtime_account_id
+                      UNION
+                      SELECT runtime_account_id, MAX(created_at) AS activity_at
+                      FROM agent.dev_preference_decision
+                      GROUP BY runtime_account_id
+                    ) AS combined
+                    ORDER BY activity_at DESC
+                    LIMIT 1
+                    """
+                ).fetchall()
+                if not account_rows:
+                    return {
+                        "updatedAccounts": [],
+                        "source": "dev-memory",
+                    }
+                account_ids = [str(account_rows[0]["runtime_account_id"])]
+            else:
+                account_ids = [runtime_account_id]
+
+            updated_accounts: list[dict[str, Any]] = []
+            for account_id in account_ids:
+                signal_rows = connection.execute(
+                    """
+                    SELECT
+                      dev_preference_signal_id,
+                      runtime_account_id,
+                      signal_kind,
+                      surface,
+                      panel_key,
+                      payload,
+                      created_at
+                    FROM agent.dev_preference_signal
+                    WHERE runtime_account_id = %s
+                    ORDER BY created_at DESC, dev_preference_signal_id DESC
+                    """,
+                    (account_id,),
+                ).fetchall()
+                decision_rows = connection.execute(
+                    """
+                    SELECT
+                      dev_preference_decision_id,
+                      runtime_account_id,
+                      dev_preference_signal_id,
+                      decision_kind,
+                      subject_kind,
+                      subject_key,
+                      chosen_value,
+                      payload,
+                      created_at
+                    FROM agent.dev_preference_decision
+                    WHERE runtime_account_id = %s
+                    ORDER BY created_at DESC, dev_preference_decision_id DESC
+                    """,
+                    (account_id,),
+                ).fetchall()
+
+                mapped_signals = [map_dev_preference_signal(row) for row in signal_rows]
+                mapped_decisions = [map_dev_preference_decision(row) for row in decision_rows]
+                feature_summary, scorecard = build_dev_preference_scorecard(
+                    mapped_signals,
+                    mapped_decisions,
+                )
+                score_row = connection.execute(
+                    """
+                    INSERT INTO agent.dev_preference_score (
+                      runtime_account_id,
+                      feature_summary,
+                      scorecard,
+                      computed_from_signal_count,
+                      updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, NOW())
+                    ON CONFLICT (runtime_account_id)
+                    DO UPDATE
+                    SET
+                      feature_summary = EXCLUDED.feature_summary,
+                      scorecard = EXCLUDED.scorecard,
+                      computed_from_signal_count = EXCLUDED.computed_from_signal_count,
+                      updated_at = EXCLUDED.updated_at
+                    RETURNING
+                      runtime_account_id,
+                      feature_summary,
+                      scorecard,
+                      computed_from_signal_count,
+                      updated_at
+                    """,
+                    (
+                        account_id,
+                        Jsonb(feature_summary),
+                        Jsonb(scorecard),
+                        len(mapped_signals),
+                    ),
+                ).fetchone()
+                updated_accounts.append(map_dev_preference_score(score_row))
+
+            connection.commit()
+
+        return {
+            "updatedAccounts": updated_accounts,
+            "source": "dev-memory",
+        }
 
     def _record_completed_task(
         self,
@@ -1539,6 +2407,84 @@ def map_agent_task(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def map_agent_task_dependency(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "agentTaskId": int(row["agent_task_id"]),
+        "dependsOnAgentTaskId": int(row["depends_on_agent_task_id"]),
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_agent_run(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "agentRunId": int(row["agent_run_id"]),
+        "agentName": row["agent_name"],
+        "taskSlug": row["task_slug"],
+        "status": row["status"],
+        "startedAt": row["started_at"].isoformat(),
+        "finishedAt": row["finished_at"].isoformat()
+        if row["finished_at"] is not None
+        else None,
+    }
+
+
+def map_agent_event(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "agentEventId": int(row["agent_event_id"]),
+        "agentRunId": int(row["agent_run_id"]),
+        "eventType": row["event_type"],
+        "payload": row["payload"] or {},
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_agent_artifact(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "artifactId": int(row["artifact_id"]),
+        "agentRunId": int(row["agent_run_id"]),
+        "artifactKind": row["artifact_kind"],
+        "uri": row["uri"],
+        "metadata": row["metadata"] or {},
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_dev_preference_signal(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "devPreferenceSignalId": int(row["dev_preference_signal_id"]),
+        "runtimeAccountId": str(row["runtime_account_id"]),
+        "signalKind": row["signal_kind"],
+        "surface": row["surface"],
+        "panelKey": row["panel_key"],
+        "payload": row["payload"] or {},
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_dev_preference_decision(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "devPreferenceDecisionId": int(row["dev_preference_decision_id"]),
+        "runtimeAccountId": str(row["runtime_account_id"]),
+        "devPreferenceSignalId": row["dev_preference_signal_id"],
+        "decisionKind": row["decision_kind"],
+        "subjectKind": row["subject_kind"],
+        "subjectKey": row["subject_key"],
+        "chosenValue": row["chosen_value"],
+        "payload": row["payload"] or {},
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_dev_preference_score(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "runtimeAccountId": str(row["runtime_account_id"]),
+        "featureSummary": row["feature_summary"] or {},
+        "scorecard": row["scorecard"] or {},
+        "computedFromSignalCount": int(row["computed_from_signal_count"]),
+        "updatedAt": row["updated_at"].isoformat(),
+    }
+
+
 def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -1563,6 +2509,44 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                 if parsed.path == "/v1/evaluations":
                     self.send_json(200, {"items": repository.list_evaluations()})
                     return
+                if parsed.path == "/v1/internal/coordination/tasks":
+                    self.require_internal_token()
+                    queue_name = query.get("queueName", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 100
+                    self.send_json(
+                        200,
+                        repository.list_agent_tasks(queue_name=queue_name, limit=limit),
+                    )
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "coordination", "tasks"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    task = repository.get_agent_task(int(path_parts[4]))
+                    if task is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, task)
+                    return
+                if parsed.path == "/v1/internal/coordination/runs":
+                    self.require_internal_token()
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 50
+                    self.send_json(200, repository.list_agent_runs(limit=limit))
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "coordination", "runs"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    detail = repository.get_agent_run_detail(int(path_parts[4]))
+                    if detail is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, detail)
+                    return
                 if parsed.path == "/v1/internal/preferences/suggestions":
                     self.require_internal_token()
                     runtime_account_id = query.get("runtimeAccountId", [None])[0]
@@ -1572,6 +2556,17 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                             "items": repository.list_preference_suggestions(runtime_account_id),
                             "source": "dev-memory",
                         },
+                    )
+                    return
+                if parsed.path == "/v1/internal/preferences/dev-profile":
+                    self.require_internal_token()
+                    runtime_account_id = query.get("runtimeAccountId", [None])[0]
+                    if not runtime_account_id:
+                        self.send_json(400, {"error": "runtimeAccountId is required"})
+                        return
+                    self.send_json(
+                        200,
+                        repository.get_dev_preference_profile(str(runtime_account_id)),
                     )
                     return
                 if (
@@ -1633,6 +2628,65 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                             based_on_profile_version=as_optional_int(
                                 payload.get("basedOnProfileVersion")
                             ),
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/coordination/tasks":
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.enqueue_agent_task(
+                            task_kind=str(payload["taskKind"]),
+                            queue_name=str(payload.get("queueName", DEFAULT_AGENT_TASK_QUEUE)),
+                            priority=int(payload.get("priority", 0)),
+                            payload=ensure_dict(payload.get("payload")),
+                        ),
+                    )
+                    return
+                if (
+                    len(path_parts) == 6
+                    and path_parts[:4] == ["v1", "internal", "coordination", "tasks"]
+                    and path_parts[4].isdigit()
+                    and path_parts[5] == "retry"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        200,
+                        repository.retry_agent_task(
+                            int(path_parts[4]),
+                            note=str(payload["note"]) if payload.get("note") else None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/preferences/dev-signals":
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.create_dev_preference_signal(
+                            runtime_account_id=str(payload["runtimeAccountId"]),
+                            signal_kind=str(payload["signalKind"]),
+                            surface=str(payload.get("surface", "dev_console")),
+                            panel_key=str(payload["panelKey"]) if payload.get("panelKey") else None,
+                            payload=ensure_dict(payload.get("payload")),
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/preferences/dev-decisions":
+                    self.require_internal_token()
+                    self.send_json(
+                        200,
+                        repository.create_dev_preference_decision(
+                            runtime_account_id=str(payload["runtimeAccountId"]),
+                            dev_preference_signal_id=as_optional_int(
+                                payload.get("devPreferenceSignalId")
+                            ),
+                            decision_kind=str(payload["decisionKind"]),
+                            subject_kind=str(payload["subjectKind"]),
+                            subject_key=str(payload["subjectKey"]),
+                            chosen_value=str(payload["chosenValue"])
+                            if payload.get("chosenValue")
+                            else None,
+                            payload=ensure_dict(payload.get("payload")),
                         ),
                     )
                     return

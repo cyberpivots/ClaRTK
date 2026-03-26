@@ -27,6 +27,7 @@
 
 - The embedding job no longer stops at `pending_vector` metadata only; it now writes deterministic development vectors into `memory.embedding_chunk.embedding`.
 - Evaluation output now distinguishes total, vectorized, and pending embedding chunk counts so dev-memory state is observable during hardening.
+- `services/agent-memory` now also exposes internal-token-protected coordination detail and dev-preference profile endpoints so the browser-facing dev-console broker can stay separate from direct dev-memory browser access.
 
 ## Remaining Gaps
 

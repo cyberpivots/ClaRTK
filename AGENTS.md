@@ -36,13 +36,16 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
 - DB init: `corepack yarn dev:db:init`
 - DB smoke: `corepack yarn dev:db:smoke`
 - DB backup: `corepack yarn dev:db:backup`
+- Dev console API: `corepack yarn dev:console:api`
+- Dev console web: `corepack yarn dev:console`
 - Full repo check: `scripts/check-all.sh`
 
 ## Development Data Planes
 
 - Local development uses one PostgreSQL server with two logical databases:
   - `clartk_runtime` for operator-facing runtime state
-  - `clartk_dev` for agent-memory, evaluations, embeddings, and agentic coordination state
+- `clartk_dev` for agent-memory, evaluations, embeddings, and agentic coordination state
+- `apps/dev-console-web` and `services/dev-console-api` are development-only surfaces. Keep them separate from `apps/dashboard-web` and the runtime/operator workflow.
 - Host-run services must consume the resolved PostgreSQL endpoint produced by `scripts/dev-db-up.sh`; do not assume `127.0.0.1:5432` is always reachable on the host.
 - DB backups live under `.clartk/dev/backups/`. Treat logical dumps as the primary portable recovery artifact; use volume archives only for compose-backed local recovery.
 - Volume-level DB commands resolve the actual mounted Docker volume from the running PostgreSQL container; treat `CLARTK_POSTGRES_VOLUME_NAME` as the compose volume key, not as a hard-coded raw Docker volume name.
@@ -88,11 +91,13 @@ Use repo-local or language-native tooling. Prefer these commands exactly:
 
 - Keep durable project guidance in `AGENTS.md`, ADRs, and milestone task files.
 - Move ephemeral agent scheduling, leases, retries, run logs, and execution artifacts toward PostgreSQL-backed coordination in `clartk_dev`.
+- Use the development interface for bounded visibility and control of the dev plane. Do not route production/operator workflows through the dev-console broker.
 - When extending the coordination plane, prefer ordinary PostgreSQL primitives over new infrastructure by default:
   - row leasing with `FOR UPDATE SKIP LOCKED`
   - wakeups with `LISTEN` and `NOTIFY`
   - singleton scheduler or reconciler ownership with advisory locks
 - Keep ML and embedding work in Python workers and store resulting artifacts, evaluations, and vectors in `clartk_dev`; do not let those jobs mutate canonical runtime state directly.
+- Keep development-interface preference learning separate from runtime operator profile publication. Supervised dev-console signals live in `clartk_dev` and do not auto-publish back into runtime profile defaults.
 
 ## Internet and MCP
 

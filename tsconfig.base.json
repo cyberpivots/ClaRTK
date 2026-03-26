@@ -8,8 +8,9 @@
     { "path": "./packages/state" },
     { "path": "./packages/api-client" },
     { "path": "./services/api" },
+    { "path": "./services/dev-console-api" },
     { "path": "./apps/dashboard-web" },
+    { "path": "./apps/dev-console-web" },
     { "path": "./apps/native" }
   ]
 }
-

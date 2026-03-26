@@ -38,5 +38,7 @@
   Status: in progress
 - `TASK-0510-dev-stack-verification-and-toolchain-integration.md`: Integrate codegen prerequisites and authoritative repo checks into local bring-up
   Status: in progress
+- `TASK-0520-development-interface-and-dev-console.md`: Add the development-only browser interface and brokered dev-console control plane
+  Status: in progress
 - `TASK-0600-user-preference-profile.md`: Implement real-account operator profiles, reviewable preference suggestions, and dashboard-first preference management
   Status: completed

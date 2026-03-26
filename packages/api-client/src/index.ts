@@ -1,24 +1,37 @@
 import type {
   Account,
+  AgentRunCollection,
+  AgentRunDetail,
+  AgentTaskCollection,
+  AgentTaskRecord,
   ApiTokenCreateResult,
   AuthRole,
   AuthSessionResult,
   AuthenticatedMe,
+  DevConsoleApiHealth,
+  DevPreferenceProfile,
+  DevPreferenceSignal,
+  DocsCatalogResponse,
   EffectiveOperatorProfile,
+  EvaluationResultRecord,
   JsonObject,
+  KnowledgeClaimRecord,
   MyViewsResponse,
   PreferenceObservationResult,
   PreferenceSuggestion,
   PreferenceSuggestionCollection,
-  RuntimeApiHealth,
   ResourceCollection,
+  RuntimeApiHealth,
   RuntimeDevice,
   RuntimePositionEvent,
   RuntimeRtkSolution,
   RuntimeSavedView,
+  SkillCatalogResponse,
+  SourceDocumentRecord,
   SuggestionPublishResult,
   SuggestionReviewOutcome,
-  ViewOverride
+  ViewOverride,
+  WorkspaceOverview
 } from "@clartk/domain";
 
 export interface ApiClientOptions {
@@ -26,7 +39,7 @@ export interface ApiClientOptions {
   fetchFn?: typeof fetch;
 }
 
-export class ApiClient {
+class JsonClient {
   private readonly fetchFn: typeof fetch;
 
   constructor(private readonly options: ApiClientOptions) {
@@ -37,6 +50,50 @@ export class ApiClient {
     return new URL(path, this.options.baseUrl).toString();
   }
 
+  protected async getJson<T>(path: string): Promise<T> {
+    return this.sendJson<T>(path, {
+      method: "GET"
+    });
+  }
+
+  protected async sendJson<T>(
+    path: string,
+    init: {
+      method: string;
+      body?: unknown;
+      headers?: HeadersInit;
+    }
+  ): Promise<T> {
+    const response = await this.fetchFn(this.url(path), {
+      method: init.method,
+      credentials: "include",
+      headers: {
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...init.headers
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body)
+    });
+
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = (await response.json()) as { error?: string };
+        detail = payload.error ? ` ${payload.error}` : "";
+      } catch {
+        detail = "";
+      }
+      throw new Error(`request failed for ${path}: ${response.status}${detail}`);
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    return (await response.json()) as T;
+  }
+}
+
+export class ApiClient extends JsonClient {
   healthUrl(): string {
     return this.url("/health");
   }
@@ -208,14 +265,9 @@ export class ApiClient {
     notes?: string,
     accountId?: string
   ): Promise<PreferenceSuggestion> {
-    const payload = {
-      outcome,
-      notes,
-      accountId
-    };
     return this.sendJson<PreferenceSuggestion>(`/v1/me/suggestions/${suggestionId}/review`, {
       method: "POST",
-      body: payload
+      body: { outcome, notes, accountId }
     });
   }
 
@@ -241,46 +293,101 @@ export class ApiClient {
       body: payload
     });
   }
+}
 
-  private async getJson<T>(path: string): Promise<T> {
-    return this.sendJson<T>(path, {
-      method: "GET"
+export class DevConsoleClient extends JsonClient {
+  async getHealth(): Promise<DevConsoleApiHealth> {
+    return this.getJson<DevConsoleApiHealth>("/health");
+  }
+
+  async getWorkspaceOverview(): Promise<WorkspaceOverview> {
+    return this.getJson<WorkspaceOverview>("/v1/workspace/overview");
+  }
+
+  async listTasks(queueName?: string): Promise<AgentTaskCollection> {
+    const query = queueName ? `?queueName=${encodeURIComponent(queueName)}` : "";
+    return this.getJson<AgentTaskCollection>(`/v1/coordination/tasks${query}`);
+  }
+
+  async enqueueTask(payload: {
+    taskKind: string;
+    queueName?: string;
+    priority?: number;
+    payload?: JsonObject;
+  }): Promise<AgentTaskRecord> {
+    return this.sendJson<AgentTaskRecord>("/v1/coordination/tasks/enqueue", {
+      method: "POST",
+      body: payload
     });
   }
 
-  private async sendJson<T>(
-    path: string,
-    init: {
-      method: string;
-      body?: unknown;
-      headers?: HeadersInit;
-    }
-  ): Promise<T> {
-    const response = await this.fetchFn(this.url(path), {
-      method: init.method,
-      credentials: "include",
-      headers: {
-        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
-        ...init.headers
-      },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body)
+  async retryTask(agentTaskId: number, note?: string): Promise<AgentTaskRecord> {
+    return this.sendJson<AgentTaskRecord>(`/v1/coordination/tasks/${agentTaskId}/retry`, {
+      method: "POST",
+      body: { note }
     });
+  }
 
-    if (!response.ok) {
-      let detail = "";
-      try {
-        const payload = (await response.json()) as { error?: string };
-        detail = payload.error ? ` ${payload.error}` : "";
-      } catch {
-        detail = "";
-      }
-      throw new Error(`request failed for ${path}: ${response.status}${detail}`);
-    }
+  async listRuns(limit?: number): Promise<AgentRunCollection> {
+    const query = limit === undefined ? "" : `?limit=${limit}`;
+    return this.getJson<AgentRunCollection>(`/v1/coordination/runs${query}`);
+  }
 
-    if (response.status === 204) {
-      return undefined as T;
-    }
+  async getRun(agentRunId: number): Promise<AgentRunDetail> {
+    return this.getJson<AgentRunDetail>(`/v1/coordination/runs/${agentRunId}`);
+  }
 
-    return (await response.json()) as T;
+  async listSourceDocuments(): Promise<ResourceCollection<SourceDocumentRecord>> {
+    return this.getJson<ResourceCollection<SourceDocumentRecord>>("/v1/knowledge/source-documents");
+  }
+
+  async listClaims(): Promise<ResourceCollection<KnowledgeClaimRecord>> {
+    return this.getJson<ResourceCollection<KnowledgeClaimRecord>>("/v1/knowledge/claims");
+  }
+
+  async listEvaluations(): Promise<ResourceCollection<EvaluationResultRecord>> {
+    return this.getJson<ResourceCollection<EvaluationResultRecord>>("/v1/evaluations");
+  }
+
+  async listDocsCatalog(): Promise<DocsCatalogResponse> {
+    return this.getJson<DocsCatalogResponse>("/v1/docs/catalog");
+  }
+
+  async listSkills(): Promise<SkillCatalogResponse> {
+    return this.getJson<SkillCatalogResponse>("/v1/skills");
+  }
+
+  async getRuntimeProfileSummary(): Promise<AuthenticatedMe> {
+    return this.getJson<AuthenticatedMe>("/v1/preferences/runtime-profile-summary");
+  }
+
+  async getDevProfile(): Promise<DevPreferenceProfile> {
+    return this.getJson<DevPreferenceProfile>("/v1/preferences/dev-profile");
+  }
+
+  async createDevPreferenceSignal(payload: {
+    signalKind: string;
+    surface?: string;
+    panelKey?: string | null;
+    payload?: JsonObject;
+  }): Promise<DevPreferenceSignal> {
+    return this.sendJson<DevPreferenceSignal>("/v1/preferences/signals", {
+      method: "POST",
+      body: payload
+    });
+  }
+
+  async createDevPreferenceDecision(payload: {
+    devPreferenceSignalId?: number | null;
+    decisionKind: string;
+    subjectKind: string;
+    subjectKey: string;
+    chosenValue?: string | null;
+    payload?: JsonObject;
+  }): Promise<DevPreferenceProfile> {
+    return this.sendJson<DevPreferenceProfile>("/v1/preferences/decisions", {
+      method: "POST",
+      body: payload
+    });
   }
 }

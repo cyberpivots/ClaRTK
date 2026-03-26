@@ -30,6 +30,7 @@
 - `db/migrations/0005_agent_task_queue.sql` now adds `agent.task` and `agent.task_dependency` as the initial queue and dependency baseline.
 - `services/agent-memory` now supports worker leasing with `FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY` wakeups, and transaction-scoped advisory locks for scheduler and lease-repair duties.
 - `agent.run`, `agent.event`, and `agent.artifact` are now used as execution history for queued embedding and evaluation jobs.
+- The queue now also carries development-interface preference score recompute tasks plus bounded doc and skill catalog refresh jobs, keeping that transient coordination state inside `clartk_dev` rather than in more task files.
 
 ## Remaining Gaps
 

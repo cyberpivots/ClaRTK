@@ -24,8 +24,11 @@
 - `scripts/check-all.sh` now runs `node scripts/generate-contracts.mjs --check` before the SQL, Cargo, Python, and TypeScript checks.
 - The repo-level `package.json` now exposes `contracts:generate` and `contracts:check` so local workflows can invoke the same generator directly.
 - The Docker-backed PostgreSQL bring-up path already resolves a reachable host endpoint instead of assuming `127.0.0.1:5432`, and the new DB ops surface now needs to build on that resolved-endpoint contract rather than bypassing it.
+- The local dev stack now includes a dedicated dev-console API and web app entrypoint, both with explicit ports and status reporting alongside the runtime dashboard.
+- `scripts/dev-db-init.sh` now applies the dev-console preference migration and `scripts/dev-db-smoke.sh` verifies the `agent.dev_preference_signal` and `agent.dev_preference_score` tables so the brokered dev-profile path is part of baseline DB readiness.
 
 ## Remaining Gaps
 
 - The local DB lifecycle still needs verification that logical backup, logical restore, soft reset, hard reset, and optional volume recovery work on both directly published and proxy-resolved Docker Desktop ports.
 - The gateway and native lanes still rely on host prerequisites that are documented only partially through the current degraded-mode scripts and task notes.
+- The new dev-console lane still needs fuller browser-level interaction coverage; the current verification is broker/API heavy with root-page availability checks for the Vite app.

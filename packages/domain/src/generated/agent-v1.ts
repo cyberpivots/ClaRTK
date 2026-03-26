@@ -18,6 +18,188 @@ export const SuggestionStatus = {
 } as const;
 export type SuggestionStatus = (typeof SuggestionStatus)[keyof typeof SuggestionStatus];
 
+export interface WorkspaceServiceHealth {
+  service: string;
+  status: string;
+  url: string;
+  detailJson: string;
+}
+
+export interface BackupSummary {
+  latestBackupDir: string;
+  latestBackupKind: string;
+  latestBackupCreatedAt: string;
+}
+
+export interface WorkspaceHealth {
+  status: string;
+  postgresHost: string;
+  postgresPort: number;
+  postgresSource: string;
+  postgresReachable: boolean;
+  backup: BackupSummary;
+  services: WorkspaceServiceHealth[];
+}
+
+export interface AgentTaskDependency {
+  agentTaskId: number;
+  dependsOnAgentTaskId: number;
+  createdAt: string;
+}
+
+export interface AgentTask {
+  agentTaskId: number;
+  taskKind: string;
+  queueName: string;
+  status: string;
+  priority: number;
+  payloadJson: string;
+  availableAt: string;
+  leaseOwner: string;
+  leaseExpiresAt: string;
+  attemptCount: number;
+  maxAttempts: number;
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+}
+
+export interface QueueSnapshot {
+  queueName: string;
+  queuedCount: number;
+  leasedCount: number;
+  succeededCount: number;
+  failedCount: number;
+  recentTasks: AgentTask[];
+}
+
+export interface AgentTaskCollection {
+  items: AgentTask[];
+  queues: QueueSnapshot[];
+}
+
+export interface EnqueueTaskRequest {
+  taskKind: string;
+  queueName: string;
+  priority: number;
+  payloadJson: string;
+}
+
+export interface RetryTaskRequest {
+  note: string;
+}
+
+export interface AgentRun {
+  agentRunId: number;
+  agentName: string;
+  taskSlug: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string;
+}
+
+export interface AgentRunCollection {
+  items: AgentRun[];
+}
+
+export interface AgentEvent {
+  agentEventId: number;
+  agentRunId: number;
+  eventType: string;
+  payloadJson: string;
+  createdAt: string;
+}
+
+export interface AgentArtifact {
+  artifactId: number;
+  agentRunId: number;
+  artifactKind: string;
+  uri: string;
+  metadataJson: string;
+  createdAt: string;
+}
+
+export interface AgentRunDetail {
+  run: AgentRun;
+  task: AgentTask;
+  dependencies: AgentTaskDependency[];
+  events: AgentEvent[];
+  artifacts: AgentArtifact[];
+}
+
+export interface DocsCatalogItem {
+  path: string;
+  title: string;
+  kind: string;
+  summary: string;
+  updatedAt: string;
+  tags: string[];
+}
+
+export interface DocsCatalog {
+  items: DocsCatalogItem[];
+}
+
+export interface SkillDescriptor {
+  skillId: string;
+  name: string;
+  description: string;
+  path: string;
+  source: string;
+  available: boolean;
+}
+
+export interface SkillCatalog {
+  items: SkillDescriptor[];
+}
+
+export interface DevPreferenceSignal {
+  devPreferenceSignalId: number;
+  runtimeAccountId: string;
+  signalKind: string;
+  surface: string;
+  panelKey: string;
+  payloadJson: string;
+  createdAt: string;
+}
+
+export interface DevPreferenceDecision {
+  devPreferenceDecisionId: number;
+  runtimeAccountId: string;
+  devPreferenceSignalId: number;
+  decisionKind: string;
+  subjectKind: string;
+  subjectKey: string;
+  chosenValue: string;
+  payloadJson: string;
+  createdAt: string;
+}
+
+export interface DevPreferenceScore {
+  runtimeAccountId: string;
+  featureSummaryJson: string;
+  scorecardJson: string;
+  computedFromSignalCount: number;
+  updatedAt: string;
+}
+
+export interface DevPreferenceSignalCreateRequest {
+  signalKind: string;
+  surface: string;
+  panelKey: string;
+  payloadJson: string;
+}
+
+export interface DevPreferenceDecisionCreateRequest {
+  devPreferenceSignalId: number;
+  decisionKind: string;
+  subjectKind: string;
+  subjectKey: string;
+  chosenValue: string;
+  payloadJson: string;
+}
+
 export interface SourceDocument {
   sourceDocumentId: string;
   sourceKind: string;

@@ -90,3 +90,17 @@ assert_query_equals \
   "$dev_url" \
   "clartk_dev" \
   "SELECT (to_regclass('agent.task') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "dev preference signal table present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regclass('agent.dev_preference_signal') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "dev preference score table present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regclass('agent.dev_preference_score') IS NOT NULL)::int;"

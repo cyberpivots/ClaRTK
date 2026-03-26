@@ -1,0 +1,185 @@
+syntax = "proto3";
+
+package clartk.agent.v1;
+
+message WorkspaceServiceHealth {
+  string service = 1;
+  string status = 2;
+  string url = 3;
+  string detail_json = 4;
+}
+
+message BackupSummary {
+  string latest_backup_dir = 1;
+  string latest_backup_kind = 2;
+  string latest_backup_created_at = 3;
+}
+
+message WorkspaceHealth {
+  string status = 1;
+  string postgres_host = 2;
+  uint32 postgres_port = 3;
+  string postgres_source = 4;
+  bool postgres_reachable = 5;
+  BackupSummary backup = 6;
+  repeated WorkspaceServiceHealth services = 7;
+}
+
+message AgentTaskDependency {
+  int64 agent_task_id = 1;
+  int64 depends_on_agent_task_id = 2;
+  string created_at = 3;
+}
+
+message AgentTask {
+  int64 agent_task_id = 1;
+  string task_kind = 2;
+  string queue_name = 3;
+  string status = 4;
+  int32 priority = 5;
+  string payload_json = 6;
+  string available_at = 7;
+  string lease_owner = 8;
+  string lease_expires_at = 9;
+  int32 attempt_count = 10;
+  int32 max_attempts = 11;
+  string last_error = 12;
+  string created_at = 13;
+  string updated_at = 14;
+  string completed_at = 15;
+}
+
+message QueueSnapshot {
+  string queue_name = 1;
+  int32 queued_count = 2;
+  int32 leased_count = 3;
+  int32 succeeded_count = 4;
+  int32 failed_count = 5;
+  repeated AgentTask recent_tasks = 6;
+}
+
+message AgentTaskCollection {
+  repeated AgentTask items = 1;
+  repeated QueueSnapshot queues = 2;
+}
+
+message EnqueueTaskRequest {
+  string task_kind = 1;
+  string queue_name = 2;
+  int32 priority = 3;
+  string payload_json = 4;
+}
+
+message RetryTaskRequest {
+  string note = 1;
+}
+
+message AgentRun {
+  int64 agent_run_id = 1;
+  string agent_name = 2;
+  string task_slug = 3;
+  string status = 4;
+  string started_at = 5;
+  string finished_at = 6;
+}
+
+message AgentRunCollection {
+  repeated AgentRun items = 1;
+}
+
+message AgentEvent {
+  int64 agent_event_id = 1;
+  int64 agent_run_id = 2;
+  string event_type = 3;
+  string payload_json = 4;
+  string created_at = 5;
+}
+
+message AgentArtifact {
+  int64 artifact_id = 1;
+  int64 agent_run_id = 2;
+  string artifact_kind = 3;
+  string uri = 4;
+  string metadata_json = 5;
+  string created_at = 6;
+}
+
+message AgentRunDetail {
+  AgentRun run = 1;
+  AgentTask task = 2;
+  repeated AgentTaskDependency dependencies = 3;
+  repeated AgentEvent events = 4;
+  repeated AgentArtifact artifacts = 5;
+}
+
+message DocsCatalogItem {
+  string path = 1;
+  string title = 2;
+  string kind = 3;
+  string summary = 4;
+  string updated_at = 5;
+  repeated string tags = 6;
+}
+
+message DocsCatalog {
+  repeated DocsCatalogItem items = 1;
+}
+
+message SkillDescriptor {
+  string skill_id = 1;
+  string name = 2;
+  string description = 3;
+  string path = 4;
+  string source = 5;
+  bool available = 6;
+}
+
+message SkillCatalog {
+  repeated SkillDescriptor items = 1;
+}
+
+message DevPreferenceSignal {
+  int64 dev_preference_signal_id = 1;
+  string runtime_account_id = 2;
+  string signal_kind = 3;
+  string surface = 4;
+  string panel_key = 5;
+  string payload_json = 6;
+  string created_at = 7;
+}
+
+message DevPreferenceDecision {
+  int64 dev_preference_decision_id = 1;
+  string runtime_account_id = 2;
+  int64 dev_preference_signal_id = 3;
+  string decision_kind = 4;
+  string subject_kind = 5;
+  string subject_key = 6;
+  string chosen_value = 7;
+  string payload_json = 8;
+  string created_at = 9;
+}
+
+message DevPreferenceScore {
+  string runtime_account_id = 1;
+  string feature_summary_json = 2;
+  string scorecard_json = 3;
+  uint32 computed_from_signal_count = 4;
+  string updated_at = 5;
+}
+
+message DevPreferenceSignalCreateRequest {
+  string signal_kind = 1;
+  string surface = 2;
+  string panel_key = 3;
+  string payload_json = 4;
+}
+
+message DevPreferenceDecisionCreateRequest {
+  int64 dev_preference_signal_id = 1;
+  string decision_kind = 2;
+  string subject_kind = 3;
+  string subject_key = 4;
+  string chosen_value = 5;
+  string payload_json = 6;
+}

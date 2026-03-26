@@ -5,7 +5,9 @@ export const CLARTK_DEV_DATABASE_NAME = "clartk_dev" as const;
 export const CLARTK_DEFAULT_API_PORT = 3000 as const;
 export const CLARTK_DEFAULT_AGENT_MEMORY_PORT = 3100 as const;
 export const CLARTK_DEFAULT_GATEWAY_DIAGNOSTICS_PORT = 3200 as const;
+export const CLARTK_DEFAULT_DEV_CONSOLE_API_PORT = 3300 as const;
 export const CLARTK_DEFAULT_DASHBOARD_PORT = 5173 as const;
+export const CLARTK_DEFAULT_DEV_CONSOLE_PORT = 5180 as const;
 export const CLARTK_DEFAULT_POSTGRES_PORT = 5432 as const;
 export const CLARTK_DEFAULT_METRO_PORT = 8081 as const;
 
@@ -13,6 +15,7 @@ export type DeviceId = string;
 export type AccountId = string;
 export type TimestampIsoString = string;
 export type ResourceSource = "database" | "unconfigured";
+export type CatalogSource = "filesystem" | "unconfigured";
 export type ServiceStatus = "ok" | "degraded";
 export type AuthRole = "operator" | "admin";
 export type ViewScopeKind = "shared_template" | "account_override";
@@ -90,6 +93,183 @@ export interface AgentMemoryHealth {
   devDatabaseConfigured: boolean;
   devDatabaseName: typeof CLARTK_DEV_DATABASE_NAME;
   jobs: string[];
+}
+
+export interface DevConsoleApiHealth {
+  service: "dev-console-api";
+  status: ServiceStatus;
+  workspace: "clartk";
+  runtimeApiBaseUrl: string;
+  agentMemoryBaseUrl: string;
+}
+
+export interface WorkspaceServiceHealth {
+  service: string;
+  status: ServiceStatus;
+  url: string;
+  detail: JsonObject;
+}
+
+export interface BackupSummary {
+  latestBackupDir: string;
+  latestBackupKind: string;
+  latestBackupCreatedAt: TimestampIsoString | null;
+}
+
+export interface WorkspaceOverview {
+  status: ServiceStatus;
+  postgres: {
+    host: string;
+    port: number;
+    source: string;
+    reachable: boolean;
+  };
+  backup: BackupSummary | null;
+  services: WorkspaceServiceHealth[];
+}
+
+export interface AgentTaskDependency {
+  agentTaskId: number;
+  dependsOnAgentTaskId: number;
+  createdAt: TimestampIsoString;
+}
+
+export interface AgentTaskRecord {
+  agentTaskId: number;
+  taskKind: string;
+  queueName: string;
+  status: string;
+  priority: number;
+  payload: JsonObject;
+  availableAt: TimestampIsoString;
+  leaseOwner: string | null;
+  leaseExpiresAt: TimestampIsoString | null;
+  attemptCount: number;
+  maxAttempts: number;
+  lastError: string | null;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+  completedAt: TimestampIsoString | null;
+}
+
+export interface QueueSnapshot {
+  queueName: string;
+  queuedCount: number;
+  leasedCount: number;
+  succeededCount: number;
+  failedCount: number;
+  recentTasks: AgentTaskRecord[];
+}
+
+export interface AgentTaskCollection {
+  items: AgentTaskRecord[];
+  queues: QueueSnapshot[];
+  source: "dev-memory" | "unconfigured";
+}
+
+export interface AgentRunRecord {
+  agentRunId: number;
+  agentName: string;
+  taskSlug: string;
+  status: string;
+  startedAt: TimestampIsoString;
+  finishedAt: TimestampIsoString | null;
+}
+
+export interface AgentRunCollection {
+  items: AgentRunRecord[];
+  source: "dev-memory" | "unconfigured";
+}
+
+export interface AgentEventRecord {
+  agentEventId: number;
+  agentRunId: number;
+  eventType: string;
+  payload: JsonObject;
+  createdAt: TimestampIsoString;
+}
+
+export interface AgentArtifactRecord {
+  artifactId: number;
+  agentRunId: number;
+  artifactKind: string;
+  uri: string;
+  metadata: JsonObject;
+  createdAt: TimestampIsoString;
+}
+
+export interface AgentRunDetail {
+  run: AgentRunRecord;
+  task: AgentTaskRecord | null;
+  dependencies: AgentTaskDependency[];
+  events: AgentEventRecord[];
+  artifacts: AgentArtifactRecord[];
+  source: "dev-memory" | "unconfigured";
+}
+
+export interface DocsCatalogItem {
+  path: string;
+  title: string;
+  kind: string;
+  summary: string;
+  updatedAt: TimestampIsoString;
+  tags: string[];
+}
+
+export interface DocsCatalogResponse {
+  items: DocsCatalogItem[];
+  source: CatalogSource;
+}
+
+export interface SkillDescriptor {
+  skillId: string;
+  name: string;
+  description: string;
+  path: string;
+  source: "repo" | "system";
+  available: boolean;
+}
+
+export interface SkillCatalogResponse {
+  items: SkillDescriptor[];
+  source: CatalogSource;
+}
+
+export interface DevPreferenceSignal {
+  devPreferenceSignalId: number;
+  runtimeAccountId: AccountId;
+  signalKind: string;
+  surface: string;
+  panelKey: string | null;
+  payload: JsonObject;
+  createdAt: TimestampIsoString;
+}
+
+export interface DevPreferenceDecision {
+  devPreferenceDecisionId: number;
+  runtimeAccountId: AccountId;
+  devPreferenceSignalId: number | null;
+  decisionKind: string;
+  subjectKind: string;
+  subjectKey: string;
+  chosenValue: string | null;
+  payload: JsonObject;
+  createdAt: TimestampIsoString;
+}
+
+export interface DevPreferenceScore {
+  runtimeAccountId: AccountId;
+  featureSummary: JsonObject;
+  scorecard: JsonObject;
+  computedFromSignalCount: number;
+  updatedAt: TimestampIsoString;
+}
+
+export interface DevPreferenceProfile {
+  score: DevPreferenceScore | null;
+  recentSignals: DevPreferenceSignal[];
+  recentDecisions: DevPreferenceDecision[];
+  source: "dev-memory" | "unconfigured";
 }
 
 export interface SourceDocumentRecord {
