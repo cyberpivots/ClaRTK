@@ -3,7 +3,7 @@
 - Owner: initial agent
 - Write Set: `contracts/proto/`, `db/`, `docs/adr/`, `docs/operations/`, `docs/tasks/`, `scripts/`, `services/api/`, `services/agent-memory/`, `apps/dashboard-web/`, `packages/api-client/`, `packages/domain/`, `packages/state/`, `.env.example`, `package.json`
 - Worktree: local checkout
-- Depends On: TASK-0200, TASK-0400, TASK-0500
+- Depends On: TASK-0001, TASK-0500
 - Checks: `scripts/check-sql.sh`, `uv run pytest`, `corepack yarn typecheck`, runtime migration/apply checks, auth/profile API smoke tests, suggestion review/publish smoke tests
 - Status: completed
 
@@ -17,3 +17,8 @@
 - Add dev-memory preference observations, suggestions, reviews, and publication tracking.
 - Expose runtime API endpoints for auth, profile editing, view overrides, and suggestion review/publish brokering.
 - Add dashboard flows for sign-in, profile editing, admin account management, and suggestion review.
+
+## Follow-On
+
+- Runtime auth, profile, and payload hardening continues under `TASK-0210`.
+- Dev-memory suggestion storage, retrieval, evaluation, and publication-gate hardening continues under `TASK-0410` and `TASK-0420`.
