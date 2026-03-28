@@ -26,7 +26,8 @@
 - Uses Playwright-native Chromium launch when the local Linux browser runtime is available.
 - Falls back to Windows Edge over local CDP on this WSL host when the bundled Linux Chromium cannot start because of missing shared libraries.
 - Records a Playwright trace on every run.
-- Records named checkpoint screenshots for each reviewed panel.
+- Records named shell-level checkpoint screenshots for each reviewed panel.
+- Records a secondary mission-surface crop for each reviewed panel so shell and tray evidence can be inspected together.
 - Keeps video as secondary evidence only:
   - retained on failure
   - or retained when explicitly requested
@@ -35,8 +36,11 @@
   - failed request detection
   - console and page error extraction
   - missing-content checks
+  - shell-control presence checks
   - loading-stall checks
   - overflow checks
+  - top-level initial-load scroll checks
+  - navigation-label clipping checks
   - screenshot diffing against approved baselines
 - Produces structured fix drafts, not code patches.
 
@@ -73,7 +77,9 @@
 - Trace zip:
   stored for every run and linked from `agent.artifact`
 - Checkpoint screenshots:
-  stored under the run artifact directory and linked from both the capture summary and `agent.artifact`
+  shell-level screenshots are stored under the run artifact directory and linked from both the capture summary and `agent.artifact`
+- Mission-surface crops:
+  stored alongside the shell checkpoints as secondary evidence for the active tray content
 - Failure video:
   stored only on capture failure or explicit request
 - WSL Edge/CDP fallback:

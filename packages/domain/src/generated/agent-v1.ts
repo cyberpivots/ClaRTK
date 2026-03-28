@@ -41,6 +41,23 @@ export interface WorkspaceHealth {
   services: WorkspaceServiceHealth[];
 }
 
+export interface CoordinatorEndpointSummary {
+  runtimeApiBaseUrl: string;
+  devConsoleApiBaseUrl: string;
+  agentMemoryBaseUrl: string;
+}
+
+export interface CoordinatorAccountSummary {
+  accountId: string;
+  email: string;
+  role: string;
+}
+
+export interface CoordinatorError {
+  key: string;
+  error: string;
+}
+
 export interface AgentTaskDependency {
   agentTaskId: number;
   dependsOnAgentTaskId: number;
@@ -101,6 +118,41 @@ export interface AgentRun {
 
 export interface AgentRunCollection {
   items: AgentRun[];
+}
+
+export interface UiReviewRunSummary {
+  uiReviewRunId: number;
+  status: string;
+  scenarioSet: string;
+  createdAt: string;
+}
+
+export interface CoordinatorCoordinationSummary {
+  taskCount: number;
+  runCount: number;
+  reviewRunCount: number;
+  blockedTaskCount: number;
+  staleLeaseCount: number;
+  queues: QueueSnapshot[];
+  latestRuns: AgentRun[];
+  latestReviewRuns: UiReviewRunSummary[];
+}
+
+export interface CoordinatorCatalogSummary {
+  docCount: number;
+  skillCount: number;
+  coordinatorSkillPresent: boolean;
+}
+
+export interface CoordinatorStatus {
+  generatedAt: string;
+  endpoints: CoordinatorEndpointSummary;
+  account: CoordinatorAccountSummary;
+  workspace: WorkspaceHealth;
+  coordination: CoordinatorCoordinationSummary;
+  catalog: CoordinatorCatalogSummary;
+  errors: CoordinatorError[];
+  source: string;
 }
 
 export interface AgentEvent {
@@ -513,6 +565,28 @@ export interface KnowledgeClaim {
   summary: string;
   status: ValidationStatus;
   tags: string[];
+}
+
+export interface ClaimSearchResult {
+  knowledgeClaimId: string;
+  sourceDocumentId: string;
+  summary: string;
+  status: string;
+  tags: string[];
+  createdAt: string;
+  sourceTitle: string;
+  sourceUri: string;
+  lexicalScore: number;
+  semanticScore: number;
+  combinedScore: number;
+  matchReasons: string[];
+}
+
+export interface ClaimSearchResponse {
+  items: ClaimSearchResult[];
+  source: string;
+  query: string;
+  mode: string;
 }
 
 export interface EvaluationResult {

@@ -8,6 +8,13 @@
 
 This inventory snapshot is derived from currently listed hardware and used as the v1 seed basis for `clartk_dev` import.
 
+Important:
+
+- this markdown file is a draft seed manifest, not the live canonical inventory,
+- the live canonical inventory currently proves a smaller set of units than this page lists,
+- use [`../guides/start-here-beginner-blueprint.md`](../guides/start-here-beginner-blueprint.md) for the currently verified truth,
+- use [`../guides/recommended-reference-stack.md`](../guides/recommended-reference-stack.md) for the primary hardware recommendation.
+
 > Do not seed more than one copy of this list without tagging a new `source` revision.
 
 ## Required parts
@@ -15,7 +22,7 @@ This inventory snapshot is derived from currently listed hardware and used as th
 | `item_key` | `part_name` | Qty available | Notes |
 |---|---|---:|---|
 | `navspark_px1122r_eval` | NavSpark PX1122r eval board | 2 | Base + Rover target |
-| `digi_xbee_900_s3b_radio` | Digi XBee Pro 900 S3B radio | 10 | Primary transport link |
+| `digi_xbee_900_s3b_radio` | Digi XBee 900 S3B-family radio | 10 | Primary transport link; exact module label must be reconciled before wiring or config |
 | `poe_injector_at` | PoE injector adapter 4-port | 1 | Supports serial splitters |
 | `poe_splitter_5v` | 5V/12V PoE splitter (12V2A) | 2 | Serial switch path |
 | `poe_splitter_24v` | 48V->5V2.4A adapter | 2 | For power-only builds |
@@ -77,9 +84,9 @@ Minimal example:
     },
     {
       "item_key": "digi_xbee_900_s3b_radio",
-      "part_name": "Digi XBee Pro 900 S3B board radio",
+      "part_name": "Digi XBee 900 S3B-family board radio",
       "manufacturer": "Digi",
-      "model": "XBee Pro 900 S3B",
+      "model": "XBee 900 S3B-family",
       "category": "radio",
       "classification": "required"
     },

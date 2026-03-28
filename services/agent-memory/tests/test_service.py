@@ -7,9 +7,13 @@ from agent_memory import (
     build_default_worker_name,
     build_health_payload,
     chunk_document,
+    combine_claim_search_scores,
+    normalize_lexical_score,
     parse_queue_names,
     resolve_task_queue_name,
+    semantic_score_from_distance,
     suggestion_confidence_for_occurrences,
+    summarize_visual_signals,
     summarize_claim,
     task_retry_delay_seconds,
 )
@@ -71,6 +75,32 @@ def test_task_retry_delay_seconds_uses_bounded_exponential_backoff() -> None:
     assert task_retry_delay_seconds(1) == 2
     assert task_retry_delay_seconds(3) == 8
     assert task_retry_delay_seconds(10) == 300
+
+
+def test_claim_search_score_helpers_normalize_and_blend() -> None:
+    assert normalize_lexical_score(0.5, 1.0) == 0.5
+    assert normalize_lexical_score(0.0, 1.0) == 0.0
+    assert semantic_score_from_distance(None) == 0.0
+    assert semantic_score_from_distance(0.0) == 1.0
+    assert semantic_score_from_distance(1.0) == 0.5
+    assert combine_claim_search_scores(0.6, 0.4, mode="hybrid") == 0.53
+    assert combine_claim_search_scores(0.6, 0.4, mode="lexical") == 0.6
+    assert combine_claim_search_scores(0.6, 0.4, mode="vector") == 0.4
+
+
+def test_summarize_visual_signals_counts_severity_and_kind() -> None:
+    summary = summarize_visual_signals(
+        [
+            {"severity": "warning", "kind": "low_contrast", "label": "a"},
+            {"severity": "warning", "kind": "low_contrast", "label": "b"},
+            {"severity": "info", "kind": "ocr_empty", "label": "c"},
+        ]
+    )
+
+    assert summary["total"] == 3
+    assert summary["severityCounts"] == {"warning": 2, "info": 1}
+    assert summary["kindCounts"] == {"low_contrast": 2, "ocr_empty": 1}
+    assert len(summary["highlights"]) == 3
 
 
 def test_build_default_worker_name_uses_hostname_and_pid() -> None:

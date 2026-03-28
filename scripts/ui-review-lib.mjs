@@ -33,35 +33,37 @@ const WINDOWS_EDGE_CANDIDATES = [
 const panelScenarios = [
   {
     panelKey: "preview",
+    navIndex: 0,
     label: "Preview",
-    expectedTexts: ["Preview Workspace", "Deck Sources", "Preview Runs"]
-  },
-  {
-    panelKey: "overview",
-    label: "Overview",
-    expectedTexts: ["Workspace Overview", "PostgreSQL", "Reachability"]
+    expectedTexts: ["Preview Stage", "Selected Slide", "Run Rail"]
   },
   {
     panelKey: "coordination",
+    navIndex: 1,
     label: "Coordination",
-    expectedTexts: ["Safe Controls", "Queue Lanes", "Run Detail"]
+    expectedTexts: ["Quick Actions", "Queue Health", "Retry Selected Task"]
   },
   {
-    panelKey: "knowledge",
-    label: "Knowledge",
-    expectedTexts: ["Knowledge Stores", "Recent Documents", "Recent Claims"]
-  },
-  {
-    panelKey: "docs",
-    label: "Docs",
-    expectedTexts: ["Presentations", "Documentation Catalog", "Skills Catalog"]
+    panelKey: "review",
+    navIndex: 2,
+    label: "Review",
+    expectedTexts: ["Review Control", "Recent Runs", "Stored runs"]
   },
   {
     panelKey: "preferences",
+    navIndex: 3,
     label: "Preferences",
-    expectedTexts: ["Runtime Profile Summary", "Development Preference Scorecard", "Supervision Shortcuts"]
+    expectedTexts: ["Derived Defaults", "Manual Overrides", "Prefer Compact HUD"]
+  },
+  {
+    panelKey: "index",
+    navIndex: 4,
+    label: "Index",
+    expectedTexts: ["Workspace Status", "Services", "Reachable"]
   }
 ];
+
+const shellExpectedTexts = [...panelScenarios.map((scenario) => scenario.label), "Previous", "Next"];
 
 function sanitizeSegment(value) {
   return String(value).replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "item";
@@ -216,26 +218,67 @@ function buildViewportKey(viewport) {
   return `${viewport.width}x${viewport.height}`;
 }
 
-async function collectPanelSnapshot(page, expectedTexts) {
-  return page.evaluate((texts) => {
-    const root = document.querySelector(".console-main") ?? document.body;
-    const visibleLoadingTexts = Array.from(root.querySelectorAll("*"))
+async function collectPanelSnapshot(page, expectedTexts, requiredShellTexts = shellExpectedTexts) {
+  return page.evaluate(({ texts, shellTexts }) => {
+    const shellRoot = document.querySelector("[data-review-shell='true']") ?? document.body;
+    const missionSurface =
+      document.querySelector("[data-review-shell-region='mission-surface']") ??
+      document.querySelector(".console-main") ??
+      shellRoot;
+    const visibleLoadingTexts = Array.from(missionSurface.querySelectorAll("*"))
       .map((node) => node.textContent?.trim() ?? "")
       .filter((text) => text && /loading/i.test(text))
       .slice(0, 10);
-    const missingTexts = texts.filter((text) => !root.textContent?.includes(text));
+    const missionText = missionSurface.textContent ?? "";
+    const shellText = shellRoot.textContent ?? "";
+    const missingTexts = texts.filter((text) => !missionText.includes(text));
+    const missingShellTexts = shellTexts.filter((text) => !shellText.includes(text));
+    const reviewButtons = Array.from(
+      shellRoot.querySelectorAll("[data-review-shell-button]")
+    );
+    const truncatedLabels = reviewButtons
+      .map((button) => {
+        const element = button;
+        const label =
+          element.getAttribute("data-review-label") ??
+          element.textContent?.trim().replace(/\s+/g, " ") ??
+          "button";
+        const overflowX = Math.max(0, element.scrollWidth - element.clientWidth);
+        const overflowY = Math.max(0, element.scrollHeight - element.clientHeight);
+        if (overflowX <= 2 && overflowY <= 2) {
+          return null;
+        }
+        return { label, overflowX, overflowY };
+      })
+      .filter(Boolean);
+    const documentVerticalOverflowPx = Math.max(
+      0,
+      document.documentElement.scrollHeight - window.innerHeight
+    );
+    const shellRect = shellRoot.getBoundingClientRect();
     return {
       title: document.title,
-      bodyTextLength: root.textContent?.trim().length ?? 0,
+      bodyTextLength: missionText.trim().length,
       visibleLoadingTexts,
       missingTexts,
-      horizontalOverflowPx: Math.max(0, root.scrollWidth - window.innerWidth),
+      missingShellTexts,
+      horizontalOverflowPx: Math.max(0, shellRoot.scrollWidth - window.innerWidth),
+      documentVerticalOverflowPx,
+      shellBottomOverflowPx: Math.max(0, shellRect.bottom - window.innerHeight),
+      truncatedLabels,
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight
       }
     };
-  }, expectedTexts);
+  }, { texts: expectedTexts, shellTexts: requiredShellTexts });
+}
+
+async function captureShellScreenshot(page, screenshotPath) {
+  await page.screenshot({
+    path: screenshotPath,
+    animations: "disabled"
+  });
 }
 
 async function capturePanelScreenshot(page, screenshotPath) {
@@ -278,41 +321,8 @@ async function capturePanelScreenshot(page, screenshotPath) {
   await fs.unlink(rawScreenshotPath).catch(() => {});
 }
 
-async function collectPreviewRunStatus(page) {
-  return page.evaluate(async () => {
-    const previewRunsSection =
-      document.querySelectorAll(".preview-section")[1] ?? document.querySelector(".preview-section");
-    const renderedRunCount = previewRunsSection
-      ? previewRunsSection.querySelectorAll(".preview-list-item").length
-      : 0;
-    const selectedRunHeading =
-      document.querySelector(".preview-stage-toolbar h3")?.textContent?.trim() ?? "";
-
-    let apiRunCount = 0;
-    try {
-      const previewRunsUrl = new URL(
-        "/v1/previews/runs?limit=1",
-        `${window.location.protocol}//${window.location.hostname}:3300`
-      );
-      const response = await fetch(previewRunsUrl.toString(), { credentials: "include" });
-      if (response.ok) {
-        const payload = await response.json();
-        apiRunCount = Array.isArray(payload?.runs) ? payload.runs.length : 0;
-      }
-    } catch {
-      apiRunCount = 0;
-    }
-
-    return {
-      apiRunCount,
-      renderedRunCount,
-      selectedRunHeading
-    };
-  });
-}
-
 async function loginIfNeeded(page, email, password) {
-  if (await page.getByText("Console Surface").isVisible().catch(() => false)) {
+  if (await page.locator(".console-shell").isVisible().catch(() => false)) {
     return;
   }
   if (await page.getByRole("button", { name: /^sign in$/i }).isVisible().catch(() => false)) {
@@ -320,37 +330,54 @@ async function loginIfNeeded(page, email, password) {
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: /^sign in$/i }).click();
   }
-  await page.getByText("Console Surface").waitFor({ timeout: 15000 });
+  await page.locator(".console-shell").waitFor({ timeout: 15000 });
 }
 
 async function activatePanel(page, scenario) {
+  const shellClass = `.console-shell-${scenario.panelKey}`;
   if (scenario.panelKey !== "preview") {
-    await page
-      .locator(".console-nav-button")
-      .filter({ hasText: scenario.label })
-      .first()
-      .click();
+    await page.locator(".icon-nav-button").nth(scenario.navIndex).click();
   }
-  await page.getByText(scenario.expectedTexts[0], { exact: true }).waitFor({ timeout: 15000 });
+  await page.locator(shellClass).waitFor({ timeout: 15000 });
+}
+
+async function selectStableReviewRun(page) {
+  return page.evaluate(() => {
+    const inspectButtons = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent?.trim() === "Inspect review"
+    );
+    for (const button of inspectButtons) {
+      const cardText =
+        button.closest(".list-block-item")?.textContent ??
+        button.parentElement?.textContent ??
+        "";
+      if (/baseline_promoted|ready_for_review|analyzed/i.test(cardText)) {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 async function waitForScenarioSettled(page, scenario, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   let snapshot = await collectPanelSnapshot(page, scenario.expectedTexts);
   while (Date.now() < deadline) {
-    let previewReady = true;
-    if (scenario.panelKey === "preview") {
-      const previewStatus = await collectPreviewRunStatus(page);
-      previewReady =
-        previewStatus.apiRunCount === 0 ||
-        previewStatus.renderedRunCount > 0 ||
-        previewStatus.selectedRunHeading !== "Select a preview run";
-    }
     if (
-      snapshot.visibleLoadingTexts.length === 0 &&
-      snapshot.missingTexts.length === 0 &&
-      previewReady
+      scenario.panelKey === "review" &&
+      snapshot.visibleLoadingTexts.some((text) => /loading findings|capture_running/i.test(text))
     ) {
+      const selectedStableRun = await selectStableReviewRun(page);
+      if (selectedStableRun) {
+        await page.waitForTimeout(500);
+        snapshot = await collectPanelSnapshot(page, scenario.expectedTexts);
+        if (snapshot.visibleLoadingTexts.length === 0 && snapshot.missingTexts.length === 0) {
+          return snapshot;
+        }
+      }
+    }
+    if (snapshot.visibleLoadingTexts.length === 0 && snapshot.missingTexts.length === 0) {
       return snapshot;
     }
     await page.waitForTimeout(250);
@@ -597,8 +624,14 @@ export async function captureDevConsoleReview(options = {}) {
         screenshotsDir,
         `${sanitizeSegment(scenario.panelKey)}-${sanitizeSegment("loaded")}.png`
       );
-      await capturePanelScreenshot(page, screenshotPath);
+      const panelScreenshotPath = path.join(
+        screenshotsDir,
+        `${sanitizeSegment(scenario.panelKey)}-${sanitizeSegment("panel")}.png`
+      );
+      await captureShellScreenshot(page, screenshotPath);
+      await capturePanelScreenshot(page, panelScreenshotPath);
       artifacts.push(buildAssetDescriptor(screenshotPath, "ui.review.screenshot"));
+      artifacts.push(buildAssetDescriptor(panelScreenshotPath, "ui.review.panel_screenshot"));
       steps.push({
         panelKey: scenario.panelKey,
         scenarioName: scenario.panelKey,
@@ -606,6 +639,7 @@ export async function captureDevConsoleReview(options = {}) {
         expectedTexts: scenario.expectedTexts,
         durationMs: Date.now() - stepStartedAt,
         screenshot: buildAssetDescriptor(screenshotPath, "ui.review.screenshot"),
+        panelScreenshot: buildAssetDescriptor(panelScreenshotPath, "ui.review.panel_screenshot"),
         panelSnapshot
       });
     }
@@ -778,7 +812,25 @@ export async function analyzeDevConsoleReview(options = {}) {
   }
 
   for (const step of summary.steps) {
-    if (step.panelSnapshot.visibleLoadingTexts.length > 0) {
+    const snapshot = {
+      visibleLoadingTexts: Array.isArray(step.panelSnapshot?.visibleLoadingTexts)
+        ? step.panelSnapshot.visibleLoadingTexts
+        : [],
+      missingTexts: Array.isArray(step.panelSnapshot?.missingTexts)
+        ? step.panelSnapshot.missingTexts
+        : [],
+      missingShellTexts: Array.isArray(step.panelSnapshot?.missingShellTexts)
+        ? step.panelSnapshot.missingShellTexts
+        : [],
+      horizontalOverflowPx: Number(step.panelSnapshot?.horizontalOverflowPx ?? 0),
+      documentVerticalOverflowPx: Number(step.panelSnapshot?.documentVerticalOverflowPx ?? 0),
+      shellBottomOverflowPx: Number(step.panelSnapshot?.shellBottomOverflowPx ?? 0),
+      truncatedLabels: Array.isArray(step.panelSnapshot?.truncatedLabels)
+        ? step.panelSnapshot.truncatedLabels
+        : []
+    };
+
+    if (snapshot.visibleLoadingTexts.length > 0) {
       findings.push({
         category: "loading_stall",
         severity: "warning",
@@ -787,13 +839,13 @@ export async function analyzeDevConsoleReview(options = {}) {
         scenarioName: step.scenarioName,
         checkpointName: step.checkpointName,
         evidenceJson: {
-          loadingTexts: step.panelSnapshot.visibleLoadingTexts,
+          loadingTexts: snapshot.visibleLoadingTexts,
           screenshot: step.screenshot
         }
       });
     }
 
-    if (step.panelSnapshot.missingTexts.length > 0) {
+    if (snapshot.missingTexts.length > 0) {
       findings.push({
         category: "missing_content",
         severity: "error",
@@ -802,23 +854,75 @@ export async function analyzeDevConsoleReview(options = {}) {
         scenarioName: step.scenarioName,
         checkpointName: step.checkpointName,
         evidenceJson: {
-          missingTexts: step.panelSnapshot.missingTexts,
+          missingTexts: snapshot.missingTexts,
           screenshot: step.screenshot
         }
       });
     }
 
-    if (step.panelSnapshot.horizontalOverflowPx > 16) {
+    if (snapshot.missingShellTexts.length > 0) {
+      findings.push({
+        category: "shell_content_missing",
+        severity: "error",
+        title: `Shell controls missing in ${step.scenarioName}`,
+        summary: `The ${step.scenarioName} shell snapshot did not include all required navigation controls.`,
+        scenarioName: step.scenarioName,
+        checkpointName: step.checkpointName,
+        evidenceJson: {
+          missingShellTexts: snapshot.missingShellTexts,
+          screenshot: step.screenshot,
+          panelScreenshot: step.panelScreenshot ?? null
+        }
+      });
+    }
+
+    if (snapshot.horizontalOverflowPx > 16) {
       findings.push({
         category: "layout_overflow",
         severity: "warning",
         title: `Horizontal overflow detected in ${step.scenarioName}`,
-        summary: `The ${step.scenarioName} panel exceeded the viewport width by ${step.panelSnapshot.horizontalOverflowPx}px.`,
+        summary: `The ${step.scenarioName} panel exceeded the viewport width by ${snapshot.horizontalOverflowPx}px.`,
         scenarioName: step.scenarioName,
         checkpointName: step.checkpointName,
         evidenceJson: {
-          horizontalOverflowPx: step.panelSnapshot.horizontalOverflowPx,
+          horizontalOverflowPx: snapshot.horizontalOverflowPx,
           screenshot: step.screenshot
+        }
+      });
+    }
+
+    if (
+      snapshot.documentVerticalOverflowPx > 16 ||
+      snapshot.shellBottomOverflowPx > 16
+    ) {
+      findings.push({
+        category: "top_level_scroll",
+        severity: "error",
+        title: `Top-level scroll detected in ${step.scenarioName}`,
+        summary: `The ${step.scenarioName} shell exceeded the initial viewport height.`,
+        scenarioName: step.scenarioName,
+        checkpointName: step.checkpointName,
+        evidenceJson: {
+          documentVerticalOverflowPx: snapshot.documentVerticalOverflowPx,
+          shellBottomOverflowPx: snapshot.shellBottomOverflowPx,
+          screenshot: step.screenshot,
+          panelScreenshot: step.panelScreenshot ?? null
+        }
+      });
+    }
+
+    if (snapshot.truncatedLabels.length > 0) {
+      findings.push({
+        category: "navigation_truncation",
+        severity: "error",
+        title: `Navigation label clipping detected in ${step.scenarioName}`,
+        summary: `One or more shell navigation buttons overflowed their bounds in ${step.scenarioName}.`,
+        scenarioName: step.scenarioName,
+        checkpointName: step.checkpointName,
+        evidenceJson: {
+          truncatedLabels: snapshot.truncatedLabels,
+          screenshot: step.screenshot,
+          panelScreenshot: step.panelScreenshot ?? null
         }
       });
     }

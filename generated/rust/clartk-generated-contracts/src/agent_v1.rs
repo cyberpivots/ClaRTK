@@ -46,6 +46,26 @@ pub struct WorkspaceHealth {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CoordinatorEndpointSummary {
+    pub runtime_api_base_url: String,
+    pub dev_console_api_base_url: String,
+    pub agent_memory_base_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinatorAccountSummary {
+    pub account_id: String,
+    pub email: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinatorError {
+    pub key: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentTaskDependency {
     pub agent_task_id: i64,
     pub depends_on_agent_task_id: i64,
@@ -113,6 +133,45 @@ pub struct AgentRun {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRunCollection {
     pub items: Vec<AgentRun>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiReviewRunSummary {
+    pub ui_review_run_id: i64,
+    pub status: String,
+    pub scenario_set: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinatorCoordinationSummary {
+    pub task_count: i32,
+    pub run_count: i32,
+    pub review_run_count: i32,
+    pub blocked_task_count: i32,
+    pub stale_lease_count: i32,
+    pub queues: Vec<QueueSnapshot>,
+    pub latest_runs: Vec<AgentRun>,
+    pub latest_review_runs: Vec<UiReviewRunSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinatorCatalogSummary {
+    pub doc_count: i32,
+    pub skill_count: i32,
+    pub coordinator_skill_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinatorStatus {
+    pub generated_at: String,
+    pub endpoints: CoordinatorEndpointSummary,
+    pub account: CoordinatorAccountSummary,
+    pub workspace: WorkspaceHealth,
+    pub coordination: CoordinatorCoordinationSummary,
+    pub catalog: CoordinatorCatalogSummary,
+    pub errors: Vec<CoordinatorError>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -570,6 +629,30 @@ pub struct KnowledgeClaim {
     pub summary: String,
     pub status: ValidationStatus,
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimSearchResult {
+    pub knowledge_claim_id: String,
+    pub source_document_id: String,
+    pub summary: String,
+    pub status: String,
+    pub tags: Vec<String>,
+    pub created_at: String,
+    pub source_title: String,
+    pub source_uri: String,
+    pub lexical_score: f64,
+    pub semantic_score: f64,
+    pub combined_score: f64,
+    pub match_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimSearchResponse {
+    pub items: Vec<ClaimSearchResult>,
+    pub source: String,
+    pub query: String,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

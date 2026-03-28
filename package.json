@@ -40,6 +40,6 @@
     "playwright": "^1.53.1",
     "pngjs": "^7.0.0",
     "reveal.js": "^6.0.0",
-    "typescript": "^5.8.2"
+    "typescript": "^6.0.2"
   }
 }

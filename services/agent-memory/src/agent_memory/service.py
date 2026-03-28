@@ -240,6 +240,60 @@ def build_development_embedding(text: str, dimensions: int = EMBEDDING_DIMENSION
     return [value / norm for value in vector]
 
 
+def normalize_lexical_score(score: float, max_score: float) -> float:
+    if score <= 0 or max_score <= 0:
+        return 0.0
+    return round(min(1.0, score / max_score), 4)
+
+
+def semantic_score_from_distance(distance: float | None) -> float:
+    if distance is None:
+        return 0.0
+    bounded = max(0.0, float(distance))
+    return round(1.0 / (1.0 + bounded), 4)
+
+
+def combine_claim_search_scores(
+    lexical_score: float,
+    semantic_score: float,
+    *,
+    mode: str,
+) -> float:
+    if mode == "lexical":
+        return round(lexical_score, 4)
+    if mode == "vector":
+        return round(semantic_score, 4)
+    if lexical_score > 0 and semantic_score > 0:
+        return round((lexical_score * 0.65) + (semantic_score * 0.35), 4)
+    return round(max(lexical_score, semantic_score), 4)
+
+
+def summarize_visual_signals(signals: list[dict[str, Any]]) -> dict[str, Any]:
+    severity_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    highlights: list[dict[str, Any]] = []
+    for signal in signals:
+        severity = str(signal.get("severity", "info"))
+        kind = str(signal.get("kind", "unknown"))
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        if len(highlights) < 8:
+            highlights.append(
+                {
+                    "severity": severity,
+                    "kind": kind,
+                    "label": signal.get("label"),
+                    "relativePath": signal.get("relativePath"),
+                }
+            )
+    return {
+        "severityCounts": severity_counts,
+        "kindCounts": kind_counts,
+        "highlights": highlights,
+        "total": len(signals),
+    }
+
+
 def task_retry_delay_seconds(attempt_count: int) -> int:
     bounded_attempt = max(1, attempt_count)
     return min(300, 2 ** bounded_attempt)
@@ -894,25 +948,149 @@ class MemoryRepository:
 
         return map_claim(row)
 
-    def search_claims(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+    def search_claims(
+        self,
+        query: str,
+        *,
+        mode: str = "hybrid",
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        normalized_mode = mode if mode in {"lexical", "vector", "hybrid"} else "hybrid"
+        normalized_query = " ".join(query.split()).strip()
         if not self.configured:
-            return []
+            return {
+                "items": [],
+                "source": "unconfigured",
+                "query": normalized_query,
+                "mode": normalized_mode,
+            }
+        if not normalized_query:
+            return {
+                "items": [],
+                "source": "dev-memory",
+                "query": normalized_query,
+                "mode": normalized_mode,
+            }
 
-        pattern = f"%{query}%"
-        with self.connect() as connection:
+        query_vector = Vector(build_development_embedding(normalized_query))
+        with self.connect(register_vectors=True) as connection:
             rows = connection.execute(
                 """
-                SELECT kc.knowledge_claim_id, kc.source_document_id, kc.summary, kc.status, kc.tags, kc.created_at
-                FROM memory.knowledge_claim AS kc
-                LEFT JOIN memory.source_document AS sd
-                  ON sd.source_document_id = kc.source_document_id
-                WHERE kc.summary ILIKE %s OR COALESCE(sd.body, '') ILIKE %s
-                ORDER BY kc.created_at DESC
+                WITH lexical AS (
+                  SELECT
+                    kc.knowledge_claim_id,
+                    kc.source_document_id,
+                    kc.summary,
+                    kc.status,
+                    kc.tags,
+                    kc.created_at,
+                    sd.title AS source_title,
+                    sd.uri AS source_uri,
+                    ts_rank_cd(
+                      setweight(to_tsvector('simple', COALESCE(kc.summary, '')), 'A') ||
+                      setweight(to_tsvector('simple', COALESCE(sd.title, '')), 'B') ||
+                      setweight(to_tsvector('simple', COALESCE(sd.body, '')), 'C'),
+                      websearch_to_tsquery('simple', %s)
+                    ) AS lexical_score
+                  FROM memory.knowledge_claim AS kc
+                  LEFT JOIN memory.source_document AS sd
+                    ON sd.source_document_id = kc.source_document_id
+                ),
+                semantic AS (
+                  SELECT
+                    kc.knowledge_claim_id,
+                    MIN(chunk.embedding <=> %s) AS semantic_distance
+                  FROM memory.knowledge_claim AS kc
+                  LEFT JOIN memory.embedding_chunk AS chunk
+                    ON chunk.source_document_id = kc.source_document_id
+                   AND chunk.embedding IS NOT NULL
+                  GROUP BY kc.knowledge_claim_id
+                )
+                SELECT
+                  lexical.knowledge_claim_id,
+                  lexical.source_document_id,
+                  lexical.summary,
+                  lexical.status,
+                  lexical.tags,
+                  lexical.created_at,
+                  lexical.source_title,
+                  lexical.source_uri,
+                  lexical.lexical_score,
+                  semantic.semantic_distance
+                FROM lexical
+                LEFT JOIN semantic
+                  ON semantic.knowledge_claim_id = lexical.knowledge_claim_id
+                WHERE (
+                  %s = 'lexical' AND lexical.lexical_score > 0
+                ) OR (
+                  %s = 'vector' AND semantic.semantic_distance IS NOT NULL
+                ) OR (
+                  %s = 'hybrid' AND (lexical.lexical_score > 0 OR semantic.semantic_distance IS NOT NULL)
+                )
+                ORDER BY lexical.created_at DESC, lexical.knowledge_claim_id DESC
                 LIMIT %s
                 """,
-                (pattern, pattern, limit),
+                (
+                    normalized_query,
+                    query_vector,
+                    normalized_mode,
+                    normalized_mode,
+                    normalized_mode,
+                    limit,
+                ),
             ).fetchall()
-        return [map_claim(row) for row in rows]
+
+        max_lexical_score = max((float(row["lexical_score"] or 0.0) for row in rows), default=0.0)
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            lexical_score = normalize_lexical_score(float(row["lexical_score"] or 0.0), max_lexical_score)
+            semantic_score = semantic_score_from_distance(
+                float(row["semantic_distance"]) if row["semantic_distance"] is not None else None
+            )
+            combined_score = combine_claim_search_scores(
+                lexical_score,
+                semantic_score,
+                mode=normalized_mode,
+            )
+            match_reasons = []
+            if lexical_score > 0:
+                match_reasons.append("lexical")
+            if semantic_score > 0:
+                match_reasons.append("semantic")
+            items.append(
+                {
+                    "knowledgeClaimId": int(row["knowledge_claim_id"]),
+                    "sourceDocumentId": int(row["source_document_id"])
+                    if row["source_document_id"] is not None
+                    else None,
+                    "summary": row["summary"],
+                    "status": row["status"],
+                    "tags": row["tags"] or [],
+                    "createdAt": row["created_at"].isoformat(),
+                    "sourceTitle": row["source_title"],
+                    "sourceUri": row["source_uri"],
+                    "lexicalScore": lexical_score,
+                    "semanticScore": semantic_score,
+                    "combinedScore": combined_score,
+                    "matchReasons": match_reasons,
+                }
+            )
+
+        items.sort(
+            key=lambda item: (
+                float(item["combinedScore"]),
+                float(item["lexicalScore"]),
+                float(item["semanticScore"]),
+                str(item["createdAt"]),
+            ),
+            reverse=True,
+        )
+        return {
+            "items": items,
+            "source": "dev-memory",
+            "query": normalized_query,
+            "mode": normalized_mode,
+        }
 
     def list_evaluations(self, limit: int = 50) -> list[dict[str, Any]]:
         if not self.configured:
@@ -1491,218 +1669,6 @@ class MemoryRepository:
         artifact_path = base_dir / "ml-summary.json"
         artifact_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return self._relative_repo_path(artifact_path), payload
-
-    def start_preview_run(
-        self,
-        payload: dict[str, Any],
-        *,
-        requested_by_account_id: str | None = None,
-    ) -> dict[str, Any]:
-        deck_key = extract_string(payload, "deckKey")
-        if not deck_key:
-            raise ValueError("deckKey is required")
-
-        markdown_path, companion_path, title = resolve_preview_source(deck_key)
-        queue_name = (
-            str(payload.get("queueName")).strip()
-            if isinstance(payload.get("queueName"), str) and str(payload.get("queueName")).strip()
-            else DEFAULT_AGENT_TASK_QUEUE
-        )
-        queue_name = resolve_task_queue_name(PREVIEW_RENDER_TASK_KIND, queue_name)
-        priority = int(payload.get("priority", 0))
-        viewport_json = ensure_dict(payload.get("viewportJson")) or dict(PREVIEW_DEFAULT_VIEWPORT)
-
-        with self.connect() as connection:
-            run_row = connection.execute(
-                """
-                INSERT INTO review.preview_run (
-                  deck_key,
-                  title,
-                  markdown_path,
-                  companion_path,
-                  status,
-                  browser,
-                  viewport_json,
-                  requested_by_account_id
-                )
-                VALUES (%s, %s, %s, %s, %s::review.preview_run_status, %s, %s, %s)
-                RETURNING
-                  preview_run_id,
-                  deck_key,
-                  title,
-                  markdown_path,
-                  companion_path,
-                  status,
-                  browser,
-                  viewport_json,
-                  current_task_id,
-                  render_task_id,
-                  analyze_task_id,
-                  manifest_json,
-                  render_summary_json,
-                  analysis_summary_json,
-                  created_at,
-                  updated_at,
-                  completed_at
-                """,
-                (
-                    deck_key,
-                    title,
-                    self._relative_repo_path(markdown_path),
-                    self._relative_repo_path(companion_path) if companion_path is not None else None,
-                    PREVIEW_STATUS_PLANNED,
-                    PREVIEW_DEFAULT_BROWSER,
-                    Jsonb(viewport_json),
-                    requested_by_account_id,
-                ),
-            ).fetchone()
-            if run_row is None:
-                raise RuntimeError("failed to create preview run")
-
-            preview_run_id = int(run_row["preview_run_id"])
-            artifact_dir = self._build_preview_artifact_dir(preview_run_id, deck_key=deck_key)
-            render_summary_path = artifact_dir / "render-summary.json"
-            analysis_summary_path = artifact_dir / "analysis" / "analysis-summary.json"
-            manifest_patch = {
-                "artifactDir": self._relative_repo_path(artifact_dir),
-                "renderSummaryPath": self._relative_repo_path(render_summary_path),
-                "analysisSummaryPath": self._relative_repo_path(analysis_summary_path),
-                "deckKey": deck_key,
-                "title": title,
-                "markdownPath": self._relative_repo_path(markdown_path),
-                "companionPath": self._relative_repo_path(companion_path)
-                if companion_path is not None
-                else None,
-                "viewport": viewport_json,
-            }
-            render_task = self._create_review_task(
-                connection,
-                task_kind=PREVIEW_RENDER_TASK_KIND,
-                queue_name=queue_name,
-                priority=priority,
-                payload={
-                    "previewRunId": preview_run_id,
-                    "deckKey": deck_key,
-                    "markdownPath": self._relative_repo_path(markdown_path),
-                    "companionPath": self._relative_repo_path(companion_path)
-                    if companion_path is not None
-                    else None,
-                    "artifactDir": self._relative_repo_path(artifact_dir),
-                    "viewportJson": viewport_json,
-                },
-            )
-            analyze_task = self._create_review_task(
-                connection,
-                task_kind=PREVIEW_ANALYZE_TASK_KIND,
-                queue_name=queue_name,
-                priority=priority,
-                payload={
-                    "previewRunId": preview_run_id,
-                    "artifactDir": self._relative_repo_path(artifact_dir),
-                    "viewportJson": viewport_json,
-                },
-            )
-            self._ensure_task_dependency(
-                connection,
-                int(analyze_task["agentTaskId"]),
-                int(render_task["agentTaskId"]),
-            )
-            connection.execute(
-                """
-                UPDATE review.preview_run
-                SET
-                  current_task_id = %s,
-                  render_task_id = %s,
-                  analyze_task_id = %s,
-                  manifest_json = manifest_json || %s,
-                  updated_at = NOW()
-                WHERE preview_run_id = %s
-                """,
-                (
-                    int(render_task["agentTaskId"]),
-                    int(render_task["agentTaskId"]),
-                    int(analyze_task["agentTaskId"]),
-                    Jsonb(manifest_patch),
-                    preview_run_id,
-                ),
-            )
-            for task in (render_task, analyze_task):
-                self._notify_task_ready(
-                    connection,
-                    queue_name=queue_name,
-                    task_kind=str(task["taskKind"]),
-                )
-            connection.commit()
-
-        created = self.get_preview_run(preview_run_id)
-        if created is None:
-            raise LookupError("preview run not found after creation")
-        return created
-
-    def list_preview_runs(self, *, limit: int = 25) -> list[dict[str, Any]]:
-        if not self.configured:
-            return []
-
-        with self.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                  preview_run_id,
-                  deck_key,
-                  title,
-                  markdown_path,
-                  companion_path,
-                  status,
-                  browser,
-                  viewport_json,
-                  current_task_id,
-                  render_task_id,
-                  analyze_task_id,
-                  manifest_json,
-                  render_summary_json,
-                  analysis_summary_json,
-                  created_at,
-                  updated_at,
-                  completed_at
-                FROM review.preview_run
-                ORDER BY created_at DESC, preview_run_id DESC
-                LIMIT %s
-                """,
-                (limit,),
-            ).fetchall()
-        return [map_preview_run(row) for row in rows]
-
-    def get_preview_run(self, preview_run_id: int) -> dict[str, Any] | None:
-        if not self.configured:
-            return None
-
-        with self.connect() as connection:
-            row = connection.execute(
-                """
-                SELECT
-                  preview_run_id,
-                  deck_key,
-                  title,
-                  markdown_path,
-                  companion_path,
-                  status,
-                  browser,
-                  viewport_json,
-                  current_task_id,
-                  render_task_id,
-                  analyze_task_id,
-                  manifest_json,
-                  render_summary_json,
-                  analysis_summary_json,
-                  created_at,
-                  updated_at,
-                  completed_at
-                FROM review.preview_run
-                WHERE preview_run_id = %s
-                """,
-                (preview_run_id,),
-            ).fetchone()
-        return map_preview_run(row) if row is not None else None
 
     def list_preview_feedback(
         self,
@@ -2622,6 +2588,7 @@ class MemoryRepository:
                   status = 'queued',
                   lease_owner = NULL,
                   lease_expires_at = NULL,
+                  attempt_count = 0,
                   available_at = NOW(),
                   last_error = %s,
                   completed_at = NULL,
@@ -3251,6 +3218,77 @@ class MemoryRepository:
             "dependencies": mapped_dependencies,
             "events": mapped_events,
             "artifacts": mapped_artifacts,
+            "source": "dev-memory",
+        }
+
+    def get_coordination_status(self) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "taskCount": 0,
+                "runCount": 0,
+                "reviewRunCount": 0,
+                "blockedTaskCount": 0,
+                "staleLeaseCount": 0,
+                "queues": [],
+                "latestRuns": [],
+                "latestReviewRuns": [],
+                "source": "unconfigured",
+            }
+
+        tasks = self.list_agent_tasks(limit=100)
+        runs = self.list_agent_runs(limit=5)
+        review_runs = self.list_ui_review_runs(limit=5)
+
+        with self.connect() as connection:
+            count_row = connection.execute(
+                """
+                SELECT
+                  (SELECT COUNT(*) FROM agent.task) AS task_count,
+                  (SELECT COUNT(*) FROM agent.run) AS run_count,
+                  (SELECT COUNT(*) FROM review.ui_run) AS review_run_count,
+                  (
+                    SELECT COUNT(*)
+                    FROM agent.task AS task
+                    WHERE task.status = 'queued'
+                      AND EXISTS (
+                        SELECT 1
+                        FROM agent.task_dependency AS dependency
+                        JOIN agent.task AS prerequisite
+                          ON prerequisite.agent_task_id = dependency.depends_on_agent_task_id
+                        WHERE dependency.agent_task_id = task.agent_task_id
+                          AND prerequisite.status <> 'succeeded'
+                      )
+                  ) AS blocked_task_count,
+                  (
+                    SELECT COUNT(*)
+                    FROM agent.task
+                    WHERE status = 'leased'
+                      AND lease_expires_at IS NOT NULL
+                      AND lease_expires_at < NOW()
+                  ) AS stale_lease_count
+                """
+            ).fetchone()
+
+        latest_review_runs = []
+        for run in review_runs[:5]:
+            latest_review_runs.append(
+                {
+                    "uiReviewRunId": int(run["uiReviewRunId"]),
+                    "status": str(run["status"]),
+                    "scenarioSet": str(run["scenarioSet"]),
+                    "createdAt": str(run["createdAt"]),
+                }
+            )
+
+        return {
+            "taskCount": int(count_row["task_count"]),
+            "runCount": int(count_row["run_count"]),
+            "reviewRunCount": int(count_row["review_run_count"]),
+            "blockedTaskCount": int(count_row["blocked_task_count"]),
+            "staleLeaseCount": int(count_row["stale_lease_count"]),
+            "queues": tasks.get("queues", []),
+            "latestRuns": runs.get("items", [])[:5],
+            "latestReviewRuns": latest_review_runs,
             "source": "dev-memory",
         }
 
@@ -4748,6 +4786,9 @@ class MemoryRepository:
             visual_assets,
             analyzer_kind="ui.review.analyze",
         )
+        ml_summary["summary"] = summarize_visual_signals(
+            [signal for signal in ml_summary.get("signals", []) if isinstance(signal, dict)]
+        )
         ml_artifact = self._write_visual_enrichment_artifact(
             analysis_summary_path.parent,
             ml_summary,
@@ -5406,6 +5447,9 @@ class MemoryRepository:
         ml_summary = run_local_visual_enrichment(
             visual_assets,
             analyzer_kind="preview.analyze",
+        )
+        ml_summary["summary"] = summarize_visual_signals(
+            [signal for signal in ml_summary.get("signals", []) if isinstance(signal, dict)]
         )
         ml_artifact = self._write_visual_enrichment_artifact(
             analysis_summary_path.parent,
@@ -6608,7 +6652,12 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                     return
                 if parsed.path == "/v1/claims/search":
                     needle = query.get("q", [""])[0]
-                    self.send_json(200, {"items": repository.search_claims(needle)})
+                    mode = query.get("mode", ["hybrid"])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 50
+                    self.send_json(
+                        200,
+                        repository.search_claims(needle, mode=str(mode), limit=limit),
+                    )
                     return
                 if parsed.path == "/v1/evaluations":
                     self.send_json(200, {"items": repository.list_evaluations()})
@@ -6710,6 +6759,10 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         repository.list_agent_tasks(queue_name=queue_name, limit=limit),
                     )
                     return
+                if parsed.path == "/v1/internal/coordination/status":
+                    self.require_internal_token()
+                    self.send_json(200, repository.get_coordination_status())
+                    return
                 if (
                     len(path_parts) == 5
                     and path_parts[:4] == ["v1", "internal", "coordination", "tasks"]
@@ -6738,36 +6791,6 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         self.send_json(404, {"error": "not found"})
                         return
                     self.send_json(200, detail)
-                    return
-                if parsed.path == "/v1/internal/previews/runs":
-                    self.require_internal_token()
-                    limit = as_optional_int(query.get("limit", [None])[0]) or 25
-                    runs = repository.list_preview_runs(limit=limit)
-                    self.send_json(200, {"runs": runs, "source": "dev-memory", "total": len(runs)})
-                    return
-                if (
-                    len(path_parts) == 5
-                    and path_parts[:4] == ["v1", "internal", "previews", "runs"]
-                    and path_parts[4].isdigit()
-                ):
-                    self.require_internal_token()
-                    run = repository.get_preview_run(int(path_parts[4]))
-                    if run is None:
-                        self.send_json(404, {"error": "not found"})
-                        return
-                    self.send_json(200, run)
-                    return
-                if parsed.path == "/v1/internal/previews/feedback":
-                    self.require_internal_token()
-                    preview_run_id = as_optional_int(query.get("previewRunId", [None])[0])
-                    slide_id = query.get("slideId", [None])[0]
-                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
-                    items = repository.list_preview_feedback(
-                        preview_run_id=preview_run_id,
-                        slide_id=slide_id,
-                        limit=limit,
-                    )
-                    self.send_json(200, {"items": items, "source": "dev-memory", "total": len(items)})
                     return
                 if parsed.path == "/v1/internal/reviews/ui/runs":
                     self.require_internal_token()
@@ -6952,37 +6975,6 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                             task_kind=str(payload["taskKind"]),
                             queue_name=str(payload.get("queueName", DEFAULT_AGENT_TASK_QUEUE)),
                             priority=int(payload.get("priority", 0)),
-                            payload=ensure_dict(payload.get("payload")),
-                        ),
-                    )
-                    return
-                if parsed.path == "/v1/internal/previews/runs":
-                    self.require_internal_token()
-                    self.send_json(
-                        201,
-                        repository.start_preview_run(
-                            payload=payload,
-                            requested_by_account_id=str(payload["requestedByAccountId"])
-                            if payload.get("requestedByAccountId")
-                            else None,
-                        ),
-                    )
-                    return
-                if (
-                    len(path_parts) == 6
-                    and path_parts[:4] == ["v1", "internal", "previews", "runs"]
-                    and path_parts[4].isdigit()
-                    and path_parts[5] == "feedback"
-                ):
-                    self.require_internal_token()
-                    self.send_json(
-                        201,
-                        repository.create_preview_feedback(
-                            int(path_parts[4]),
-                            feedback_kind=str(payload.get("feedbackKind", "comment")),
-                            created_by_account_id=str(payload["createdByAccountId"]),
-                            slide_id=str(payload["slideId"]) if payload.get("slideId") else None,
-                            comment=str(payload["comment"]) if payload.get("comment") else None,
                             payload=ensure_dict(payload.get("payload")),
                         ),
                     )

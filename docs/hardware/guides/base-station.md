@@ -1,20 +1,27 @@
 # Base Station Build Guide (v1)
 
 - Status: Draft
-- Date: 2026-03-27
+- Date: 2026-03-28
+
+Read this first if you are new to ClaRTK hardware:
+
+- [`start-here-beginner-blueprint.md`](start-here-beginner-blueprint.md)
+- [`recommended-reference-stack.md`](recommended-reference-stack.md)
 
 ## Intended topology
 
-- Two NavSpark PX1122r boards are available; this guide uses one as base receiver.
-- Primary transport: XBee Pro 900 S3B over serial.
-- Power fallback path: PoE splitter + serial adapter bench path.
+- Primary beginner build: one receiver from the NavSpark Base & Rover Pair RTK Starter Kit used as the base.
+- Primary transport: the starter kit's integrated `868/915 MHz` LoRa radio path.
+- Primary host path: Raspberry Pi 4 Model B over `USB` during setup and logging.
 
 ## Required parts
 
-- 1x NavSpark PX1122r eval board (base role)
-- 1x Digi XBee Pro 900 S3B radio + USB adapter
-- 1x Raspberry Pi 4 or Raspberry Pi 3B+ (bench host)
-- PoE switch and one PoE splitter branch for stable 12V/5V bench power
+- 1x base-side receiver from the NavSpark starter kit
+- 1x included multi-frequency high precision antenna
+- 1x included LoRa antenna
+- 1x Raspberry Pi 4 Model B `4GB`
+- 1x Raspberry Pi 15W USB-C Power Supply
+- 1x Raspberry Pi SD Card `32GB`
 
 ## Procedure
 
@@ -28,10 +35,11 @@
    - Worker executes `hardware.prepare → reserve_parts → build → bench_validate`.
    - Trigger runtime handoff manually with `/v1/inventory/builds/{buildId}/runtime-publish` to enqueue `hardware.runtime_register`.
 4. Validate electrical before radio test:
-   - Confirm grounded chassis and common ground between USB adapter grounds and GNSS power input.
-   - Confirm no short on 5V/12V branches before enabling.
+   - Confirm the included antenna is attached to the receiver before GNSS testing.
+   - Confirm Raspberry Pi host power is coming from the official 15W USB-C power supply.
 5. Verify transport link:
-   - Configure radio serial settings; confirm heartbeat on bench terminal.
+   - Confirm the base unit is reachable over `USB` from the Raspberry Pi.
+   - Confirm the integrated LoRa path is active for the base side.
 6. Publish runtime registration request:
    - Call `POST /v1/inventory/builds/{buildId}/runtime-publish` with `runtimeDeviceId`.
    - This records `build.status` transition to `runtime_publish_pending` and emits event.
@@ -56,6 +64,6 @@
 
 ## Risk and fault-injection checks
 
-- Power: verify PoE splitter ground and branch wiring order before power-up; perform dry-run with no GNSS module attached first.
-- Connector continuity: tug-test antenna and USB serial connectors for false contact.
-- RF noise: observe serial stream for framing errors before declaring throughput pass.
+- Power: verify the Raspberry Pi is powered from the official `5.1V / 3A` USB-C supply before bring-up.
+- Connector continuity: confirm the GNSS antenna and LoRa antenna are fully seated.
+- Host link: confirm the base unit enumerates cleanly over `USB` before declaring the base side ready.

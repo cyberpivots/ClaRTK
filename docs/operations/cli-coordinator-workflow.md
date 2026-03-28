@@ -47,7 +47,12 @@ node scripts/dev-coordinator-status.mjs
   - queue snapshots
   - recent agent runs
   - recent UI review runs
+  - blocked-task and stale-lease counts
   - docs and skill catalog counts
+- The script is broker-first and DB-backed as a fallback:
+  - primary path: authenticated `GET /v1/workspace/coordinator-status`
+  - fallback path: direct `clartk_dev` read via `scripts/dev-coordinator-status-db.py`
+- A degraded stack should still return structured JSON; a failed fetch should no longer be treated as the only outcome.
 - Use `--json` when another tool or script needs structured output.
 
 ## Role selection

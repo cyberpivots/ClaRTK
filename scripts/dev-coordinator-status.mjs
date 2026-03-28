@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const resolvedEnvPath = path.join(repoRoot, ".clartk", "dev", "resolved.env");
+const fallbackScriptPath = path.join(repoRoot, "scripts", "dev-coordinator-status-db.py");
+const execFileAsync = promisify(execFile);
 
 const resolvedEnv = await loadEnvFile(resolvedEnvPath).catch(() => ({}));
 const runtimeApiBaseUrl =
@@ -26,31 +30,19 @@ const bootstrapPassword =
 const jsonMode = process.argv.includes("--json");
 
 async function main() {
-  const cookie = await login(runtimeApiBaseUrl, bootstrapEmail, bootstrapPassword);
-  const headers = { cookie };
+  let summary;
+  let primaryError = null;
 
-  const requests = {
-    me: fetchJson(new URL("/v1/me", runtimeApiBaseUrl).toString(), { headers }),
-    overview: fetchJson(new URL("/v1/workspace/overview", devConsoleApiBaseUrl).toString(), { headers }),
-    tasks: fetchJson(new URL("/v1/coordination/tasks", devConsoleApiBaseUrl).toString(), { headers }),
-    runs: fetchJson(new URL("/v1/coordination/runs", devConsoleApiBaseUrl).toString(), { headers }),
-    reviews: fetchJson(
-      new URL("/v1/reviews/ui/runs?surface=dev-console-web", devConsoleApiBaseUrl).toString(),
-      { headers }
-    ),
-    docs: fetchJson(new URL("/v1/docs/catalog", devConsoleApiBaseUrl).toString(), { headers }),
-    skills: fetchJson(new URL("/v1/skills", devConsoleApiBaseUrl).toString(), { headers })
-  };
-
-  const settledEntries = await Promise.all(
-    Object.entries(requests).map(async ([key, promise]) => [key, await settle(promise)])
-  );
-  const settled = Object.fromEntries(settledEntries);
-  const summary = buildSummary({
-    runtimeApiBaseUrl,
-    devConsoleApiBaseUrl,
-    settled
-  });
+  try {
+    const cookie = await login(runtimeApiBaseUrl, bootstrapEmail, bootstrapPassword);
+    summary = await fetchJson(
+      new URL("/v1/workspace/coordinator-status", devConsoleApiBaseUrl).toString(),
+      { headers: { cookie } }
+    );
+  } catch (error) {
+    primaryError = error instanceof Error ? error.message : String(error);
+    summary = await loadFallbackSummary(primaryError);
+  }
 
   if (jsonMode) {
     console.log(JSON.stringify(summary, null, 2));
@@ -132,93 +124,75 @@ async function safeBody(response) {
   }
 }
 
-async function settle(promise) {
+async function loadFallbackSummary(primaryError) {
   try {
-    return { ok: true, value: await promise };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    const { stdout } = await execFileAsync(
+      "uv",
+      ["run", "python", fallbackScriptPath],
+      {
+        cwd: repoRoot,
+        env: process.env,
+        maxBuffer: 1024 * 1024 * 4
+      }
+    );
+    const summary = JSON.parse(stdout);
+    if (primaryError) {
+      summary.errors = [
+        { key: "primary", error: primaryError },
+        ...(Array.isArray(summary.errors) ? summary.errors : [])
+      ];
+    }
+    return summary;
+  } catch (fallbackError) {
+    return {
+      generatedAt: new Date().toISOString(),
+      endpoints: {
+        runtimeApiBaseUrl,
+        devConsoleApiBaseUrl,
+        agentMemoryBaseUrl: process.env.CLARTK_AGENT_MEMORY_BASE_URL ?? "http://127.0.0.1:3100"
+      },
+      account: null,
+      workspace: {
+        status: "degraded",
+        postgres: {
+          host: resolvedEnv.CLARTK_RESOLVED_POSTGRES_HOST ?? "127.0.0.1",
+          port: Number(resolvedEnv.CLARTK_RESOLVED_POSTGRES_PORT ?? "5432"),
+          source: resolvedEnv.CLARTK_RESOLVED_POSTGRES_SOURCE ?? "configured_env",
+          reachable: false
+        },
+        backup: null,
+        services: []
+      },
+      coordination: {
+        taskCount: 0,
+        runCount: 0,
+        reviewRunCount: 0,
+        blockedTaskCount: 0,
+        staleLeaseCount: 0,
+        queues: [],
+        latestRuns: [],
+        latestReviewRuns: []
+      },
+      catalog: {
+        docCount: 0,
+        skillCount: 0,
+        coordinatorSkillPresent: false
+      },
+      errors: [
+        ...(primaryError ? [{ key: "primary", error: primaryError }] : []),
+        {
+          key: "fallback",
+          error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+        }
+      ],
+      source: "unconfigured"
+    };
   }
 }
 
-function buildSummary({ runtimeApiBaseUrl, devConsoleApiBaseUrl, settled }) {
-  const me = settled.me.ok ? settled.me.value : null;
-  const overview = settled.overview.ok ? settled.overview.value : null;
-  const tasks = settled.tasks.ok ? settled.tasks.value : null;
-  const runs = settled.runs.ok ? settled.runs.value : null;
-  const reviews = settled.reviews.ok ? settled.reviews.value : null;
-  const docs = settled.docs.ok ? settled.docs.value : null;
-  const skills = settled.skills.ok ? settled.skills.value : null;
-
-  const queueTotals =
-    tasks?.queues?.map((queue) => ({
-      queueName: queue.queueName,
-      queuedCount: queue.queuedCount,
-      leasedCount: queue.leasedCount,
-      failedCount: queue.failedCount,
-      succeededCount: queue.succeededCount
-    })) ?? [];
-
-  const coordinatorSkillPresent =
-    skills?.items?.some((item) => item.skillId === "cli-coordinator" || item.name === "cli-coordinator") ??
-    false;
-
-  return {
-    generatedAt: new Date().toISOString(),
-    endpoints: {
-      runtimeApiBaseUrl,
-      devConsoleApiBaseUrl
-    },
-    account: me
-      ? {
-          accountId: me.account.accountId,
-          email: me.account.email,
-          role: me.account.role
-        }
-      : null,
-    workspace: overview
-      ? {
-          status: overview.status,
-          postgres: overview.postgres,
-          serviceCount: overview.services.length,
-          healthyServiceCount: overview.services.filter((service) => service.status === "ok").length,
-          services: overview.services.map((service) => ({
-            service: service.service,
-            status: service.status
-          }))
-        }
-      : null,
-    coordination: {
-      taskCount: tasks?.items?.length ?? 0,
-      runCount: runs?.items?.length ?? 0,
-      reviewRunCount: reviews?.runs?.length ?? 0,
-      queues: queueTotals,
-      latestRuns: (runs?.items ?? []).slice(0, 5).map((run) => ({
-        agentRunId: run.agentRunId,
-        agentName: run.agentName,
-        taskSlug: run.taskSlug,
-        status: run.status
-      })),
-      latestReviewRuns: (reviews?.runs ?? []).slice(0, 5).map((run) => ({
-        uiReviewRunId: run.uiReviewRunId,
-        status: run.status,
-        scenarioSet: run.scenarioSet,
-        createdAt: run.createdAt
-      }))
-    },
-    catalog: {
-      docCount: docs?.items?.length ?? 0,
-      skillCount: skills?.items?.length ?? 0,
-      coordinatorSkillPresent
-    },
-    errors: Object.fromEntries(
-      Object.entries(settled)
-        .filter(([, value]) => !value.ok)
-        .map(([key, value]) => [key, value.error])
-    )
-  };
-}
-
 function printSummary(summary) {
+  const services = summary.workspace?.services ?? [];
+  const healthyServiceCount = services.filter((service) => service.status === "ok").length;
   console.log("ClaRTK coordinator snapshot");
   console.log(`generated: ${summary.generatedAt}`);
   console.log(`runtime api: ${summary.endpoints.runtimeApiBaseUrl}`);
@@ -228,11 +202,11 @@ function printSummary(summary) {
   }
   if (summary.workspace) {
     console.log(
-      `workspace: ${summary.workspace.status} | postgres reachable=${summary.workspace.postgres.reachable} | services ${summary.workspace.healthyServiceCount}/${summary.workspace.serviceCount}`
+      `workspace: ${summary.workspace.status} | postgres reachable=${summary.workspace.postgres.reachable} | services ${healthyServiceCount}/${services.length}`
     );
   }
   console.log(
-    `coordination: tasks=${summary.coordination.taskCount} runs=${summary.coordination.runCount} ui-reviews=${summary.coordination.reviewRunCount}`
+    `coordination: tasks=${summary.coordination.taskCount} runs=${summary.coordination.runCount} ui-reviews=${summary.coordination.reviewRunCount} blocked=${summary.coordination.blockedTaskCount ?? 0} stale-leases=${summary.coordination.staleLeaseCount ?? 0}`
   );
   if (summary.coordination.queues.length > 0) {
     console.log("queues:");
@@ -257,10 +231,10 @@ function printSummary(summary) {
   console.log(
     `catalog: docs=${summary.catalog.docCount} skills=${summary.catalog.skillCount} coordinator-skill=${summary.catalog.coordinatorSkillPresent ? "present" : "missing"}`
   );
-  if (Object.keys(summary.errors).length > 0) {
+  if (Array.isArray(summary.errors) && summary.errors.length > 0) {
     console.log("errors:");
-    for (const [key, value] of Object.entries(summary.errors)) {
-      console.log(`- ${key}: ${value}`);
+    for (const error of summary.errors) {
+      console.log(`- ${error.key}: ${error.error}`);
     }
     process.exitCode = 1;
   }

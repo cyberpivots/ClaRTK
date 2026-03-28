@@ -47,12 +47,20 @@
   - `.agents/skills/cli-coordinator/SKILL.md` defines the reusable coordinator workflow
   - `docs/operations/cli-coordinator-workflow.md` records the durable process
   - `scripts/dev-coordinator-status.mjs` exposes a compact live snapshot from the dev-plane broker
+- The coordination surface now also exposes a structured internal snapshot at `/v1/internal/coordination/status` with:
+  - queue counts
+  - recent runs
+  - recent UI review runs
+  - blocked-task counts
+  - stale-lease counts
+- The browser-facing coordinator snapshot at `/v1/workspace/coordinator-status` now preserves those counts and degrades cleanly when the broker or downstream services are unavailable.
+- Manual retry now resets the task attempt counter before requeue so a human-triggered retry starts a fresh bounded attempt window instead of inheriting an exhausted counter.
 
 ## Remaining Gaps
 
 - Queue routing now covers maintenance, catalog, preference, UI review, preview, and hardware lanes, but broader multi-agent scheduling, dependency release, and richer retry policy still remain to be implemented.
-- The worker currently uses periodic maintenance scheduling inside the Python process; there is not yet a separate reconciler or dependency-release service.
-- The coordinator status script is a broker-backed read surface only; it does not yet claim tasks, lease work, or annotate worktree ownership directly in `clartk_dev`.
+- The worker currently uses periodic maintenance scheduling inside the Python process; there is not yet a separate standalone reconciler or dependency-release service.
+- The coordinator status script and broker snapshot are read surfaces only; they do not yet claim tasks, lease work, or annotate worktree ownership directly in `clartk_dev`.
 - The gateway remains a separate degraded service in the live snapshot; queue cleanup improved dev-plane coordination, but it did not by itself resolve gateway health.
 
 ## Latest Validation Slice
@@ -71,6 +79,10 @@
   a direct `dev-signals` write created a new `preferences.compute_dev_preference_scores` task in `preferences.recompute`, not `default`
 - Final queue-rebalance dry run:
   `moveCount: 0` and `duplicatePreferenceCount: 0`
+- Fresh internal coordination snapshot validation:
+  `/v1/internal/coordination/status` returned queue, run, review, blocked, and stale counts from the live `clartk_dev` dataset
+- Fresh authenticated broker validation:
+  `/v1/workspace/coordinator-status` returned the same coordination summary through `services/dev-console-api`, alongside degraded gateway health and healthy runtime/agent-memory/dev-console surfaces
 
 ## Initial Plan
 

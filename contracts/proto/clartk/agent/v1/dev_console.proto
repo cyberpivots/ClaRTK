@@ -25,6 +25,23 @@ message WorkspaceHealth {
   repeated WorkspaceServiceHealth services = 7;
 }
 
+message CoordinatorEndpointSummary {
+  string runtime_api_base_url = 1;
+  string dev_console_api_base_url = 2;
+  string agent_memory_base_url = 3;
+}
+
+message CoordinatorAccountSummary {
+  string account_id = 1;
+  string email = 2;
+  string role = 3;
+}
+
+message CoordinatorError {
+  string key = 1;
+  string error = 2;
+}
+
 message AgentTaskDependency {
   int64 agent_task_id = 1;
   int64 depends_on_agent_task_id = 2;
@@ -85,6 +102,41 @@ message AgentRun {
 
 message AgentRunCollection {
   repeated AgentRun items = 1;
+}
+
+message UiReviewRunSummary {
+  int64 ui_review_run_id = 1;
+  string status = 2;
+  string scenario_set = 3;
+  string created_at = 4;
+}
+
+message CoordinatorCoordinationSummary {
+  int32 task_count = 1;
+  int32 run_count = 2;
+  int32 review_run_count = 3;
+  int32 blocked_task_count = 4;
+  int32 stale_lease_count = 5;
+  repeated QueueSnapshot queues = 6;
+  repeated AgentRun latest_runs = 7;
+  repeated UiReviewRunSummary latest_review_runs = 8;
+}
+
+message CoordinatorCatalogSummary {
+  int32 doc_count = 1;
+  int32 skill_count = 2;
+  bool coordinator_skill_present = 3;
+}
+
+message CoordinatorStatus {
+  string generated_at = 1;
+  CoordinatorEndpointSummary endpoints = 2;
+  CoordinatorAccountSummary account = 3;
+  WorkspaceHealth workspace = 4;
+  CoordinatorCoordinationSummary coordination = 5;
+  CoordinatorCatalogSummary catalog = 6;
+  repeated CoordinatorError errors = 7;
+  string source = 8;
 }
 
 message AgentEvent {

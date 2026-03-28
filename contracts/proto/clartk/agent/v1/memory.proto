@@ -25,10 +25,31 @@ message KnowledgeClaim {
   repeated string tags = 5;
 }
 
+message ClaimSearchResult {
+  string knowledge_claim_id = 1;
+  string source_document_id = 2;
+  string summary = 3;
+  string status = 4;
+  repeated string tags = 5;
+  string created_at = 6;
+  string source_title = 7;
+  string source_uri = 8;
+  double lexical_score = 9;
+  double semantic_score = 10;
+  double combined_score = 11;
+  repeated string match_reasons = 12;
+}
+
+message ClaimSearchResponse {
+  repeated ClaimSearchResult items = 1;
+  string source = 2;
+  string query = 3;
+  string mode = 4;
+}
+
 message EvaluationResult {
   string evaluation_result_id = 1;
   string subject = 2;
   string outcome = 3;
   string recorded_at = 4;
 }
-

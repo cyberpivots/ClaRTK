@@ -138,6 +138,7 @@ agent-memory worker ---------------> clartk_dev
 - Runtime API: `/health`, `/v1/devices`, `/v1/telemetry/positions`, `/v1/rtk/solutions`, `/v1/ui/views`
 - Agent-memory: `/health`, `/v1/source-documents`, `/v1/claims`, `/v1/claims/search`, `/v1/evaluations`
 - Dev-console API: `/health`, `/v1/workspace/overview`, `/v1/coordination/*`, `/v1/knowledge/*`, `/v1/docs/catalog`, `/v1/skills`, `/v1/preferences/*`
+- Coordinator snapshot: `scripts/dev-coordinator-status.mjs` prefers authenticated `GET /v1/workspace/coordinator-status` and falls back to `scripts/dev-coordinator-status-db.py` for direct DB-backed degraded summaries
 - Gateway diagnostics: `/health`, `/v1/inputs`
 - Runtime auth/profile: `/v1/auth/*`, `/v1/me`, `/v1/me/profile`, `/v1/me/views`, `/v1/me/preference-observations`, `/v1/me/suggestions`, `/v1/admin/accounts`
 - Internal review flow: runtime API brokers suggestion review and publication into agent-memory

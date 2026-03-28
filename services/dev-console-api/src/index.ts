@@ -10,6 +10,7 @@ import type {
   AgentTaskCollection,
   AgentTaskRecord,
   AuthenticatedMe,
+  DevCoordinatorStatus,
   DevConsoleApiHealth,
   DevPreferenceProfile,
   DevPreferenceSignal,
@@ -38,6 +39,7 @@ import type {
   EvaluationResultRecord,
   JsonObject,
   KnowledgeClaimRecord,
+  KnowledgeClaimSearchResponse,
   ResourceCollection,
   ServiceStatus,
   SkillCatalogResponse,
@@ -132,6 +134,11 @@ app.get("/health", async (): Promise<DevConsoleApiHealth> => ({
 app.get("/v1/workspace/overview", async (request): Promise<WorkspaceOverview> => {
   await requireAdmin(request.headers);
   return buildWorkspaceOverview();
+});
+
+app.get("/v1/workspace/coordinator-status", async (request): Promise<DevCoordinatorStatus> => {
+  const me = await requireAdmin(request.headers);
+  return buildCoordinatorStatus(me);
 });
 
 app.get("/v1/coordination/tasks", async (request): Promise<AgentTaskCollection> => {
@@ -549,6 +556,22 @@ app.get("/v1/knowledge/claims", async (request): Promise<ResourceCollection<Know
   return agentMemoryPublicRequest<ResourceCollection<KnowledgeClaimRecord>>("/v1/claims");
 });
 
+app.get("/v1/knowledge/claims/search", async (request): Promise<KnowledgeClaimSearchResponse> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const params = new URLSearchParams();
+  if (typeof query.q === "string" && query.q.trim()) {
+    params.set("q", query.q.trim());
+  }
+  if (typeof query.mode === "string" && query.mode.trim()) {
+    params.set("mode", query.mode.trim());
+  }
+  if (typeof query.limit === "string" && query.limit.trim()) {
+    params.set("limit", query.limit.trim());
+  }
+  return agentMemoryPublicRequest<KnowledgeClaimSearchResponse>(`/v1/claims/search?${params.toString()}`);
+});
+
 app.get("/v1/evaluations", async (request): Promise<ResourceCollection<EvaluationResultRecord>> => {
   await requireAdmin(request.headers);
   return agentMemoryPublicRequest<ResourceCollection<EvaluationResultRecord>>("/v1/evaluations");
@@ -790,9 +813,19 @@ async function buildWorkspaceOverview(): Promise<WorkspaceOverview> {
   const postgresReachable = await tcpReachable(postgresHost, postgresPort);
 
   const services = await Promise.all([
+    Promise.resolve({
+      service: "dev-console-api",
+      status: "ok" as const,
+      url: `${config.devConsoleOrigin.replace(/:\d+$/, `:${config.port}`)}/health`,
+      detail: {
+        status: "ok",
+        source: "local-process",
+      },
+    }),
     probeService("api", `${config.runtimeApiBaseUrl}/health`),
     probeService("agent-memory", `${config.agentMemoryBaseUrl}/health`),
-    probeService("gateway", `${config.gatewayDiagnosticsBaseUrl}/health`)
+    probeService("gateway", `${config.gatewayDiagnosticsBaseUrl}/health`),
+    probeService("dev-console-web", config.devConsoleOrigin, { expectJson: false }),
   ]);
   const status: ServiceStatus =
     postgresReachable && services.every((service: WorkspaceServiceHealth) => service.status === "ok")
@@ -812,7 +845,111 @@ async function buildWorkspaceOverview(): Promise<WorkspaceOverview> {
   };
 }
 
-async function probeService(service: string, url: string): Promise<WorkspaceServiceHealth> {
+async function buildCoordinatorStatus(me: AuthenticatedMe): Promise<DevCoordinatorStatus> {
+  const errors: DevCoordinatorStatus["errors"] = [];
+  const workspace = await buildWorkspaceOverview();
+
+  const coordination = await settleCoordinatorValue(
+    "coordination",
+    () => agentMemoryInternalRequest<{
+      taskCount: number;
+      runCount: number;
+      reviewRunCount: number;
+      blockedTaskCount: number;
+      staleLeaseCount: number;
+      queues: AgentTaskCollection["queues"];
+      latestRuns: AgentRunCollection["items"];
+      latestReviewRuns: Array<{
+        uiReviewRunId: number;
+        status: string;
+        scenarioSet: string;
+        createdAt: string;
+      }>;
+      source: "dev-memory" | "unconfigured";
+    }>("/v1/internal/coordination/status"),
+    errors,
+    {
+      taskCount: 0,
+      runCount: 0,
+      reviewRunCount: 0,
+      blockedTaskCount: 0,
+      staleLeaseCount: 0,
+      queues: [],
+      latestRuns: [],
+      latestReviewRuns: [],
+      source: "unconfigured" as const,
+    }
+  );
+  const docs = await settleCoordinatorValue(
+    "docs",
+    () => buildDocsCatalog(),
+    errors,
+    { items: [], source: "unconfigured" as const }
+  );
+  const skills = await settleCoordinatorValue(
+    "skills",
+    () => buildSkillsCatalog(),
+    errors,
+    { items: [], source: "unconfigured" as const }
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    endpoints: {
+      runtimeApiBaseUrl: config.runtimeApiBaseUrl,
+      devConsoleApiBaseUrl: `http://127.0.0.1:${config.port}`,
+      agentMemoryBaseUrl: config.agentMemoryBaseUrl,
+    },
+    account: {
+      accountId: me.account.accountId,
+      email: me.account.email,
+      role: me.account.role,
+    },
+    workspace,
+    coordination: {
+      taskCount: coordination.taskCount,
+      runCount: coordination.runCount,
+      reviewRunCount: coordination.reviewRunCount,
+      blockedTaskCount: coordination.blockedTaskCount,
+      staleLeaseCount: coordination.staleLeaseCount,
+      queues: coordination.queues,
+      latestRuns: coordination.latestRuns,
+      latestReviewRuns: coordination.latestReviewRuns,
+    },
+    catalog: {
+      docCount: docs.items.length,
+      skillCount: skills.items.length,
+      coordinatorSkillPresent: skills.items.some(
+        (item) => item.skillId === "cli-coordinator" || item.name === "cli-coordinator"
+      ),
+    },
+    errors,
+    source: "broker",
+  };
+}
+
+async function settleCoordinatorValue<T>(
+  key: string,
+  load: () => Promise<T>,
+  errors: DevCoordinatorStatus["errors"],
+  fallback: T,
+): Promise<T> {
+  try {
+    return await load();
+  } catch (error) {
+    errors.push({
+      key,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fallback;
+  }
+}
+
+async function probeService(
+  service: string,
+  url: string,
+  options: { expectJson?: boolean } = {}
+): Promise<WorkspaceServiceHealth> {
   try {
     const response = await fetch(url);
     if (!response.ok) {
@@ -823,7 +960,9 @@ async function probeService(service: string, url: string): Promise<WorkspaceServ
         detail: { error: `http ${response.status}` }
       };
     }
-    const detail = (await response.json()) as JsonObject;
+    const detail = options.expectJson === false
+      ? ({ status: "ok", contentType: response.headers.get("content-type") ?? "unknown" } as JsonObject)
+      : ((await response.json()) as JsonObject);
     const status = detail.status === "ok" ? "ok" : "degraded";
     return {
       service,

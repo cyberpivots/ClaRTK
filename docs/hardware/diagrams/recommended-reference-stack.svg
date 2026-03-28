@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">ClaRTK Recommended Reference Stack</title>
+  <desc id="desc">Blueprint-style schematic of the recommended ClaRTK hardware stack using the NavSpark starter kit and a Raspberry Pi 4 host.</desc>
+  <style>
+    .bg { fill: #f6f9fc; }
+    .frame { fill: none; stroke: #17324b; stroke-width: 3; }
+    .card { fill: #ffffff; stroke: #17324b; stroke-width: 3; rx: 18; ry: 18; }
+    .accent { fill: #e8f2fb; stroke: #2f638e; stroke-width: 2; rx: 14; ry: 14; }
+    .host { fill: #eef7ea; stroke: #3f6b32; stroke-width: 2; rx: 14; ry: 14; }
+    .line { stroke: #17324b; stroke-width: 4; fill: none; }
+    .dash { stroke: #5f7488; stroke-width: 4; fill: none; stroke-dasharray: 12 9; }
+    .title { font: 700 34px 'DejaVu Sans Mono', monospace; fill: #17324b; }
+    .label { font: 700 22px 'DejaVu Sans Mono', monospace; fill: #17324b; }
+    .body { font: 500 18px 'DejaVu Sans Mono', monospace; fill: #274d6a; }
+    .small { font: 500 16px 'DejaVu Sans Mono', monospace; fill: #3f5f78; }
+  </style>
+  <rect class="bg" x="0" y="0" width="1280" height="760"/>
+  <rect class="frame" x="24" y="24" width="1232" height="712" rx="24" ry="24"/>
+  <text class="title" x="56" y="74">ClaRTK Recommended Reference Stack</text>
+  <text class="body" x="56" y="106">Primary recommendation: NavSpark Base &amp; Rover Pair RTK Starter Kit + Raspberry Pi 4 4GB + official 15W PSU + 32GB SD.</text>
+
+  <rect class="card" x="60" y="160" width="480" height="360"/>
+  <text class="label" x="92" y="204">BASE UNIT</text>
+  <rect class="accent" x="102" y="234" width="200" height="108"/>
+  <text class="label" x="128" y="274">NavSpark RTK</text>
+  <text class="body" x="128" y="304">PX1122R family</text>
+  <text class="small" x="128" y="330">USB / UART / BT / LoRa</text>
+
+  <rect class="accent" x="328" y="234" width="170" height="108"/>
+  <text class="label" x="350" y="274">Antenna</text>
+  <text class="body" x="346" y="304">multi-frequency</text>
+  <text class="small" x="364" y="330">SMA, RG174 3m</text>
+
+  <path class="line" d="M302 288 L328 288"/>
+  <text class="small" x="296" y="268">RF</text>
+
+  <rect class="accent" x="170" y="374" width="240" height="90"/>
+  <text class="label" x="196" y="414">Integrated radio</text>
+  <text class="body" x="206" y="444">868/915 MHz LoRa</text>
+
+  <rect class="card" x="740" y="160" width="480" height="360"/>
+  <text class="label" x="772" y="204">ROVER UNIT</text>
+  <rect class="accent" x="782" y="234" width="200" height="108"/>
+  <text class="label" x="808" y="274">NavSpark RTK</text>
+  <text class="body" x="808" y="304">PX1122R family</text>
+  <text class="small" x="808" y="330">USB / UART / BT / LoRa</text>
+
+  <rect class="accent" x="1008" y="234" width="170" height="108"/>
+  <text class="label" x="1030" y="274">Antenna</text>
+  <text class="body" x="1026" y="304">multi-frequency</text>
+  <text class="small" x="1044" y="330">SMA, RG174 3m</text>
+
+  <path class="line" d="M982 288 L1008 288"/>
+  <text class="small" x="976" y="268">RF</text>
+
+  <rect class="accent" x="850" y="374" width="240" height="90"/>
+  <text class="label" x="876" y="414">Integrated radio</text>
+  <text class="body" x="886" y="444">868/915 MHz LoRa</text>
+
+  <path class="dash" d="M410 420 C 560 360, 720 360, 850 420"/>
+  <text class="label" x="540" y="348">LoRa link</text>
+
+  <rect class="host" x="210" y="560" width="860" height="144"/>
+  <text class="label" x="332" y="622">HOST / ORCHESTRATION</text>
+  <text class="body" x="332" y="652">Raspberry Pi 4 Model B</text>
+  <text class="small" x="332" y="678">4GB RAM, Gigabit Ethernet, Wi-Fi, Bluetooth 5.0, USB 3.0/2.0, 40-pin GPIO</text>
+  <text class="small" x="332" y="700">Power: official Raspberry Pi 15W USB-C PSU (5.1V / 3A)   Storage: official Raspberry Pi SD Card 32GB</text>
+
+  <path class="line" d="M240 520 L240 548 L470 548 L470 560"/>
+  <path class="line" d="M1000 520 L1000 548 L810 548 L810 560"/>
+  <text class="small" x="188" y="544">USB during setup / logging</text>
+  <text class="small" x="860" y="544">USB during setup / logging</text>
+</svg>

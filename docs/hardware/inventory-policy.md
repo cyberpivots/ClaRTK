@@ -1,7 +1,7 @@
 # Hardware Inventory Policy (v1)
 
 - Status: Draft
-- Date: 2026-03-27
+- Date: 2026-03-28
 
 ## Goals
 
@@ -12,14 +12,17 @@
 
 ## Required vs Optional Classification
 
-- **Required items** are needed for first build pair:
-  - 2x NavSpark PX1122r eval board (base + rover roles)
-  - 2x Digi XBEE pro 900 s3b radios with USB adapters for transport baseline
-  - 1x 8-port PoE switch for bench Ethernet distribution
-  - 1x PoE injector/splitter set for fixed transport topology
-  - 2x Raspberry Pi platforms for local integration and diagnostics
+- **Required items** for the primary beginner reference build are:
+  - 1x NavSpark Base & Rover Pair RTK Starter Kit
+  - 1x Raspberry Pi 4 Model B `4GB`
+  - 1x Raspberry Pi 15W USB-C Power Supply
+  - 1x Raspberry Pi SD Card `32GB`
+- **Legacy smoke-path items** are still tracked when physically on hand, but are not the default beginner recommendation:
+  - NavSpark PX1122r loose boards
+  - Digi XBee 900 S3B-family radios
+  - PoE injectors and splitters
 - **Optional items** are useful extensions, not required in MVP:
-  - CAN adapters, LoRa stack, sensors, OLED/LCD panels, relay/PWM power devices, battery/supercap supplies, USB-C/TTL conversion kits, display and enclosure kits.
+  - CAN adapters, additional radio transports, sensors, OLED/LCD panels, relay/PWM power devices, battery/supercap supplies, USB-C/TTL conversion kits, display and enclosure kits.
 
 ## Data model and status rules
 

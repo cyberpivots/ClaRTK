@@ -8,6 +8,7 @@ import type {
   AuthRole,
   AuthSessionResult,
   AuthenticatedMe,
+  DevCoordinatorStatus,
   DevConsoleApiHealth,
   DevPreferenceProfile,
   DevPreferenceSignal,
@@ -36,6 +37,7 @@ import type {
   EvaluationResultRecord,
   JsonObject,
   KnowledgeClaimRecord,
+  KnowledgeClaimSearchResponse,
   MyViewsResponse,
   PreferenceObservationResult,
   PreferenceSuggestion,
@@ -333,6 +335,10 @@ export class DevConsoleClient extends JsonClient {
     return this.getJson<WorkspaceOverview>("/v1/workspace/overview");
   }
 
+  async getCoordinatorStatus(): Promise<DevCoordinatorStatus> {
+    return this.getJson<DevCoordinatorStatus>("/v1/workspace/coordinator-status");
+  }
+
   async listTasks(queueName?: string): Promise<AgentTaskCollection> {
     const query = queueName ? `?queueName=${encodeURIComponent(queueName)}` : "";
     return this.getJson<AgentTaskCollection>(`/v1/coordination/tasks${query}`);
@@ -556,6 +562,22 @@ export class DevConsoleClient extends JsonClient {
 
   async listClaims(): Promise<ResourceCollection<KnowledgeClaimRecord>> {
     return this.getJson<ResourceCollection<KnowledgeClaimRecord>>("/v1/knowledge/claims");
+  }
+
+  async searchClaims(
+    query: string,
+    mode: "lexical" | "vector" | "hybrid" = "hybrid",
+    limit?: number
+  ): Promise<KnowledgeClaimSearchResponse> {
+    const params = new URLSearchParams();
+    params.set("q", query);
+    params.set("mode", mode);
+    if (typeof limit === "number") {
+      params.set("limit", String(limit));
+    }
+    return this.getJson<KnowledgeClaimSearchResponse>(
+      `/v1/knowledge/claims/search?${params.toString()}`
+    );
   }
 
   async listEvaluations(): Promise<ResourceCollection<EvaluationResultRecord>> {

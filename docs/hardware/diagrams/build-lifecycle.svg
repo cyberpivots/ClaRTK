@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460" role="img" aria-labelledby="title desc">
+  <title id="title">ClaRTK Hardware Build Lifecycle</title>
+  <desc id="desc">Plain-language flow of the hardware build states tracked in ClaRTK.</desc>
+  <style>
+    .bg { fill: #f5faf7; }
+    .card { fill: #ffffff; stroke: #214f36; stroke-width: 3; rx: 16; ry: 16; }
+    .pending { fill: #edf7ef; }
+    .ready { fill: #e3f0ff; }
+    .warn { fill: #fff2dc; }
+    .line { stroke: #214f36; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+    .title { font: 700 30px 'DejaVu Sans Mono', monospace; fill: #214f36; }
+    .label { font: 700 19px 'DejaVu Sans Mono', monospace; fill: #214f36; }
+    .body { font: 500 16px 'DejaVu Sans Mono', monospace; fill: #355c47; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#214f36"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="460"/>
+  <text class="title" x="50" y="60">ClaRTK Hardware Build Lifecycle</text>
+  <text class="body" x="50" y="92">These are the physical meanings of the states stored in inventory.build.</text>
+
+  <rect class="card pending" x="50" y="150" width="140" height="90"/>
+  <text class="label" x="76" y="186">planned</text>
+  <text class="body" x="68" y="214">record created</text>
+
+  <rect class="card pending" x="230" y="150" width="160" height="90"/>
+  <text class="label" x="256" y="186">prepared</text>
+  <text class="body" x="250" y="214">parts selected</text>
+
+  <rect class="card pending" x="430" y="150" width="190" height="90"/>
+  <text class="label" x="452" y="186">parts_reserved</text>
+  <text class="body" x="448" y="214">parts locked to build</text>
+
+  <rect class="card ready" x="660" y="150" width="160" height="90"/>
+  <text class="label" x="694" y="186">assembled</text>
+  <text class="body" x="680" y="214">hardware built</text>
+
+  <rect class="card ready" x="860" y="150" width="200" height="90"/>
+  <text class="label" x="884" y="186">bench_validated</text>
+  <text class="body" x="882" y="214">bench checks passed</text>
+
+  <rect class="card warn" x="520" y="300" width="250" height="90"/>
+  <text class="label" x="542" y="336">runtime_publish_pending</text>
+  <text class="body" x="560" y="364">waiting for handoff</text>
+
+  <rect class="card ready" x="820" y="300" width="150" height="90"/>
+  <text class="label" x="842" y="336">runtime_published</text>
+  <text class="body" x="850" y="364">handoff done</text>
+
+  <rect class="card warn" x="1000" y="300" width="160" height="90"/>
+  <text class="label" x="1020" y="336">registration_failed</text>
+  <text class="body" x="1048" y="364">fix and retry</text>
+
+  <path class="line" d="M190 195 L230 195"/>
+  <path class="line" d="M390 195 L430 195"/>
+  <path class="line" d="M620 195 L660 195"/>
+  <path class="line" d="M820 195 L860 195"/>
+  <path class="line" d="M960 240 L960 285 L770 285 L770 320"/>
+  <path class="line" d="M770 345 L820 345"/>
+  <path class="line" d="M770 345 C 860 345, 930 345, 1000 345"/>
+</svg>

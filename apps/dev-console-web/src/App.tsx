@@ -126,6 +126,27 @@ const panelDefinitions: Array<{
   }
 ];
 
+const PANEL_SHORTCUTS: Record<PanelKey, string> = {
+  preview: "Alt+1",
+  coordination: "Alt+2",
+  review: "Alt+3",
+  preferences: "Alt+4",
+  index: "Alt+5"
+};
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = target.tagName;
+  return (
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT" ||
+    target.isContentEditable
+  );
+}
+
 interface ConsoleState {
   me: AuthenticatedMe | null;
   overview: WorkspaceOverview | null;
@@ -325,6 +346,49 @@ export function App() {
       }));
     }).catch(() => {});
   }, [state.me, state.motionMode, state.loading, state.devProfile]);
+
+  React.useEffect(() => {
+    if (!state.me || state.me.account.role !== "admin") {
+      return;
+    }
+    function handleConsoleShortcut(event: KeyboardEvent) {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+      if (event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        const panelIndex =
+          event.code === "Digit1" ? 0 :
+          event.code === "Digit2" ? 1 :
+          event.code === "Digit3" ? 2 :
+          event.code === "Digit4" ? 3 :
+          event.code === "Digit5" ? 4 :
+          -1;
+        if (panelIndex >= 0 && panelDefinitions[panelIndex]) {
+          event.preventDefault();
+          setState((current) => ({
+            ...current,
+            selectedPanel: panelDefinitions[panelIndex].key
+          }));
+          return;
+        }
+      }
+      if (event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        const drawerKey =
+          event.code === "KeyS" ? "status" :
+          event.code === "KeyC" ? "quick-controls" :
+          event.code === "KeyF" ? "filters" :
+          event.code === "KeyM" ? "comms" :
+          event.code === "KeyP" ? "profile" :
+          null;
+        if (drawerKey) {
+          event.preventDefault();
+          void handleLauncherToggle(drawerKey);
+        }
+      }
+    }
+    window.addEventListener("keydown", handleConsoleShortcut);
+    return () => window.removeEventListener("keydown", handleConsoleShortcut);
+  }, [state.me]);
 
   React.useEffect(() => {
     const scorecard = asRecord(state.devProfile?.score?.scorecard);
@@ -1587,7 +1651,10 @@ export function App() {
       motionMode={state.motionMode}
     >
       {isAdmin ? (
-        <div className="console-shell">
+        <div
+          className={`console-shell console-shell-${state.selectedPanel}`}
+          data-review-shell="true"
+        >
           <div className="hud-launcher">
             <div className="hud-launcher-brand">
               <span className="hud-kicker">ClaRTK // Development Interface</span>
@@ -1598,30 +1665,35 @@ export function App() {
               <LauncherButton
                 label="Status"
                 icon="status"
+                shortcut="Alt+S"
                 active={activeLauncher === "status"}
                 onClick={() => void handleLauncherToggle("status")}
               />
               <LauncherButton
                 label="Quick Controls"
                 icon="controls"
+                shortcut="Alt+C"
                 active={activeLauncher === "quick-controls"}
                 onClick={() => void handleLauncherToggle("quick-controls")}
               />
               <LauncherButton
                 label="Filters"
                 icon="filters"
+                shortcut="Alt+F"
                 active={activeLauncher === "filters"}
                 onClick={() => void handleLauncherToggle("filters")}
               />
               <LauncherButton
                 label="Comms"
                 icon="comms"
+                shortcut="Alt+M"
                 active={activeLauncher === "comms"}
                 onClick={() => void handleLauncherToggle("comms")}
               />
               <LauncherButton
                 label="Profile"
                 icon="profile"
+                shortcut="Alt+P"
                 active={activeLauncher === "profile"}
                 onClick={() => void handleLauncherToggle("profile")}
               />
@@ -1634,8 +1706,8 @@ export function App() {
           {state.notice ? <Message tone="ok">{state.notice}</Message> : null}
           {state.error ? <Message tone="error">{state.error}</Message> : null}
 
-          <div className="console-grid">
-            <aside className="command-rail">
+          <div className={`console-grid console-grid-${state.selectedPanel}`}>
+            <aside className="command-rail" data-review-shell-region="command-rail">
               <Panel title="Surface Ring" eyebrow="Command Rail" accent="muted">
                 <div className="console-nav console-nav-icons">
                   {panelDefinitions.map((panel) => (
@@ -1644,6 +1716,7 @@ export function App() {
                       panelKey={panel.key}
                       label={panel.label}
                       detail={panelMetrics[panel.key]}
+                      shortcut={PANEL_SHORTCUTS[panel.key]}
                       active={state.selectedPanel === panel.key}
                       onClick={() =>
                         setState((current) => ({ ...current, selectedPanel: panel.key }))
@@ -1671,11 +1744,11 @@ export function App() {
               </Panel>
             </aside>
 
-            <main className="console-main">
+            <main className="console-main" data-review-shell-region="mission-surface">
               {selectedPanelContent}
             </main>
 
-            <aside className="context-rail">
+            <aside className="context-rail" data-review-shell-region="context-rail">
               <Panel title="Current Focus" eyebrow={activePanel.eyebrow} accent="muted">
                 <div className="console-focus-grid">
                   <InfoCard label="Panel" value={activePanel.label} detail={activePanel.description} />
@@ -1933,23 +2006,121 @@ const SURFACE_QUESTIONNAIRES: Record<
 };
 
 function Glyph(props: { icon: GlyphKey }) {
-  const node =
-    props.icon === "status" ? "S" :
-    props.icon === "controls" ? "C" :
-    props.icon === "filters" ? "F" :
-    props.icon === "comms" ? "M" :
-    props.icon === "profile" ? "P" :
-    props.icon === "preview" ? "P" :
-    props.icon === "coordination" ? "Q" :
-    props.icon === "review" ? "R" :
-    props.icon === "preferences" ? "T" :
-    "I";
-  return <span aria-hidden="true">{node}</span>;
+  let shape: React.ReactNode;
+  switch (props.icon) {
+    case "status":
+      shape = (
+        <>
+          <path d="M4 12h16" />
+          <path d="M8 6h8" />
+          <path d="M8 18h8" />
+          <circle cx="12" cy="12" r="2.5" />
+        </>
+      );
+      break;
+    case "controls":
+      shape = (
+        <>
+          <path d="M6 5v14" />
+          <path d="M18 5v14" />
+          <path d="M10 8h8" />
+          <path d="M6 15h8" />
+        </>
+      );
+      break;
+    case "filters":
+      shape = (
+        <>
+          <path d="M4 6h16" />
+          <path d="M7 12h10" />
+          <path d="M10 18h4" />
+        </>
+      );
+      break;
+    case "comms":
+      shape = (
+        <>
+          <path d="M5 8a7 7 0 0 1 14 0v5H8l-3 3z" />
+          <path d="M9 10h6" />
+        </>
+      );
+      break;
+    case "profile":
+      shape = (
+        <>
+          <circle cx="12" cy="8" r="3" />
+          <path d="M5 18c1.8-3 4.2-4.5 7-4.5s5.2 1.5 7 4.5" />
+        </>
+      );
+      break;
+    case "preview":
+      shape = (
+        <>
+          <rect x="4" y="5" width="16" height="10" rx="2" />
+          <path d="M8 19h8" />
+          <path d="M10 15v4" />
+          <path d="M14 15v4" />
+        </>
+      );
+      break;
+    case "coordination":
+      shape = (
+        <>
+          <circle cx="7" cy="7" r="2" />
+          <circle cx="17" cy="7" r="2" />
+          <circle cx="12" cy="17" r="2" />
+          <path d="M8.5 8.5l2.5 6" />
+          <path d="M15.5 8.5l-2.5 6" />
+          <path d="M9 7h6" />
+        </>
+      );
+      break;
+    case "review":
+      shape = (
+        <>
+          <path d="M6 5h9l3 3v11H6z" />
+          <path d="M15 5v4h4" />
+          <path d="M9 12l2 2 4-4" />
+        </>
+      );
+      break;
+    case "preferences":
+      shape = (
+        <>
+          <circle cx="12" cy="12" r="3" />
+          <path d="M12 4v3" />
+          <path d="M12 17v3" />
+          <path d="M4 12h3" />
+          <path d="M17 12h3" />
+          <path d="M6.5 6.5l2.2 2.2" />
+          <path d="M15.3 15.3l2.2 2.2" />
+          <path d="M17.5 6.5l-2.2 2.2" />
+          <path d="M8.7 15.3l-2.2 2.2" />
+        </>
+      );
+      break;
+    default:
+      shape = (
+        <>
+          <path d="M5 6h14v12H5z" />
+          <path d="M8 10h8" />
+          <path d="M8 14h6" />
+        </>
+      );
+      break;
+  }
+
+  return (
+    <svg className="hud-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {shape}
+    </svg>
+  );
 }
 
 function LauncherButton(props: {
   label: string;
   icon: GlyphKey;
+  shortcut?: string;
   active: boolean;
   onClick: () => void;
 }) {
@@ -1958,9 +2129,15 @@ function LauncherButton(props: {
       className={`launcher-button hud-launcher-button${props.active ? " is-active" : ""}`}
       onClick={props.onClick}
       type="button"
+      title={props.shortcut ? `${props.label} (${props.shortcut})` : props.label}
+      data-review-shell-button="launcher"
+      data-review-label={props.label}
     >
       <Glyph icon={props.icon} />
-      <span>{props.label}</span>
+      <span className="launcher-button-copy">
+        <strong>{props.label}</strong>
+        {props.shortcut ? <small>{props.shortcut}</small> : null}
+      </span>
     </button>
   );
 }
@@ -1969,6 +2146,7 @@ function IconNavButton(props: {
   panelKey: PanelKey;
   label: string;
   detail: string;
+  shortcut?: string;
   active: boolean;
   onClick: () => void;
 }) {
@@ -1977,11 +2155,15 @@ function IconNavButton(props: {
       className={`icon-nav-button${props.active ? " is-active" : ""}`}
       onClick={props.onClick}
       type="button"
+      title={props.shortcut ? `${props.label} (${props.shortcut})` : props.label}
+      data-review-shell-button="command-rail"
+      data-review-label={props.label}
     >
       <Glyph icon={props.panelKey} />
       <span className="icon-nav-copy">
         <strong>{props.label}</strong>
         <span>{props.detail}</span>
+        {props.shortcut ? <small>{props.shortcut}</small> : null}
       </span>
     </button>
   );
@@ -2119,14 +2301,22 @@ function SurfaceCarousel(props: {
 
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
         return;
       }
       const nextIndex =
         event.key === "ArrowRight"
           ? Math.min(props.pages.length - 1, activeIndex + 1)
-          : Math.max(0, activeIndex - 1);
+          : event.key === "ArrowLeft"
+            ? Math.max(0, activeIndex - 1)
+            : event.key === "Home"
+              ? 0
+              : props.pages.length - 1;
       if (nextIndex !== activeIndex) {
+        event.preventDefault();
         props.onPageChange(props.pages[nextIndex].key, "arrow");
       }
     }
@@ -2143,10 +2333,13 @@ function SurfaceCarousel(props: {
           <p>{activePage?.summary ?? props.summary}</p>
         </div>
         <div className="surface-carousel-controls">
+          <span className="surface-carousel-hotkeys">Arrows / Home / End</span>
           <button
             type="button"
             onClick={() => props.onPageChange(props.pages[Math.max(0, activeIndex - 1)].key, "arrow")}
             disabled={activeIndex === 0}
+            data-review-shell-button="carousel-cycle"
+            data-review-label="Previous"
           >
             Previous
           </button>
@@ -2154,6 +2347,8 @@ function SurfaceCarousel(props: {
             type="button"
             onClick={() => props.onPageChange(props.pages[Math.min(props.pages.length - 1, activeIndex + 1)].key, "arrow")}
             disabled={activeIndex === props.pages.length - 1}
+            data-review-shell-button="carousel-cycle"
+            data-review-label="Next"
           >
             Next
           </button>
@@ -2169,15 +2364,18 @@ function SurfaceCarousel(props: {
         </div>
       </div>
       <div className="surface-carousel-markers">
-        {props.pages.map((page) => (
+        {props.pages.map((page, index) => (
           <button
             key={page.key}
             className={`surface-carousel-marker${page.key === activePage?.key ? " is-active" : ""}`}
             onClick={() => props.onPageChange(page.key, "marker")}
             type="button"
+            data-review-shell-button="surface-marker"
+            data-review-label={page.label}
           >
             <strong>{page.label}</strong>
             <span>{page.eyebrow}</span>
+            <small>{String(index + 1).padStart(2, "0")}</small>
           </button>
         ))}
       </div>
@@ -2204,14 +2402,53 @@ function QuestionnairePage(props: {
   const [answers, setAnswers] = React.useState<Record<string, string>>({});
   const step = props.steps[stepIndex];
   const selectedOption = answers[step.key] ?? null;
+  const completionCount = props.steps.filter((question) => answers[question.key]).length;
 
   React.useEffect(() => {
     void props.onEvent(props.panelKey, props.questionnaireKey, null, null, "started");
   }, [props]);
 
+  React.useEffect(() => {
+    function handleQuestionnaireShortcut(event: KeyboardEvent) {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+      const optionIndex =
+        event.code === "Digit1" ? 0 :
+        event.code === "Digit2" ? 1 :
+        event.code === "Digit3" ? 2 :
+        -1;
+      if (optionIndex >= 0 && step.options[optionIndex]) {
+        event.preventDefault();
+        void selectOption(step.options[optionIndex].key);
+        return;
+      }
+      if (event.code === "Enter" && selectedOption) {
+        event.preventDefault();
+        if (stepIndex < props.steps.length - 1) {
+          setStepIndex((current) => Math.min(props.steps.length - 1, current + 1));
+        } else {
+          void completeQuestionnaire();
+        }
+      }
+    }
+    window.addEventListener("keydown", handleQuestionnaireShortcut);
+    return () => window.removeEventListener("keydown", handleQuestionnaireShortcut);
+  }, [props.steps, selectedOption, step, stepIndex]);
+
   async function selectOption(optionKey: string) {
     setAnswers((current) => ({ ...current, [step.key]: optionKey }));
     await props.onEvent(props.panelKey, props.questionnaireKey, step.key, optionKey, "answered");
+    if (stepIndex < props.steps.length - 1) {
+      window.setTimeout(() => {
+        setStepIndex((current) => {
+          if (current !== stepIndex) {
+            return current;
+          }
+          return Math.min(props.steps.length - 1, current + 1);
+        });
+      }, 120);
+    }
   }
 
   async function completeQuestionnaire() {
@@ -2228,18 +2465,23 @@ function QuestionnairePage(props: {
       <div className="questionnaire-stage">
         <div className="questionnaire-card">
           <QuestionnaireProgressMeter currentStep={stepIndex} totalSteps={props.steps.length} />
+          <div className="questionnaire-meta">
+            <StatusPill status="neutral">{completionCount}/{props.steps.length} answered</StatusPill>
+            <span className="questionnaire-shortcuts">Tap `1-3` to answer</span>
+          </div>
           <div className="section-heading">
             <h4>{step.prompt}</h4>
             <p>Multiple choice only. One supervised answer per step.</p>
           </div>
           <div className="questionnaire-options">
-            {step.options.map((option) => (
+            {step.options.map((option, index) => (
               <button
                 key={option.key}
                 className={`questionnaire-option${selectedOption === option.key ? " is-active" : ""}`}
                 onClick={() => void selectOption(option.key)}
                 type="button"
               >
+                <span className="questionnaire-option-key">{String(index + 1).padStart(2, "0")}</span>
                 <strong>{option.label}</strong>
                 <span>{option.description}</span>
               </button>
@@ -2268,6 +2510,15 @@ function QuestionnairePage(props: {
           </div>
         </div>
         <aside className="questionnaire-sidebar">
+          <div className="detail-card">
+            <div className="section-heading">
+              <h4>Decision trail</h4>
+              <p>Each answer is recorded as a signal plus a supervised choice.</p>
+            </div>
+            <PillList
+              values={Object.entries(answers).map(([questionKey, optionKey]) => `${questionKey}: ${optionKey}`)}
+            />
+          </div>
           <ListBlock
             items={props.steps.map((question, index) => ({
               title: `${String(index + 1).padStart(2, "0")} · ${question.key}`,
@@ -2326,6 +2577,9 @@ function PreviewSurface(props: {
     slides.find((slide) => slide.slideId === selectedSlideId) ??
     slides[0] ??
     null;
+  const selectedSlideScreenshotUrl = selectedSlide?.screenshotPath
+    ? devConsoleApi.previewAssetUrl(selectedSlide.screenshotPath)
+    : null;
   const previewHtmlPath = extractPreviewHtmlPath(selectedRun);
   const previewUrl = previewHtmlPath ? devConsoleApi.previewAssetUrl(previewHtmlPath) : null;
   const feedbackItems = props.previewFeedback?.items ?? [];
@@ -2434,10 +2688,29 @@ function PreviewSurface(props: {
       eyebrow: "Mission Surface",
       summary: "Keep the preview stage above the fold with run and slide context docked around it.",
       content: (
-        <div className="surface-page-grid surface-page-grid-wide">
+        <div className="surface-page-grid surface-page-grid-preview-stage">
           <Panel title="Preview Stage" eyebrow="Renderable">
             <div className="detail-stack">
-              <div className="action-strip">
+              <div className="preview-stage-headline">
+                <div>
+                  <span className="surface-shell-page-label">Live stage</span>
+                  <h4>{selectedSlide?.title ?? selectedRun?.title ?? "No preview run selected"}</h4>
+                  <p className="detail-copy">
+                    {selectedRun
+                      ? `${selectedRun.deckKey} · ${selectedRun.status} · ${slides.length} slides in manifest`
+                      : "Select a deck or run to activate the preview stage."}
+                  </p>
+                </div>
+                <div className="preview-stage-summary">
+                  <StatusPill status={selectedRun ? statusToneForPreviewRun(selectedRun.status) : "neutral"}>
+                    {selectedRun?.status ?? "idle"}
+                  </StatusPill>
+                  <StatusPill status={previewAnalysis.hasWarnings ? "degraded" : "ok"}>
+                    {previewAnalysis.hasWarnings ? "warnings" : "clean analysis"}
+                  </StatusPill>
+                </div>
+              </div>
+              <div className="action-strip preview-stage-actions">
                 <button type="button" onClick={() => setStageMode("conversation")}>Slide Review</button>
                 <button type="button" onClick={() => setStageMode("deck")} disabled={!previewUrl}>Full Deck</button>
                 {selectedRun ? (
@@ -2472,29 +2745,53 @@ function PreviewSurface(props: {
               )}
             </div>
           </Panel>
-          <Panel title="Run Rail" eyebrow="Recent">
-            <ListBlock
-              emptyLabel={previewRunsLoaded ? "No preview runs recorded yet." : "Loading preview runs…"}
-              items={runs.slice(0, 10).map((run) => ({
-                title: `Run #${run.previewRunId}`,
-                subtitle: `${run.status} · ${run.deckKey}`,
-                body: (
-                  <div className="action-strip">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        props.onSelectPreviewRun(run.previewRunId);
-                        void props.onSurfaceCardSignal("preview", `run:${run.previewRunId}`);
-                      }}
-                    >
-                      Inspect
-                    </button>
-                    <StatusPill status={statusToneForPreviewRun(run.status)}>{run.status}</StatusPill>
-                  </div>
-                )
-              }))}
-            />
-          </Panel>
+          <div className="preview-side-stack">
+            <Panel title="Selected Slide" eyebrow="Focus">
+              {selectedSlide ? (
+                <div className="detail-stack">
+                  {selectedSlideScreenshotUrl ? (
+                    <a href={selectedSlideScreenshotUrl} target="_blank" rel="noreferrer" className="preview-stage-thumb-link">
+                      <img src={selectedSlideScreenshotUrl} alt={`${selectedSlide.title} screenshot`} className="preview-stage-thumb" />
+                    </a>
+                  ) : null}
+                  <FactGrid
+                    entries={[
+                      { label: "Slide", value: selectedSlide.slideId },
+                      { label: "Audience", value: selectedSlide.audienceGoal || "Not specified" },
+                      { label: "Bullets", value: selectedSlide.bullets.length },
+                      { label: "Media", value: selectedSlide.media.length }
+                    ]}
+                  />
+                  <PillList values={selectedSlide.evidencePaths.slice(0, 6)} />
+                </div>
+              ) : (
+                <p className="empty-copy">No slide selected.</p>
+              )}
+            </Panel>
+            <Panel title="Run Rail" eyebrow="Recent">
+              <ListBlock
+                emptyLabel={previewRunsLoaded ? "No preview runs recorded yet." : "Loading preview runs…"}
+                items={runs.slice(0, 10).map((run) => ({
+                  title: `Run #${run.previewRunId}`,
+                  subtitle: `${run.status} · ${run.deckKey}`,
+                  body: (
+                    <div className="action-strip">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          props.onSelectPreviewRun(run.previewRunId);
+                          void props.onSurfaceCardSignal("preview", `run:${run.previewRunId}`);
+                        }}
+                      >
+                        Inspect
+                      </button>
+                      <StatusPill status={statusToneForPreviewRun(run.status)}>{run.status}</StatusPill>
+                    </div>
+                  )
+                }))}
+              />
+            </Panel>
+          </div>
         </div>
       )
     },
@@ -2527,23 +2824,37 @@ function PreviewSurface(props: {
           </Panel>
           <Panel title="Selected Slide" eyebrow="Source">
             {selectedSlide ? (
-              <div className="detail-stack">
-                <FactGrid
-                  entries={[
-                    { label: "Slide", value: selectedSlide.slideId },
-                    { label: "Audience goal", value: selectedSlide.audienceGoal || "Not specified" },
-                    { label: "Media", value: String(selectedSlide.media.length) },
-                    { label: "Evidence", value: String(selectedSlide.evidencePaths.length) }
-                  ]}
-                />
-                <StructuredValue
-                  value={{
-                    bullets: selectedSlide.bullets,
-                    visualGuidance: selectedSlide.visualGuidance,
-                    speakerNotes: selectedSlide.speakerNotes,
-                    evidencePaths: selectedSlide.evidencePaths
-                  }}
-                />
+              <div className="detail-stack preview-evidence-layout">
+                {selectedSlideScreenshotUrl ? (
+                  <a href={selectedSlideScreenshotUrl} target="_blank" rel="noreferrer" className="preview-stage-thumb-link">
+                    <img src={selectedSlideScreenshotUrl} alt={`${selectedSlide.title} screenshot`} className="preview-evidence-image" />
+                  </a>
+                ) : null}
+                <div className="detail-stack">
+                  <FactGrid
+                    entries={[
+                      { label: "Slide", value: selectedSlide.slideId },
+                      { label: "Audience goal", value: selectedSlide.audienceGoal || "Not specified" },
+                      { label: "Media", value: String(selectedSlide.media.length) },
+                      { label: "Evidence", value: String(selectedSlide.evidencePaths.length) }
+                    ]}
+                  />
+                  <StructuredValue
+                    value={{
+                      bullets: selectedSlide.bullets,
+                      visualGuidance: selectedSlide.visualGuidance,
+                      speakerNotes: selectedSlide.speakerNotes
+                    }}
+                  />
+                  <PillList
+                    values={[
+                      ...selectedSlide.media.map((media) =>
+                        media.source ? `${media.kind}: ${media.source}` : media.kind
+                      ),
+                      ...selectedSlide.evidencePaths
+                    ]}
+                  />
+                </div>
               </div>
             ) : (
               <p className="empty-copy">No slide selected.</p>
@@ -2857,6 +3168,7 @@ function ReviewSurface(props: {
   const baselines = props.reviewBaselines?.baselines ?? [];
   const selectedRun = props.selectedReviewRun ?? runs[0] ?? null;
   const reviewSummary = selectedRun ? summarizeReviewSummary(selectedRun.analysisSummaryJson) : {};
+  const captureSteps = extractCaptureSteps(selectedRun);
 
   React.useEffect(() => {
     void props.onSurfacePageChange("review", page, "auto");
@@ -2969,6 +3281,27 @@ function ReviewSurface(props: {
                     capture: selectedRun.captureSummaryJson,
                     analysis: selectedRun.analysisSummaryJson
                   }}
+                />
+                <ListBlock
+                  emptyLabel="No capture screenshots stored for this run."
+                  items={captureSteps.map((step) => ({
+                    title: `${step.scenarioName ?? "scenario"} · ${step.checkpointName ?? "checkpoint"}`,
+                    subtitle: step.expectedTexts.length
+                      ? `${step.expectedTexts.length} expected markers`
+                      : "No expected markers recorded",
+                    body: (
+                      <div className="review-evidence-grid">
+                        <ReviewImagePreview
+                          relativePath={step.screenshot.relativePath}
+                          alt={`${step.scenarioName ?? "scenario"} shell capture`}
+                        />
+                        <ReviewImagePreview
+                          relativePath={step.panelScreenshot.relativePath}
+                          alt={`${step.scenarioName ?? "scenario"} mission surface capture`}
+                        />
+                      </div>
+                    )
+                  }))}
                 />
                 <button type="button" onClick={() => void props.onPromoteBaseline()}>
                   Promote Baseline
@@ -4274,6 +4607,7 @@ function extractCaptureSteps(run: UiReviewRun | null): Array<{
   checkpointName: string | null;
   expectedTexts: string[];
   screenshot: { relativePath: string | null };
+  panelScreenshot: { relativePath: string | null };
 }> {
   const rawSteps = run?.captureSummaryJson.steps;
   if (!Array.isArray(rawSteps)) {
@@ -4290,19 +4624,29 @@ function extractCaptureSteps(run: UiReviewRun | null): Array<{
       stepRecord.screenshot !== null &&
       !Array.isArray(stepRecord.screenshot)
         ? (stepRecord.screenshot as Record<string, unknown>)
-          : {};
-      const expectedTexts = Array.isArray(stepRecord.expectedTexts)
-        ? stepRecord.expectedTexts.filter((value: unknown): value is string => typeof value === "string")
-        : [];
-      return [{
-        scenarioName: typeof stepRecord.scenarioName === "string" ? stepRecord.scenarioName : null,
-        checkpointName: typeof stepRecord.checkpointName === "string" ? stepRecord.checkpointName : null,
-        expectedTexts,
-        screenshot: {
-          relativePath: typeof screenshot.relativePath === "string" ? screenshot.relativePath : null
-        }
-      }];
-    });
+        : {};
+    const panelScreenshot =
+      typeof stepRecord.panelScreenshot === "object" &&
+      stepRecord.panelScreenshot !== null &&
+      !Array.isArray(stepRecord.panelScreenshot)
+        ? (stepRecord.panelScreenshot as Record<string, unknown>)
+        : {};
+    const expectedTexts = Array.isArray(stepRecord.expectedTexts)
+      ? stepRecord.expectedTexts.filter((value: unknown): value is string => typeof value === "string")
+      : [];
+    return [{
+      scenarioName: typeof stepRecord.scenarioName === "string" ? stepRecord.scenarioName : null,
+      checkpointName: typeof stepRecord.checkpointName === "string" ? stepRecord.checkpointName : null,
+      expectedTexts,
+      screenshot: {
+        relativePath: typeof screenshot.relativePath === "string" ? screenshot.relativePath : null
+      },
+      panelScreenshot: {
+        relativePath:
+          typeof panelScreenshot.relativePath === "string" ? panelScreenshot.relativePath : null
+      }
+    }];
+  });
 }
 
 function extractEvidenceDescriptors(evidenceJson: Record<string, unknown>): Array<{

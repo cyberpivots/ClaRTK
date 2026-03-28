@@ -128,6 +128,23 @@ export interface WorkspaceOverview {
   services: WorkspaceServiceHealth[];
 }
 
+export interface CoordinatorEndpointSummary {
+  runtimeApiBaseUrl: string;
+  devConsoleApiBaseUrl: string;
+  agentMemoryBaseUrl: string;
+}
+
+export interface CoordinatorAccountSummary {
+  accountId: AccountId;
+  email: string;
+  role: AuthRole;
+}
+
+export interface CoordinatorErrorRecord {
+  key: string;
+  error: string;
+}
+
 export interface AgentTaskDependency {
   agentTaskId: number;
   dependsOnAgentTaskId: number;
@@ -179,6 +196,41 @@ export interface AgentRunRecord {
 export interface AgentRunCollection {
   items: AgentRunRecord[];
   source: "dev-memory" | "unconfigured";
+}
+
+export interface UiReviewRunSummary {
+  uiReviewRunId: number;
+  status: string;
+  scenarioSet: string;
+  createdAt: TimestampIsoString;
+}
+
+export interface CoordinatorCoordinationSummary {
+  taskCount: number;
+  runCount: number;
+  reviewRunCount: number;
+  blockedTaskCount: number;
+  staleLeaseCount: number;
+  queues: QueueSnapshot[];
+  latestRuns: AgentRunRecord[];
+  latestReviewRuns: UiReviewRunSummary[];
+}
+
+export interface CoordinatorCatalogSummary {
+  docCount: number;
+  skillCount: number;
+  coordinatorSkillPresent: boolean;
+}
+
+export interface DevCoordinatorStatus {
+  generatedAt: TimestampIsoString;
+  endpoints: CoordinatorEndpointSummary;
+  account: CoordinatorAccountSummary | null;
+  workspace: WorkspaceOverview;
+  coordination: CoordinatorCoordinationSummary;
+  catalog: CoordinatorCatalogSummary;
+  errors: CoordinatorErrorRecord[];
+  source: "broker" | "script-fallback" | "unconfigured";
 }
 
 export interface InventoryItem {
@@ -523,6 +575,28 @@ export interface KnowledgeClaimRecord {
   status: string;
   tags: JsonValue[];
   createdAt: TimestampIsoString;
+}
+
+export interface KnowledgeClaimSearchResult {
+  knowledgeClaimId: number;
+  sourceDocumentId: number | null;
+  summary: string;
+  status: string;
+  tags: JsonValue[];
+  createdAt: TimestampIsoString;
+  sourceTitle: string | null;
+  sourceUri: string | null;
+  lexicalScore: number;
+  semanticScore: number;
+  combinedScore: number;
+  matchReasons: string[];
+}
+
+export interface KnowledgeClaimSearchResponse {
+  items: KnowledgeClaimSearchResult[];
+  source: "dev-memory" | "unconfigured";
+  query: string;
+  mode: "lexical" | "vector" | "hybrid";
 }
 
 export interface EvaluationResultRecord {

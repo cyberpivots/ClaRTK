@@ -1,40 +1,38 @@
 # Radio Fallback and Power Guide
 
 - Status: Draft
-- Date: 2026-03-27
+- Date: 2026-03-28
 
 ## Primary default
 
-- XBee Pro 900 S3B is the default transport for v1 base+rover.
-- LoRa (SX1262 path) remains optional and is documented as fallback only.
+- For the recommended ClaRTK reference build, the primary transport is the NavSpark starter kit's integrated `868/915 MHz` LoRa radio path.
+- Digi XBee 900 S3B-family radios remain a legacy lab fallback for the currently tracked smoke-path inventory.
 
-## XBee baseline
+## Recommended starter-kit baseline
 
-- Use fixed serial settings documented in the module datasheet (module-specific defaults must be verified before production).
+- Use the included LoRa antennas on both the base and rover units.
+- Use `USB` to the Raspberry Pi host for setup, logging, and troubleshooting.
+- Keep the base and rover recommendation tied to the single verified starter-kit product instead of mixing third-party loose radio boards into the first build.
+
+## XBee fallback baseline
+
+- Use fixed serial settings documented in the exact module datasheet after confirming the radio label on the physical unit.
 - Keep one radio powered via USB adapter for configuration and one dedicated endpoint for operational link.
 - Record radio pairing in `agent` task notes before dependency gating.
 
-## LoRa fallback
-
-- Use only when XBee link cannot be proven stable after rollback attempts.
-- Route fallback through a separate build task branch with `buildKind=fallback_lora`.
-- Maintain same validation criteria:
-  - link bring-up,
-  - packet integrity,
-  - reconnect behavior.
-
 ## Power reference
 
-- Prefer PoE splitters for bench reliability when fixed mains is available.
-- Prefer USB/adapter fallback only for short sessions.
+- For the recommended reference build, power the host with the official Raspberry Pi `15W USB-C Power Supply`.
+- Avoid improvised USB phone chargers for the main host bring-up path.
+- Treat PoE splitters and injectors as lab-only fallback hardware, not as the primary beginner recommendation.
 
 ## Power-safety checklist
 
 - Never hot-plug serial leads while powered unless connector datasheet explicitly permits.
 - Verify:
-  - PoE splitters are wired for correct polarity and expected voltage,
-  - Ground reference continuity across radio, MCU board, and bench supplies,
-  - Fused branch can be pulled to isolate fault path.
+  - the Raspberry Pi uses the official `5.1V / 3A` USB-C supply,
+  - ground reference continuity across the host and connected setup hardware,
+  - fallback PoE hardware matches expected polarity and voltage before use.
 - For each branch:
   - measure input/output voltage before connecting GNSS rails,
   - assert no reverse polarity,

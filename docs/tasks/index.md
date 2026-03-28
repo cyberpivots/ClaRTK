@@ -40,5 +40,7 @@
   Status: in progress
 - `TASK-0520-development-interface-and-dev-console.md`: Add the development-only browser interface and brokered dev-console control plane
   Status: in progress
+- `TASK-0530-hardware-blueprint-guides.md`: Add beginner-friendly hardware workbook and blueprint diagrams grounded in canonical inventory
+  Status: in progress
 - `TASK-0600-user-preference-profile.md`: Implement real-account operator profiles, reviewable preference suggestions, and dashboard-first preference management
   Status: completed

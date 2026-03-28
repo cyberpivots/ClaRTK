@@ -42,6 +42,23 @@ class WorkspaceHealth:
     services: List[WorkspaceServiceHealth] = field(default_factory=list)
 
 @dataclass(slots=True, kw_only=True)
+class CoordinatorEndpointSummary:
+    runtime_api_base_url: str
+    dev_console_api_base_url: str
+    agent_memory_base_url: str
+
+@dataclass(slots=True, kw_only=True)
+class CoordinatorAccountSummary:
+    account_id: str
+    email: str
+    role: str
+
+@dataclass(slots=True, kw_only=True)
+class CoordinatorError:
+    key: str
+    error: str
+
+@dataclass(slots=True, kw_only=True)
 class AgentTaskDependency:
     agent_task_id: int
     depends_on_agent_task_id: int
@@ -102,6 +119,41 @@ class AgentRun:
 @dataclass(slots=True, kw_only=True)
 class AgentRunCollection:
     items: List[AgentRun] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class UiReviewRunSummary:
+    ui_review_run_id: int
+    status: str
+    scenario_set: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class CoordinatorCoordinationSummary:
+    task_count: int
+    run_count: int
+    review_run_count: int
+    blocked_task_count: int
+    stale_lease_count: int
+    queues: List[QueueSnapshot] = field(default_factory=list)
+    latest_runs: List[AgentRun] = field(default_factory=list)
+    latest_review_runs: List[UiReviewRunSummary] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class CoordinatorCatalogSummary:
+    doc_count: int
+    skill_count: int
+    coordinator_skill_present: bool
+
+@dataclass(slots=True, kw_only=True)
+class CoordinatorStatus:
+    generated_at: str
+    endpoints: CoordinatorEndpointSummary
+    account: CoordinatorAccountSummary
+    workspace: WorkspaceHealth
+    coordination: CoordinatorCoordinationSummary
+    catalog: CoordinatorCatalogSummary
+    errors: List[CoordinatorError] = field(default_factory=list)
+    source: str
 
 @dataclass(slots=True, kw_only=True)
 class AgentEvent:
@@ -514,6 +566,28 @@ class KnowledgeClaim:
     summary: str
     status: ValidationStatus
     tags: List[str] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class ClaimSearchResult:
+    knowledge_claim_id: str
+    source_document_id: str
+    summary: str
+    status: str
+    tags: List[str] = field(default_factory=list)
+    created_at: str
+    source_title: str
+    source_uri: str
+    lexical_score: float
+    semantic_score: float
+    combined_score: float
+    match_reasons: List[str] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class ClaimSearchResponse:
+    items: List[ClaimSearchResult] = field(default_factory=list)
+    source: str
+    query: str
+    mode: str
 
 @dataclass(slots=True, kw_only=True)
 class EvaluationResult:

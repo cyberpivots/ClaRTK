@@ -104,6 +104,28 @@
   - panel screenshots are cropped to a stable visible-console region so list-heavy panels do not churn baseline dimensions across runs
 - Live broker-backed review run `uiReviewRunId=3` now proves the full capture -> analyze -> fix_draft -> review path against the current dev-console.
 
+## Coordinator Bootstrap Hardening Update 2026-03-28
+
+- Added a brokered coordinator snapshot route at `GET /v1/workspace/coordinator-status` in `services/dev-console-api`.
+- The coordinator snapshot now returns structured degraded output instead of a hard failure when one or more services are unavailable.
+- The snapshot includes:
+  - workspace and PostgreSQL reachability
+  - per-service error detail for runtime API, agent-memory, gateway, dev-console API, and dev-console web
+  - queue snapshots
+  - recent agent runs
+  - recent UI review runs
+  - blocked-task and stale-lease counts
+  - docs and skills catalog counts
+- `scripts/dev-coordinator-status.mjs` now uses a broker-first flow:
+  - signs in through runtime auth
+  - requests `/v1/workspace/coordinator-status`
+  - falls back to a direct DB-backed summary via `scripts/dev-coordinator-status-db.py` if the broker path is unavailable
+- Added a public broker proxy for `GET /v1/knowledge/claims/search` and aligned the claim-search response with generated contracts.
+- The dev-memory search surface now supports `lexical`, `vector`, and `hybrid` retrieval modes and returns lexical, semantic, and blended scores plus match reasons.
+- Advisory visual-enrichment output is now normalized into a compact summary payload so review and preview analyzers can surface stable counts and severities without treating the ML layer as authoritative.
+- Manual task retry now resets `attemptCount` to `0` before the task is requeued so fresh retry windows are visible and bounded.
+- This slice intentionally avoided `apps/dev-console-web/src/App.tsx` because the file already had concurrent local edits in the worktree; broker/status and retrieval changes landed without overwriting that UI work.
+
 ## Slide Communication Update 2026-03-28
 
 - Reworked the preview workspace in `apps/dev-console-web` so deck previews are usable as a human/agent communication surface instead of a raw render bucket.
@@ -187,6 +209,26 @@
   - `docs/operations/dev-console-carousel-workflow.md`
   - `.agents/skills/dev-console-hud-supervisor/SKILL.md`
 
+## Shell Layout And Review Hardening Update 2026-03-28
+
+- Hardened the dev-console shell so navigation labels no longer depend on the previously compressed `104px` command rail:
+  - widened the desktop command rail and launcher action band
+  - switched shell nav buttons to a two-column icon/copy layout
+  - allowed label text to wrap instead of clipping inside nav and marker buttons
+  - expanded carousel markers into a responsive grid so tray labels stay readable without being cut off
+- Increased the mission-surface viewport allocation while keeping tray content page-sized and bounded.
+- Added shell evidence directly into the Review workflow:
+  - selected review runs now show shell screenshots and mission-surface crops for each captured checkpoint
+- Upgraded the Playwright review harness so shell-level evidence is now first-class:
+  - full-shell screenshots are the primary checkpoint artifact
+  - mission-surface crops remain as secondary evidence
+  - deterministic analysis now checks for:
+    - missing shell controls
+    - top-level initial-load scroll
+    - navigation-label clipping
+    - existing loading, content, overflow, and baseline-diff regressions
+- Kept the current browser/API contracts unchanged; this slice stayed inside the existing dev-console and UI-review surfaces rather than adding a new broker path.
+
 ## Verification Notes
 
 - Current change set verification is recorded here after checks run so presentation artifacts can link to a durable repo source instead of transient chat output.
@@ -216,8 +258,24 @@
 - `node scripts/ui-review-smoke.mjs` — passed for capture and artifact generation
   - wrote trace zip plus checkpoint screenshots under `.clartk/dev/ui-review/manual-smoke/...`
   - deterministic analysis passed after the harness was corrected to wait for the initial console load to settle before scoring panels
+- `corepack yarn workspace @clartk/dev-console-web exec vite build` — passed
+- `node -e "import('./scripts/ui-review-lib.mjs')..."` — passed
+- `node scripts/ui-review-analyze.mjs --summary-path .clartk/dev/ui-review/runs/000008-dev-console-web-default/capture/capture-summary.json` — passed
+  - confirmed the analyzer remains backward-compatible with older capture summaries that do not yet include shell-level fields
+- `corepack yarn workspace @clartk/dev-console-web typecheck` — not run
+  - failed in this environment because `tsc` is not currently available on the PATH used by the workspace script
 - Broker/API UI review smoke — passed
   - `POST /v1/reviews/ui/runs` created review runs and queued the capture/analyze/fix-draft chain
+- `node scripts/dev-coordinator-status.mjs --json` against the current long-running local stack — passed in degraded fallback mode
+  - returned structured JSON instead of crashing while older long-running services were still missing the new broker route
+- `python3 -m py_compile scripts/dev-coordinator-status-db.py` — passed
+- `uv run pytest services/agent-memory/tests/test_service.py` — passed
+- Fresh broker validation against temporary services — passed
+  - temporary `agent-memory` on `4311` returned `/v1/internal/coordination/status` with queue, run, review, blocked, and stale counts
+  - temporary `dev-console-api` on `4302` returned `/v1/workspace/coordinator-status` through the full runtime-authenticated broker path
+  - `GET /v1/claims/search?q=preview&mode=hybrid&limit=3` returned structured hybrid results with lexical/semantic scoring
+- `corepack yarn workspace @clartk/dev-console-api typecheck` — not run
+  - this environment did not have `tsc` available on the PATH
   - worker execution on queue `ui-review-smoke` completed a clean run (`uiReviewRunId=4`) to `ready_for_review`
   - `GET /v1/reviews/ui/runs`, `GET /v1/reviews/ui/findings`, and `GET /v1/reviews/ui/assets` returned stored review state and evidence successfully
 - Finding review smoke — passed

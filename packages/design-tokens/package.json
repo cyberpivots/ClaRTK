@@ -10,6 +10,9 @@
       "react-native": "./src/index.ts"
     }
   },
+  "devDependencies": {
+    "typescript": "^6.0.2"
+  },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false"

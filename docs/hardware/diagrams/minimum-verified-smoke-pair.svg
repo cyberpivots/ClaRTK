@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">ClaRTK Minimum Verified Smoke Pair</title>
+  <desc id="desc">Blueprint-style overview of the current minimum verified base and rover smoke pair.</desc>
+  <style>
+    .bg { fill: #f4f8fb; }
+    .frame { fill: none; stroke: #16324f; stroke-width: 3; }
+    .panel { fill: #ffffff; stroke: #16324f; stroke-width: 3; rx: 18; ry: 18; }
+    .soft { fill: #e7f0f7; stroke: #3b6a8f; stroke-width: 2; rx: 14; ry: 14; }
+    .warn { fill: #fff3d6; stroke: #9a6b00; stroke-width: 2; rx: 14; ry: 14; }
+    .line { stroke: #16324f; stroke-width: 4; fill: none; }
+    .dash { stroke: #6b7f91; stroke-width: 4; fill: none; stroke-dasharray: 12 10; }
+    .title { font: 700 34px 'DejaVu Sans Mono', monospace; fill: #16324f; }
+    .label { font: 700 22px 'DejaVu Sans Mono', monospace; fill: #16324f; }
+    .body { font: 500 19px 'DejaVu Sans Mono', monospace; fill: #244964; }
+    .small { font: 500 17px 'DejaVu Sans Mono', monospace; fill: #35556f; }
+  </style>
+  <rect class="bg" x="0" y="0" width="1200" height="720"/>
+  <rect class="frame" x="24" y="24" width="1152" height="672" rx="24" ry="24"/>
+  <text class="title" x="60" y="76">ClaRTK Minimum Verified Smoke Pair</text>
+  <text class="body" x="60" y="110">Only parts proven in live inventory on 2026-03-28 are shown as solid blocks.</text>
+
+  <rect class="panel" x="70" y="160" width="470" height="300"/>
+  <text class="label" x="100" y="205">BASE SIDE</text>
+  <rect class="soft" x="110" y="240" width="180" height="110"/>
+  <text class="label" x="132" y="285">NavSpark</text>
+  <text class="body" x="132" y="316">smoke-navspark-base</text>
+  <text class="small" x="132" y="344">tracked GNSS board</text>
+
+  <rect class="soft" x="330" y="240" width="170" height="110"/>
+  <text class="label" x="356" y="285">XBee</text>
+  <text class="body" x="356" y="316">smoke-xbee-base</text>
+  <text class="small" x="356" y="344">tracked radio</text>
+
+  <path class="line" d="M290 295 L330 295"/>
+  <text class="small" x="255" y="280">serial</text>
+
+  <rect class="warn" x="110" y="376" width="390" height="58"/>
+  <text class="body" x="130" y="411">Needs verified power source and active antenna before wiring.</text>
+
+  <rect class="panel" x="660" y="160" width="470" height="300"/>
+  <text class="label" x="690" y="205">ROVER SIDE</text>
+  <rect class="soft" x="700" y="240" width="180" height="110"/>
+  <text class="label" x="722" y="285">NavSpark</text>
+  <text class="body" x="722" y="316">smoke-navspark-rover</text>
+  <text class="small" x="722" y="344">tracked GNSS board</text>
+
+  <rect class="soft" x="920" y="240" width="170" height="110"/>
+  <text class="label" x="946" y="285">XBee</text>
+  <text class="body" x="946" y="316">smoke-xbee-rover</text>
+  <text class="small" x="946" y="344">tracked radio</text>
+
+  <path class="line" d="M880 295 L920 295"/>
+  <text class="small" x="845" y="280">serial</text>
+
+  <rect class="warn" x="700" y="376" width="390" height="58"/>
+  <text class="body" x="720" y="411">Needs verified power source and active antenna before wiring.</text>
+
+  <path class="dash" d="M500 295 C 565 295, 635 295, 700 295"/>
+  <text class="label" x="500" y="260">radio link</text>
+
+  <rect class="panel" x="160" y="520" width="880" height="120"/>
+  <text class="label" x="190" y="565">ClaRTK tracking plane</text>
+  <text class="body" x="190" y="598">inventory.item  ->  inventory.unit  ->  inventory.build  ->  inventory.event</text>
+  <text class="small" x="190" y="626">A build should be created before assembly so the bench work stays auditable.</text>
+</svg>

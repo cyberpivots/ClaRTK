@@ -1,14 +1,21 @@
 # Rover Build Guide (v1)
 
 - Status: Draft
-- Date: 2026-03-27
+- Date: 2026-03-28
+
+Read this first if you are new to ClaRTK hardware:
+
+- [`start-here-beginner-blueprint.md`](start-here-beginner-blueprint.md)
+- [`recommended-reference-stack.md`](recommended-reference-stack.md)
 
 ## Required parts
 
-- 1x NavSpark PX1122r eval board (rover role)
-- 1x Digi XBee Pro 900 S3B radio + USB adapter (paired transport)
-- 1x ESP32 board for optional telemetry path
-- Power enclosure and mechanical mounting hardware
+- 1x rover-side receiver from the NavSpark starter kit
+- 1x included multi-frequency high precision antenna
+- 1x included LoRa antenna
+- 1x Raspberry Pi 4 Model B `4GB` or the same Pi host used for setup
+- 1x Raspberry Pi 15W USB-C Power Supply
+- 1x Raspberry Pi SD Card `32GB`
 
 ## Procedure
 
@@ -17,13 +24,13 @@
 2. Start paired build:
    - `POST /v1/inventory/builds` with required build context.
 3. Device-side integration:
-   - Mount GNSS module and serial transport according to board wiring standard.
-   - Validate USB and GPIO power rails with multimeter before firmware attach.
+   - Attach the included GNSS antenna and the included LoRa antenna.
+   - Connect the rover receiver to the Raspberry Pi host over `USB` during setup.
 4. Bench test:
    - Run base station pair smoke handshake after base build has reached `bench_validated`.
    - Confirm fixed task result JSON includes:
      - serial link establishment,
-     - packet cadence,
+     - rover-to-base packet cadence,
      - status transition to `bench_validated`.
 5. Runtime handoff:
    - Trigger publish request via `/v1/inventory/builds/{buildId}/runtime-publish`.
@@ -49,8 +56,8 @@
 ## Risk checks
 
 - Power sequencing:
-  - apply power only after all serial grounds are confirmed.
+  - power the Raspberry Pi from the official `5.1V / 3A` USB-C supply before rover setup.
 - Fault injection:
-  - disconnect radio serial for 5 seconds and confirm recoverable reconnect behavior.
+  - interrupt the `USB` session for 5 seconds and confirm recoverable reconnect behavior.
 - Moisture/environment:
   - route board into IP-rated enclosure before field move.
