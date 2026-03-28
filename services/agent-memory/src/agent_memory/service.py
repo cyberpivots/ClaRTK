@@ -6616,6 +6616,27 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                     )
                     return
                 if (
+                    len(path_parts) == 6
+                    and path_parts[:4] == ["v1", "internal", "previews", "runs"]
+                    and path_parts[4].isdigit()
+                    and path_parts[5] == "feedback"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.create_preview_feedback(
+                            preview_run_id=int(path_parts[4]),
+                            slide_id=str(payload["slideId"]) if payload.get("slideId") else None,
+                            feedback_kind=str(payload["feedbackKind"]),
+                            comment=str(payload.get("comment", "")),
+                            payload=ensure_dict(payload.get("payload")),
+                            created_by_account_id=str(payload["createdByAccountId"])
+                            if payload.get("createdByAccountId")
+                            else None,
+                        ),
+                    )
+                    return
+                if (
                     len(path_parts) == 7
                     and path_parts[:5] == ["v1", "internal", "reviews", "ui", "findings"]
                     and path_parts[5].isdigit()
