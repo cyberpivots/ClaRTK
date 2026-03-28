@@ -1206,6 +1206,311 @@ class MemoryRepository:
                 metadata=metadata,
             )
 
+<<<<<<< HEAD
+=======
+    def start_preview_run(
+        self,
+        payload: dict[str, Any],
+        *,
+        requested_by_account_id: str | None = None,
+    ) -> dict[str, Any]:
+        deck_key = extract_string(payload, "deckKey")
+        if not deck_key:
+            raise ValueError("deckKey is required")
+
+        markdown_path, companion_path, title = resolve_preview_source(deck_key)
+        queue_name = (
+            str(payload.get("queueName")).strip()
+            if isinstance(payload.get("queueName"), str) and str(payload.get("queueName")).strip()
+            else DEFAULT_AGENT_TASK_QUEUE
+        )
+        priority = int(payload.get("priority", 0))
+        viewport_json = ensure_dict(payload.get("viewportJson")) or dict(PREVIEW_DEFAULT_VIEWPORT)
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                INSERT INTO review.preview_run (
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  requested_by_account_id
+                )
+                VALUES (%s, %s, %s, %s, %s::review.preview_run_status, %s, %s, %s)
+                RETURNING
+                  preview_run_id,
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  render_task_id,
+                  analyze_task_id,
+                  manifest_json,
+                  render_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                """,
+                (
+                    deck_key,
+                    title,
+                    self._relative_repo_path(markdown_path),
+                    self._relative_repo_path(companion_path) if companion_path is not None else None,
+                    PREVIEW_STATUS_PLANNED,
+                    PREVIEW_DEFAULT_BROWSER,
+                    Jsonb(viewport_json),
+                    requested_by_account_id,
+                ),
+            ).fetchone()
+            if run_row is None:
+                raise RuntimeError("failed to create preview run")
+
+            preview_run_id = int(run_row["preview_run_id"])
+            artifact_dir = self._build_preview_artifact_dir(preview_run_id, deck_key=deck_key)
+            render_summary_path = artifact_dir / "render-summary.json"
+            analysis_summary_path = artifact_dir / "analysis" / "analysis-summary.json"
+            manifest_patch = {
+                "artifactDir": self._relative_repo_path(artifact_dir),
+                "renderSummaryPath": self._relative_repo_path(render_summary_path),
+                "analysisSummaryPath": self._relative_repo_path(analysis_summary_path),
+                "deckKey": deck_key,
+                "title": title,
+                "markdownPath": self._relative_repo_path(markdown_path),
+                "companionPath": self._relative_repo_path(companion_path)
+                if companion_path is not None
+                else None,
+                "viewport": viewport_json,
+            }
+            render_task = self._create_review_task(
+                connection,
+                task_kind=PREVIEW_RENDER_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={
+                    "previewRunId": preview_run_id,
+                    "deckKey": deck_key,
+                    "markdownPath": self._relative_repo_path(markdown_path),
+                    "companionPath": self._relative_repo_path(companion_path)
+                    if companion_path is not None
+                    else None,
+                    "artifactDir": self._relative_repo_path(artifact_dir),
+                    "viewportJson": viewport_json,
+                },
+            )
+            analyze_task = self._create_review_task(
+                connection,
+                task_kind=PREVIEW_ANALYZE_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={
+                    "previewRunId": preview_run_id,
+                    "artifactDir": self._relative_repo_path(artifact_dir),
+                    "viewportJson": viewport_json,
+                },
+            )
+            self._ensure_task_dependency(
+                connection,
+                int(analyze_task["agentTaskId"]),
+                int(render_task["agentTaskId"]),
+            )
+            connection.execute(
+                """
+                UPDATE review.preview_run
+                SET
+                  current_task_id = %s,
+                  render_task_id = %s,
+                  analyze_task_id = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW()
+                WHERE preview_run_id = %s
+                """,
+                (
+                    int(render_task["agentTaskId"]),
+                    int(render_task["agentTaskId"]),
+                    int(analyze_task["agentTaskId"]),
+                    Jsonb(manifest_patch),
+                    preview_run_id,
+                ),
+            )
+            for task in (render_task, analyze_task):
+                self._notify_task_ready(
+                    connection,
+                    queue_name=queue_name,
+                    task_kind=str(task["taskKind"]),
+                )
+            connection.commit()
+
+        created = self.get_preview_run(preview_run_id)
+        if created is None:
+            raise LookupError("preview run not found after creation")
+        return created
+
+    def list_preview_runs(self, *, limit: int = 25) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  preview_run_id,
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  render_task_id,
+                  analyze_task_id,
+                  manifest_json,
+                  render_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM review.preview_run
+                ORDER BY created_at DESC, preview_run_id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+        return [map_preview_run(row) for row in rows]
+
+    def get_preview_run(self, preview_run_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  preview_run_id,
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  render_task_id,
+                  analyze_task_id,
+                  manifest_json,
+                  render_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM review.preview_run
+                WHERE preview_run_id = %s
+                """,
+                (preview_run_id,),
+            ).fetchone()
+        return map_preview_run(row) if row is not None else None
+
+    def list_preview_feedback(
+        self,
+        *,
+        preview_run_id: int | None = None,
+        slide_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  preview_feedback_id,
+                  preview_run_id,
+                  slide_id,
+                  feedback_kind,
+                  comment,
+                  payload_json,
+                  created_by_account_id,
+                  created_at
+                FROM review.preview_feedback
+                WHERE (%s::BIGINT IS NULL OR preview_run_id = %s::BIGINT)
+                  AND (%s::TEXT IS NULL OR slide_id = %s::TEXT)
+                ORDER BY created_at DESC, preview_feedback_id DESC
+                LIMIT %s
+                """,
+                (preview_run_id, preview_run_id, slide_id, slide_id, limit),
+            ).fetchall()
+        return [map_preview_feedback(row) for row in rows]
+
+    def create_preview_feedback(
+        self,
+        preview_run_id: int,
+        *,
+        feedback_kind: str,
+        created_by_account_id: str,
+        slide_id: str | None = None,
+        comment: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if feedback_kind not in {"comment", "requested_changes", "approved", "rejected"}:
+            raise ValueError("feedbackKind is not supported")
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT preview_run_id
+                FROM review.preview_run
+                WHERE preview_run_id = %s
+                """,
+                (preview_run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise LookupError("preview run not found")
+
+            row = connection.execute(
+                """
+                INSERT INTO review.preview_feedback (
+                  preview_run_id,
+                  slide_id,
+                  feedback_kind,
+                  comment,
+                  payload_json,
+                  created_by_account_id
+                )
+                VALUES (%s, %s, %s::review.preview_feedback_kind, %s, %s, %s)
+                RETURNING
+                  preview_feedback_id,
+                  preview_run_id,
+                  slide_id,
+                  feedback_kind,
+                  comment,
+                  payload_json,
+                  created_by_account_id,
+                  created_at
+                """,
+                (
+                    preview_run_id,
+                    slide_id,
+                    feedback_kind,
+                    comment or "",
+                    Jsonb(payload or {}),
+                    created_by_account_id,
+                ),
+            ).fetchone()
+            connection.commit()
+
+        return map_preview_feedback(row)
+
+>>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)
     def start_ui_review(
         self,
         payload: dict[str, Any],
@@ -3630,6 +3935,10 @@ class MemoryRepository:
             return self._run_hardware_bench_validate(payload)
         if task_kind == HARDWARE_RUNTIME_REGISTER_TASK_KIND:
             return self._run_hardware_runtime_register(payload)
+        if task_kind == PREVIEW_RENDER_TASK_KIND:
+            return self._run_preview_render(payload, run_id=run_id, task=task)
+        if task_kind == PREVIEW_ANALYZE_TASK_KIND:
+            return self._run_preview_analyze(payload, run_id=run_id, task=task)
         if task_kind == UI_REVIEW_CAPTURE_TASK_KIND:
             return self._run_ui_review_capture(payload, run_id=run_id, task=task)
         if task_kind == UI_REVIEW_ANALYZE_TASK_KIND:
@@ -3638,6 +3947,10 @@ class MemoryRepository:
             return self._run_ui_review_fix_draft(payload, run_id=run_id, task=task)
         if task_kind == UI_REVIEW_PROMOTE_BASELINE_TASK_KIND:
             return self._run_ui_review_promote_baseline(payload, run_id=run_id, task=task)
+        if task_kind == PREVIEW_RENDER_TASK_KIND:
+            return self._run_preview_render(payload, run_id=run_id, task=task)
+        if task_kind == PREVIEW_ANALYZE_TASK_KIND:
+            return self._run_preview_analyze(payload, run_id=run_id, task=task)
 
         raise ValueError(f"unsupported task kind: {task_kind}")
 
@@ -4502,6 +4815,266 @@ class MemoryRepository:
             "promotedCount": len(promoted_descriptors),
         }
 
+    def _run_preview_render(
+        self,
+        payload: dict[str, Any],
+        *,
+        run_id: int,
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        preview_run_id = as_int(payload.get("previewRunId"))
+        if preview_run_id is None:
+            raise ValueError("previewRunId is required for preview.render")
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT deck_key, markdown_path, companion_path, viewport_json
+                FROM review.preview_run
+                WHERE preview_run_id = %s
+                FOR UPDATE
+                """,
+                (preview_run_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("preview run not found")
+
+            deck_key = str(row["deck_key"])
+            markdown_path = REPO_ROOT / str(row["markdown_path"])
+            companion_path = (
+                REPO_ROOT / str(row["companion_path"])
+                if row["companion_path"] is not None
+                else None
+            )
+            viewport_json = dict(row["viewport_json"] or {}) or dict(PREVIEW_DEFAULT_VIEWPORT)
+            artifact_dir = self._build_preview_artifact_dir(preview_run_id, deck_key=deck_key)
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            connection.execute(
+                """
+                UPDATE review.preview_run
+                SET
+                  status = %s::review.preview_run_status,
+                  current_task_id = %s,
+                  updated_at = NOW()
+                WHERE preview_run_id = %s
+                """,
+                (
+                    PREVIEW_STATUS_RENDER_RUNNING,
+                    task["agentTaskId"],
+                    preview_run_id,
+                ),
+            )
+            connection.commit()
+
+        result = self._run_json_command(
+            [
+                UI_REVIEW_NODE_BINARY,
+                str(PREVIEW_RENDER_SCRIPT),
+                "--artifact-dir",
+                str(artifact_dir),
+                "--markdown-path",
+                str(markdown_path),
+                *(
+                    ["--companion-path", str(companion_path)]
+                    if companion_path is not None
+                    else []
+                ),
+                "--viewport",
+                json.dumps(viewport_json),
+            ]
+        )
+        render_summary_path = REPO_ROOT / str(result["summaryPath"])
+        render_summary = json.loads(render_summary_path.read_text(encoding="utf-8"))
+        artifacts = [
+            descriptor
+            for descriptor in render_summary.get("artifacts", [])
+            if isinstance(descriptor, dict)
+        ]
+        artifacts.append(
+            {
+                "kind": "preview.render_summary",
+                "relativePath": self._relative_repo_path(render_summary_path),
+                "mediaType": "application/json",
+            }
+        )
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE review.preview_run
+                SET
+                  status = %s::review.preview_run_status,
+                  current_task_id = %s,
+                  render_summary_json = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW()
+                WHERE preview_run_id = %s
+                """,
+                (
+                    PREVIEW_STATUS_RENDERED,
+                    task["agentTaskId"],
+                    Jsonb(render_summary),
+                    Jsonb(
+                        {
+                            "entryRelativePath": render_summary.get("entryRelativePath"),
+                            "renderSummaryPath": self._relative_repo_path(render_summary_path),
+                        }
+                    ),
+                    preview_run_id,
+                ),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "preview_render_completed",
+                {
+                    "previewRunId": preview_run_id,
+                    "slideCount": render_summary.get("slideCount", 0),
+                    "artifactCount": len(artifacts),
+                },
+            )
+            self._record_preview_artifacts(connection, run_id, artifacts)
+            connection.commit()
+
+        return {
+            "previewRunId": preview_run_id,
+            "status": PREVIEW_STATUS_RENDERED,
+            "slideCount": render_summary.get("slideCount", 0),
+            "artifactCount": len(artifacts),
+            "summaryPath": self._relative_repo_path(render_summary_path),
+        }
+
+    def _run_preview_analyze(
+        self,
+        payload: dict[str, Any],
+        *,
+        run_id: int,
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        preview_run_id = as_int(payload.get("previewRunId"))
+        if preview_run_id is None:
+            raise ValueError("previewRunId is required for preview.analyze")
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT manifest_json, render_summary_json
+                FROM review.preview_run
+                WHERE preview_run_id = %s
+                FOR UPDATE
+                """,
+                (preview_run_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("preview run not found")
+
+            render_summary_json = dict(row["render_summary_json"] or {})
+            render_summary_path = render_summary_json.get("renderSummaryPath") or dict(
+                row["manifest_json"] or {}
+            ).get("renderSummaryPath")
+            if not isinstance(render_summary_path, str) or not render_summary_path:
+                raise ValueError("render summary path is not available for preview.analyze")
+            connection.execute(
+                """
+                UPDATE review.preview_run
+                SET
+                  status = %s::review.preview_run_status,
+                  current_task_id = %s,
+                  updated_at = NOW()
+                WHERE preview_run_id = %s
+                """,
+                (
+                    PREVIEW_STATUS_ANALYSIS_RUNNING,
+                    task["agentTaskId"],
+                    preview_run_id,
+                ),
+            )
+            connection.commit()
+
+        summary_path = REPO_ROOT / render_summary_path
+        result = self._run_json_command(
+            [
+                UI_REVIEW_NODE_BINARY,
+                str(PREVIEW_ANALYZE_SCRIPT),
+                "--summary-path",
+                str(summary_path),
+            ]
+        )
+        analysis_summary_path = REPO_ROOT / str(result["analysisSummaryPath"])
+        analysis_summary = json.loads(analysis_summary_path.read_text(encoding="utf-8"))
+        artifacts = [
+            descriptor
+            for descriptor in analysis_summary.get("artifacts", [])
+            if isinstance(descriptor, dict)
+        ]
+        artifacts.append(
+            {
+                "kind": "preview.analysis_summary",
+                "relativePath": self._relative_repo_path(analysis_summary_path),
+                "mediaType": "application/json",
+            }
+        )
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO eval.evaluation_result (subject, outcome, detail)
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    f"presentation-preview:{preview_run_id}",
+                    "warning"
+                    if analysis_summary.get("warnings")
+                    else "passed",
+                    Jsonb(
+                        {
+                            "previewRunId": preview_run_id,
+                            "artifactCount": len(artifacts),
+                            "warningCount": len(analysis_summary.get("warnings", [])),
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE review.preview_run
+                SET
+                  status = %s::review.preview_run_status,
+                  current_task_id = %s,
+                  analysis_summary_json = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW(),
+                  completed_at = NOW()
+                WHERE preview_run_id = %s
+                """,
+                (
+                    PREVIEW_STATUS_READY_FOR_REVIEW,
+                    task["agentTaskId"],
+                    Jsonb(analysis_summary),
+                    Jsonb({"analysisSummaryPath": self._relative_repo_path(analysis_summary_path)}),
+                    preview_run_id,
+                ),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "preview_analysis_completed",
+                {
+                    "previewRunId": preview_run_id,
+                    "artifactCount": len(artifacts),
+                    "warningCount": len(analysis_summary.get("warnings", [])),
+                },
+            )
+            self._record_preview_artifacts(connection, run_id, artifacts)
+            connection.commit()
+
+        return {
+            "previewRunId": preview_run_id,
+            "status": PREVIEW_STATUS_READY_FOR_REVIEW,
+            "artifactCount": len(artifacts),
+            "analysisSummaryPath": self._relative_repo_path(analysis_summary_path),
+        }
+
     def compute_dev_preference_scores(
         self,
         *,
@@ -4839,6 +5412,46 @@ class MemoryRepository:
             ),
         )
 
+    def _apply_preview_task_side_effects(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        task: dict[str, Any],
+        result: dict[str, Any],
+        success: bool,
+    ) -> None:
+        task_kind = str(task["taskKind"])
+        if task_kind not in {PREVIEW_RENDER_TASK_KIND, PREVIEW_ANALYZE_TASK_KIND}:
+            return
+
+        preview_run_id = as_int(dict(task["payload"] or {}).get("previewRunId"))
+        if preview_run_id is None or success:
+            return
+
+        connection.execute(
+            """
+            UPDATE review.preview_run
+            SET
+              status = %s::review.preview_run_status,
+              current_task_id = %s,
+              analysis_summary_json = analysis_summary_json || %s,
+              updated_at = NOW(),
+              completed_at = NOW()
+            WHERE preview_run_id = %s
+            """,
+            (
+                PREVIEW_STATUS_FAILED,
+                task.get("agentTaskId"),
+                Jsonb(
+                    {
+                        "lastError": result.get("error"),
+                        "failedTaskKind": task_kind,
+                    }
+                ),
+                preview_run_id,
+            ),
+        )
+
     def _record_failed_task(
         self,
         task: dict[str, Any],
@@ -4862,6 +5475,12 @@ class MemoryRepository:
                     success=False,
                 )
                 self._apply_ui_review_task_side_effects(
+                    connection,
+                    task=task,
+                    result={"error": str(error)},
+                    success=False,
+                )
+                self._apply_preview_task_side_effects(
                     connection,
                     task=task,
                     result={"error": str(error)},
@@ -5487,6 +6106,41 @@ def map_ui_review_baseline(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def map_preview_run(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "previewRunId": int(row["preview_run_id"]),
+        "deckKey": row["deck_key"],
+        "title": row["title"],
+        "markdownPath": row["markdown_path"],
+        "companionPath": row["companion_path"],
+        "status": row["status"],
+        "browser": row["browser"],
+        "viewportJson": row["viewport_json"] or {},
+        "currentTaskId": int(row["current_task_id"]) if row["current_task_id"] is not None else None,
+        "renderTaskId": int(row["render_task_id"]) if row["render_task_id"] is not None else None,
+        "analyzeTaskId": int(row["analyze_task_id"]) if row["analyze_task_id"] is not None else None,
+        "manifestJson": row["manifest_json"] or {},
+        "renderSummaryJson": row["render_summary_json"] or {},
+        "analysisSummaryJson": row["analysis_summary_json"] or {},
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+        "completedAt": row["completed_at"].isoformat() if row["completed_at"] is not None else None,
+    }
+
+
+def map_preview_feedback(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "previewFeedbackId": int(row["preview_feedback_id"]),
+        "previewRunId": int(row["preview_run_id"]),
+        "slideId": row["slide_id"],
+        "feedbackKind": row["feedback_kind"],
+        "comment": row["comment"],
+        "payloadJson": row["payload_json"] or {},
+        "createdByAccountId": row["created_by_account_id"],
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
 def map_dev_preference_signal(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "devPreferenceSignalId": int(row["dev_preference_signal_id"]),
@@ -5673,6 +6327,36 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         return
                     self.send_json(200, detail)
                     return
+                if parsed.path == "/v1/internal/previews/runs":
+                    self.require_internal_token()
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 25
+                    runs = repository.list_preview_runs(limit=limit)
+                    self.send_json(200, {"runs": runs, "source": "dev-memory", "total": len(runs)})
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "previews", "runs"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    run = repository.get_preview_run(int(path_parts[4]))
+                    if run is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, run)
+                    return
+                if parsed.path == "/v1/internal/previews/feedback":
+                    self.require_internal_token()
+                    preview_run_id = as_optional_int(query.get("previewRunId", [None])[0])
+                    slide_id = query.get("slideId", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    items = repository.list_preview_feedback(
+                        preview_run_id=preview_run_id,
+                        slide_id=slide_id,
+                        limit=limit,
+                    )
+                    self.send_json(200, {"items": items, "source": "dev-memory", "total": len(items)})
+                    return
                 if parsed.path == "/v1/internal/reviews/ui/runs":
                     self.require_internal_token()
                     surface = query.get("surface", [None])[0]
@@ -5729,6 +6413,40 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                             "total": len(baselines),
                         },
                     )
+                    return
+                if parsed.path == "/v1/internal/previews/runs":
+                    self.require_internal_token()
+                    deck_key = query.get("deckKey", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 25
+                    runs = repository.list_preview_runs(deck_key=deck_key, limit=limit)
+                    self.send_json(200, {"runs": runs, "source": "dev-memory", "total": len(runs)})
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "previews", "runs"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    run = repository.get_preview_run(int(path_parts[4]))
+                    if run is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, run)
+                    return
+                if parsed.path == "/v1/internal/previews/feedback":
+                    self.require_internal_token()
+                    preview_run_id = as_optional_int(query.get("previewRunId", [None])[0])
+                    if preview_run_id is None:
+                        self.send_json(400, {"error": "previewRunId is required"})
+                        return
+                    slide_id = query.get("slideId", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    items = repository.list_preview_feedback(
+                        preview_run_id=preview_run_id,
+                        slide_id=slide_id,
+                        limit=limit,
+                    )
+                    self.send_json(200, {"items": items, "source": "dev-memory", "total": len(items)})
                     return
                 if parsed.path == "/v1/internal/preferences/suggestions":
                     self.require_internal_token()
@@ -5826,6 +6544,37 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         ),
                     )
                     return
+                if parsed.path == "/v1/internal/previews/runs":
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.start_preview_run(
+                            payload=payload,
+                            requested_by_account_id=str(payload["requestedByAccountId"])
+                            if payload.get("requestedByAccountId")
+                            else None,
+                        ),
+                    )
+                    return
+                if (
+                    len(path_parts) == 6
+                    and path_parts[:4] == ["v1", "internal", "previews", "runs"]
+                    and path_parts[4].isdigit()
+                    and path_parts[5] == "feedback"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.create_preview_feedback(
+                            int(path_parts[4]),
+                            feedback_kind=str(payload.get("feedbackKind", "comment")),
+                            created_by_account_id=str(payload["createdByAccountId"]),
+                            slide_id=str(payload["slideId"]) if payload.get("slideId") else None,
+                            comment=str(payload["comment"]) if payload.get("comment") else None,
+                            payload=ensure_dict(payload.get("payload")),
+                        ),
+                    )
+                    return
                 if parsed.path == "/v1/internal/reviews/ui/runs":
                     self.require_internal_token()
                     self.send_json(
@@ -5834,6 +6583,34 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                             payload=payload,
                             requested_by_account_id=str(payload["requestedByAccountId"])
                             if payload.get("requestedByAccountId")
+                            else None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/previews/runs":
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.start_preview_run(
+                            payload=payload,
+                            requested_by_account_id=str(payload["requestedByAccountId"])
+                            if payload.get("requestedByAccountId")
+                            else None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/previews/feedback":
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.create_preview_feedback(
+                            preview_run_id=int(payload["previewRunId"]),
+                            slide_id=str(payload["slideId"]) if payload.get("slideId") else None,
+                            feedback_kind=str(payload["feedbackKind"]),
+                            comment=str(payload.get("comment", "")),
+                            payload=ensure_dict(payload.get("payload")),
+                            created_by_account_id=str(payload["createdByAccountId"])
+                            if payload.get("createdByAccountId")
                             else None,
                         ),
                     )

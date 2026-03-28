@@ -1882,6 +1882,7 @@ __metadata:
     pixelmatch: "npm:^7.1.0"
     playwright: "npm:^1.53.1"
     pngjs: "npm:^7.0.0"
+    reveal.js: "npm:^6.0.0"
     typescript: "npm:^5.8.2"
   languageName: unknown
   linkType: soft
@@ -4030,6 +4031,13 @@ __metadata:
   version: 1.1.0
   resolution: "reusify@npm:1.1.0"
   checksum: 10c0/4eff0d4a5f9383566c7d7ec437b671cc51b25963bd61bf127c3f3d3f68e44a026d99b8d2f1ad344afff8d278a8fe70a8ea092650a716d22287e8bef7126bb2fa
+  languageName: node
+  linkType: hard
+
+"reveal.js@npm:^6.0.0":
+  version: 6.0.0
+  resolution: "reveal.js@npm:6.0.0"
+  checksum: 10c0/a85fe3606988b0a4c4891fdd9c0387c08b3b436a1594cb1df62d0fa31314421d8b97d2616150bb8c7605268f2d0e7b5cec5d4093d209444abb000a11276e7c94
   languageName: node
   linkType: hard
 

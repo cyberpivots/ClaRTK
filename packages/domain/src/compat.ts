@@ -265,6 +265,67 @@ export interface InventoryEventCollection {
   total: number;
 }
 
+export interface PresentationDeckSource {
+  deckKey: string;
+  title: string;
+  markdownPath: string;
+  companionPath: string | null;
+  summary: string;
+  hasPreviewCompanion: boolean;
+  slideCount: number;
+  updatedAt: TimestampIsoString;
+  tags: string[];
+}
+
+export interface PresentationDeckSourceCollection {
+  items: PresentationDeckSource[];
+  source: "filesystem";
+  total: number;
+}
+
+export interface PreviewRun {
+  previewRunId: number;
+  deckKey: string;
+  title: string;
+  markdownPath: string;
+  companionPath: string | null;
+  status: string;
+  browser: string;
+  viewportJson: JsonObject;
+  currentTaskId: number | null;
+  renderTaskId: number | null;
+  analyzeTaskId: number | null;
+  manifestJson: JsonObject;
+  renderSummaryJson: JsonObject;
+  analysisSummaryJson: JsonObject;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+  completedAt: TimestampIsoString | null;
+}
+
+export interface PreviewRunCollection {
+  runs: PreviewRun[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface PreviewFeedback {
+  previewFeedbackId: number;
+  previewRunId: number;
+  slideId: string | null;
+  feedbackKind: string;
+  comment: string;
+  payloadJson: JsonObject;
+  createdByAccountId: string | null;
+  createdAt: TimestampIsoString;
+}
+
+export interface PreviewFeedbackCollection {
+  items: PreviewFeedback[];
+  source: "dev-memory";
+  total: number;
+}
+
 export interface UiReviewRun {
   uiReviewRunId: number;
   surface: string;

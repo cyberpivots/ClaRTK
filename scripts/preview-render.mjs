@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import path from "node:path";
 
 import { DEFAULT_VIEWPORT, parseJsonArg, renderPresentationPreview } from "./presentation-preview-lib.mjs";
@@ -27,3 +28,8 @@ const result = await renderPresentationPreview({
 });
 
 console.log(JSON.stringify(result, null, 2));
+=======
+#!/usr/bin/env node
+
+import "./presentation-preview-render.mjs";
+>>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)

@@ -389,6 +389,20 @@ assert_query_equals \
   "SELECT (to_regclass('review.ui_baseline') IS NOT NULL)::int;"
 
 assert_query_equals \
+  "preview run table present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regclass('review.preview_run') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "preview feedback table present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regclass('review.preview_feedback') IS NOT NULL)::int;"
+
+assert_query_equals \
   "ui review run status enum present" \
   "1" \
   "$dev_url" \

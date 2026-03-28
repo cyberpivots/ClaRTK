@@ -285,6 +285,78 @@ class InventoryEventCollection:
     total: int
 
 @dataclass(slots=True, kw_only=True)
+class PresentationDeckSource:
+    deck_key: str
+    title: str
+    markdown_path: str
+    companion_path: str
+    summary: str
+    has_preview_companion: bool
+    slide_count: int
+    updated_at: str
+    tags: List[str] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class PresentationDeckSourceCollection:
+    items: List[PresentationDeckSource] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class PresentationSlide:
+    slide_id: str
+    title: str
+    audience_goal: str
+    bullets: List[str] = field(default_factory=list)
+    visual_guidance: str
+    evidence_paths: List[str] = field(default_factory=list)
+    has_preview_override: bool
+    media_json: str
+
+@dataclass(slots=True, kw_only=True)
+class PreviewRun:
+    preview_run_id: int
+    deck_key: str
+    title: str
+    markdown_path: str
+    companion_path: str
+    status: str
+    browser: str
+    viewport_json: str
+    current_task_id: int
+    render_task_id: int
+    analyze_task_id: int
+    manifest_json: str
+    render_summary_json: str
+    analysis_summary_json: str
+    created_at: str
+    updated_at: str
+    completed_at: str
+
+@dataclass(slots=True, kw_only=True)
+class PreviewRunCollection:
+    runs: List[PreviewRun] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class PreviewFeedback:
+    preview_feedback_id: int
+    preview_run_id: int
+    slide_id: str
+    feedback_kind: str
+    comment: str
+    payload_json: str
+    created_by_account_id: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class PreviewFeedbackCollection:
+    items: List[PreviewFeedback] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
 class UiReviewRun:
     ui_review_run_id: int
     surface: str
@@ -376,6 +448,21 @@ class ReviewUiFindingRequest:
 class PromoteUiReviewBaselineRequest:
     queue_name: str
     priority: int
+
+@dataclass(slots=True, kw_only=True)
+class StartPreviewRunRequest:
+    deck_key: str
+    queue_name: str
+    priority: int
+    viewport_json: str
+
+@dataclass(slots=True, kw_only=True)
+class CreatePreviewFeedbackRequest:
+    preview_run_id: int
+    slide_id: str
+    feedback_kind: str
+    comment: str
+    payload_json: str
 
 @dataclass(slots=True, kw_only=True)
 class StartHardwareBuildRequest:

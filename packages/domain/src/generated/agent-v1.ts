@@ -284,6 +284,78 @@ export interface InventoryEventCollection {
   total: number;
 }
 
+export interface PresentationDeckSource {
+  deckKey: string;
+  title: string;
+  markdownPath: string;
+  companionPath: string;
+  summary: string;
+  hasPreviewCompanion: boolean;
+  slideCount: number;
+  updatedAt: string;
+  tags: string[];
+}
+
+export interface PresentationDeckSourceCollection {
+  items: PresentationDeckSource[];
+  source: string;
+  total: number;
+}
+
+export interface PresentationSlide {
+  slideId: string;
+  title: string;
+  audienceGoal: string;
+  bullets: string[];
+  visualGuidance: string;
+  evidencePaths: string[];
+  hasPreviewOverride: boolean;
+  mediaJson: string;
+}
+
+export interface PreviewRun {
+  previewRunId: number;
+  deckKey: string;
+  title: string;
+  markdownPath: string;
+  companionPath: string;
+  status: string;
+  browser: string;
+  viewportJson: string;
+  currentTaskId: number;
+  renderTaskId: number;
+  analyzeTaskId: number;
+  manifestJson: string;
+  renderSummaryJson: string;
+  analysisSummaryJson: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+}
+
+export interface PreviewRunCollection {
+  runs: PreviewRun[];
+  source: string;
+  total: number;
+}
+
+export interface PreviewFeedback {
+  previewFeedbackId: number;
+  previewRunId: number;
+  slideId: string;
+  feedbackKind: string;
+  comment: string;
+  payloadJson: string;
+  createdByAccountId: string;
+  createdAt: string;
+}
+
+export interface PreviewFeedbackCollection {
+  items: PreviewFeedback[];
+  source: string;
+  total: number;
+}
+
 export interface UiReviewRun {
   uiReviewRunId: number;
   surface: string;
@@ -375,6 +447,21 @@ export interface ReviewUiFindingRequest {
 export interface PromoteUiReviewBaselineRequest {
   queueName: string;
   priority: number;
+}
+
+export interface StartPreviewRunRequest {
+  deckKey: string;
+  queueName: string;
+  priority: number;
+  viewportJson: string;
+}
+
+export interface CreatePreviewFeedbackRequest {
+  previewRunId: number;
+  slideId: string;
+  feedbackKind: string;
+  comment: string;
+  payloadJson: string;
 }
 
 export interface StartHardwareBuildRequest {

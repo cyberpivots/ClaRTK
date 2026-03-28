@@ -317,6 +317,85 @@ pub struct InventoryEventCollection {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct PresentationDeckSource {
+    pub deck_key: String,
+    pub title: String,
+    pub markdown_path: String,
+    pub companion_path: String,
+    pub summary: String,
+    pub has_preview_companion: bool,
+    pub slide_count: i32,
+    pub updated_at: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PresentationDeckSourceCollection {
+    pub items: Vec<PresentationDeckSource>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PresentationSlide {
+    pub slide_id: String,
+    pub title: String,
+    pub audience_goal: String,
+    pub bullets: Vec<String>,
+    pub visual_guidance: String,
+    pub evidence_paths: Vec<String>,
+    pub has_preview_override: bool,
+    pub media_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewRun {
+    pub preview_run_id: i64,
+    pub deck_key: String,
+    pub title: String,
+    pub markdown_path: String,
+    pub companion_path: String,
+    pub status: String,
+    pub browser: String,
+    pub viewport_json: String,
+    pub current_task_id: i64,
+    pub render_task_id: i64,
+    pub analyze_task_id: i64,
+    pub manifest_json: String,
+    pub render_summary_json: String,
+    pub analysis_summary_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewRunCollection {
+    pub runs: Vec<PreviewRun>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewFeedback {
+    pub preview_feedback_id: i64,
+    pub preview_run_id: i64,
+    pub slide_id: String,
+    pub feedback_kind: String,
+    pub comment: String,
+    pub payload_json: String,
+    pub created_by_account_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewFeedbackCollection {
+    pub items: Vec<PreviewFeedback>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct UiReviewRun {
     pub ui_review_run_id: i64,
     pub surface: String,
@@ -416,6 +495,23 @@ pub struct ReviewUiFindingRequest {
 pub struct PromoteUiReviewBaselineRequest {
     pub queue_name: String,
     pub priority: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartPreviewRunRequest {
+    pub deck_key: String,
+    pub queue_name: String,
+    pub priority: i32,
+    pub viewport_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreatePreviewFeedbackRequest {
+    pub preview_run_id: i64,
+    pub slide_id: String,
+    pub feedback_kind: String,
+    pub comment: String,
+    pub payload_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

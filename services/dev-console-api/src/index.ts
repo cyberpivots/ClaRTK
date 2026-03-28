@@ -22,6 +22,11 @@ import type {
   InventoryItemCollection,
   InventoryUnit,
   InventoryUnitCollection,
+  PresentationDeckSourceCollection,
+  PreviewFeedback,
+  PreviewFeedbackCollection,
+  PreviewRun,
+  PreviewRunCollection,
   UiReviewBaselineCollection,
   UiReviewFinding,
   UiReviewFindingCollection,
@@ -45,6 +50,7 @@ import type {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");
 const uiReviewRoot = path.resolve(repoRoot, ".clartk/dev/ui-review");
+const previewRoot = path.resolve(repoRoot, ".clartk/dev/presentation-preview");
 
 const config = {
   host: process.env.CLARTK_DEV_CONSOLE_API_HOST ?? "0.0.0.0",
@@ -66,6 +72,8 @@ const allowedTaskKinds = new Set([
   "preferences.compute_dev_preference_scores",
   "catalog.refresh_doc_catalog",
   "catalog.refresh_skill_catalog",
+  "preview.render",
+  "preview.analyze",
   "ui.review.capture",
   "ui.review.analyze",
   "ui.review.fix_draft",
@@ -299,6 +307,127 @@ app.get("/v1/reviews/ui/assets", async (request, reply) => {
   }
 
   reply.header("Cache-Control", "no-store");
+  reply.type(mediaTypeForAsset(resolvedPath));
+  return reply.send(createReadStream(resolvedPath));
+});
+
+app.get("/v1/previews/decks", async (request): Promise<PresentationDeckSourceCollection> => {
+  await requireAdmin(request.headers);
+  return buildPreviewDeckCatalog();
+});
+
+app.get("/v1/previews/runs", async (request): Promise<PreviewRunCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const route = suffix ? `/v1/internal/previews/runs?${suffix}` : "/v1/internal/previews/runs";
+  return agentMemoryInternalRequest<PreviewRunCollection>(route);
+});
+
+app.get("/v1/previews/runs/:previewRunId", async (request): Promise<PreviewRun> => {
+  await requireAdmin(request.headers);
+  const previewRunId = requireInteger(
+    (request.params as Record<string, unknown>).previewRunId,
+    "previewRunId"
+  );
+  return agentMemoryInternalRequest<PreviewRun>(`/v1/internal/previews/runs/${previewRunId}`);
+});
+
+app.post("/v1/previews/runs", async (request): Promise<PreviewRun> => {
+  const me = await requireAdmin(request.headers);
+  const body = asBody(request.body);
+  const deckKey = requireString(body.deckKey, "deckKey");
+  const deckCatalog = await buildPreviewDeckCatalog();
+  const deck = deckCatalog.items.find((item) => item.deckKey === deckKey);
+  if (!deck) {
+    throw new ApiError(404, `preview deck not found: ${deckKey}`);
+  }
+
+  return agentMemoryInternalRequest<PreviewRun>("/v1/internal/previews/runs", {
+    method: "POST",
+    body: {
+      deckKey,
+      queueName: typeof body.queueName === "string" ? body.queueName : undefined,
+      priority: typeof body.priority === "number" ? body.priority : 0,
+      viewportJson: ensureJsonObject(body.viewportJson),
+      requestedByAccountId: me.account.accountId
+    }
+  });
+});
+
+app.get("/v1/previews/feedback", async (request): Promise<PreviewFeedbackCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const route = suffix ? `/v1/internal/previews/feedback?${suffix}` : "/v1/internal/previews/feedback";
+  return agentMemoryInternalRequest<PreviewFeedbackCollection>(route);
+});
+
+app.post(
+  "/v1/previews/runs/:previewRunId/feedback",
+  async (request): Promise<PreviewFeedback> => {
+    const me = await requireAdmin(request.headers);
+    const previewRunId = requireInteger(
+      (request.params as Record<string, unknown>).previewRunId,
+      "previewRunId"
+    );
+    const body = asBody(request.body);
+    return agentMemoryInternalRequest<PreviewFeedback>(
+      `/v1/internal/previews/runs/${previewRunId}/feedback`,
+      {
+        method: "POST",
+        body: {
+          slideId: typeof body.slideId === "string" ? body.slideId : undefined,
+          feedbackKind: typeof body.feedbackKind === "string" ? body.feedbackKind : "comment",
+          comment: typeof body.comment === "string" ? body.comment : "",
+          payload: ensureJsonObject(body.payload),
+          createdByAccountId: me.account.accountId
+        }
+      }
+    );
+  }
+);
+
+app.get("/v1/previews/assets", async (request, reply) => {
+  await requireAdmin(request.headers);
+  const relativePath = requireString((request.query as Record<string, unknown>).path, "path");
+  const resolvedPath = path.resolve(repoRoot, relativePath);
+  const normalizedRoot = previewRoot.endsWith(path.sep) ? previewRoot : `${previewRoot}${path.sep}`;
+  if (resolvedPath !== previewRoot && !resolvedPath.startsWith(normalizedRoot)) {
+    throw new ApiError(403, "asset path must stay within .clartk/dev/presentation-preview");
+  }
+
+  try {
+    const stats = await fs.stat(resolvedPath);
+    if (!stats.isFile()) {
+      throw new ApiError(404, "asset not found");
+    }
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    throw new ApiError(404, "asset not found");
+  }
+
+  reply.header("Cache-Control", "no-store");
+  reply.header("X-Content-Type-Options", "nosniff");
+  if (resolvedPath.endsWith(".html")) {
+    reply.header(
+      "Content-Security-Policy",
+      [
+        "default-src 'none'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https: http:",
+        "media-src 'self' data: https: http:",
+        "frame-src https: http:",
+        "font-src 'self' data:",
+        "connect-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'"
+      ].join("; ")
+    );
+  }
   reply.type(mediaTypeForAsset(resolvedPath));
   return reply.send(createReadStream(resolvedPath));
 });
@@ -590,8 +719,32 @@ function mediaTypeForAsset(assetPath: string): string {
   if (assetPath.endsWith(".png")) {
     return "image/png";
   }
+  if (assetPath.endsWith(".jpg") || assetPath.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (assetPath.endsWith(".svg")) {
+    return "image/svg+xml";
+  }
+  if (assetPath.endsWith(".html")) {
+    return "text/html; charset=utf-8";
+  }
+  if (assetPath.endsWith(".css")) {
+    return "text/css; charset=utf-8";
+  }
+  if (assetPath.endsWith(".js")) {
+    return "text/javascript; charset=utf-8";
+  }
   if (assetPath.endsWith(".webm")) {
     return "video/webm";
+  }
+  if (assetPath.endsWith(".mp4")) {
+    return "video/mp4";
+  }
+  if (assetPath.endsWith(".mp3")) {
+    return "audio/mpeg";
+  }
+  if (assetPath.endsWith(".wav")) {
+    return "audio/wav";
   }
   if (assetPath.endsWith(".zip")) {
     return "application/zip";
@@ -799,6 +952,51 @@ async function buildDocsCatalog(): Promise<DocsCatalogResponse> {
   return {
     items: items.sort((left, right) => left.path.localeCompare(right.path)),
     source: "filesystem"
+  };
+}
+
+async function buildPreviewDeckCatalog(): Promise<PresentationDeckSourceCollection> {
+  const presentationsRoot = path.join(repoRoot, "docs", "presentations");
+  const entries = await walkMarkdownFiles(presentationsRoot);
+  const items = [];
+  for (const markdownPath of entries) {
+    const basename = path.basename(markdownPath);
+    if (basename === "index.md" || basename.endsWith("-canva-brief.md")) {
+      continue;
+    }
+    const content = await fs.readFile(markdownPath, "utf8");
+    const relativePath = path.relative(repoRoot, markdownPath).replaceAll(path.sep, "/");
+    const companionPath = markdownPath.replace(/\.md$/, ".preview.json");
+    let hasPreviewCompanion = false;
+    try {
+      await fs.access(companionPath);
+      hasPreviewCompanion = true;
+    } catch {
+      hasPreviewCompanion = false;
+    }
+    const slideCount = content.split(/\r?\n/).filter((line) => /^##\s+Slide\s+\d+/.test(line)).length;
+    const tags = ["presentation"];
+    if (hasPreviewCompanion) {
+      tags.push("preview");
+    }
+    items.push({
+      deckKey: path.basename(markdownPath, ".md"),
+      title: extractTitle(content, path.basename(markdownPath, ".md")),
+      markdownPath: relativePath,
+      companionPath: hasPreviewCompanion
+        ? path.relative(repoRoot, companionPath).replaceAll(path.sep, "/")
+        : null,
+      summary: extractSummary(content),
+      hasPreviewCompanion,
+      slideCount,
+      updatedAt: (await fs.stat(markdownPath)).mtime.toISOString(),
+      tags
+    });
+  }
+  return {
+    items: items.sort((left, right) => left.markdownPath.localeCompare(right.markdownPath)),
+    source: "filesystem",
+    total: items.length
   };
 }
 

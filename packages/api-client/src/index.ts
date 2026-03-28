@@ -21,6 +21,11 @@ import type {
   InventoryRuntimePublishResponse,
   InventoryUnit,
   InventoryUnitCollection,
+  PresentationDeckSourceCollection,
+  PreviewFeedback,
+  PreviewFeedbackCollection,
+  PreviewRun,
+  PreviewRunCollection,
   UiReviewBaselineCollection,
   UiReviewFinding,
   UiReviewFindingCollection,
@@ -361,10 +366,84 @@ export class DevConsoleClient extends JsonClient {
     return this.getJson<AgentRunDetail>(`/v1/coordination/runs/${agentRunId}`);
   }
 
+  previewAssetUrl(relativePath: string): string {
+    const url = new URL("/v1/previews/assets", this.url("/"));
+    url.searchParams.set("path", relativePath);
+    return url.toString();
+  }
+
   uiReviewAssetUrl(relativePath: string): string {
     const url = new URL("/v1/reviews/ui/assets", this.url("/"));
     url.searchParams.set("path", relativePath);
     return url.toString();
+  }
+
+  async listPreviewDecks(): Promise<PresentationDeckSourceCollection> {
+    return this.getJson<PresentationDeckSourceCollection>("/v1/previews/decks");
+  }
+
+  async listPreviewRuns(query: { limit?: number } = {}): Promise<PreviewRunCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/previews/runs?${suffix}` : "/v1/previews/runs";
+    return this.getJson<PreviewRunCollection>(route);
+  }
+
+  async getPreviewRun(previewRunId: number): Promise<PreviewRun> {
+    return this.getJson<PreviewRun>(`/v1/previews/runs/${previewRunId}`);
+  }
+
+  async startPreviewRun(payload: {
+    deckKey: string;
+    queueName?: string;
+    priority?: number;
+    viewportJson?: JsonObject;
+  }): Promise<PreviewRun> {
+    return this.sendJson<PreviewRun>("/v1/previews/runs", {
+      method: "POST",
+      body: payload
+    });
+  }
+
+  async listPreviewFeedback(query: {
+    previewRunId?: number;
+    slideId?: string;
+    limit?: number;
+  } = {}): Promise<PreviewFeedbackCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.previewRunId === "number") {
+      params.set("previewRunId", String(query.previewRunId));
+    }
+    if (typeof query.slideId === "string" && query.slideId) {
+      params.set("slideId", query.slideId);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/previews/feedback?${suffix}` : "/v1/previews/feedback";
+    return this.getJson<PreviewFeedbackCollection>(route);
+  }
+
+  async createPreviewFeedback(payload: {
+    previewRunId: number;
+    slideId?: string | null;
+    feedbackKind: string;
+    comment?: string;
+    payload?: JsonObject;
+  }): Promise<PreviewFeedback> {
+    return this.sendJson<PreviewFeedback>(`/v1/previews/runs/${payload.previewRunId}/feedback`, {
+      method: "POST",
+      body: {
+        slideId: payload.slideId,
+        feedbackKind: payload.feedbackKind,
+        comment: payload.comment,
+        payload: payload.payload
+      }
+    });
   }
 
   async listUiReviewRuns(query: { surface?: string; limit?: number } = {}): Promise<UiReviewRunCollection> {

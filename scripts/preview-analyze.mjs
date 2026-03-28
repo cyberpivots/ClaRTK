@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import path from "node:path";
 
 import { analyzePresentationPreview } from "./presentation-preview-lib.mjs";
@@ -17,3 +18,8 @@ const result = await analyzePresentationPreview({
 });
 
 console.log(JSON.stringify(result, null, 2));
+=======
+#!/usr/bin/env node
+
+import "./presentation-preview-analyze.mjs";
+>>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)

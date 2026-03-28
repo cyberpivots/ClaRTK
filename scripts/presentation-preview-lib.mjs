@@ -266,7 +266,16 @@ export async function materializeDeckArtifacts(deck, artifactDir, sourceDirector
         media.push({ ...descriptor, resolvedSrc: descriptor.src });
         continue;
       }
+<<<<<<< HEAD
       const sourcePath = path.resolve(sourceDirectory, descriptor.src);
+=======
+      let sourcePath = path.resolve(sourceDirectory, descriptor.src);
+      try {
+        await fs.access(sourcePath);
+      } catch {
+        sourcePath = path.resolve(repoRoot, descriptor.src);
+      }
+>>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)
       const parsed = path.parse(sourcePath);
       const digest = createHash("sha1").update(sourcePath).digest("hex").slice(0, 8);
       const targetName = `${sanitizeIdentifier(parsed.name)}-${digest}${parsed.ext}`;
@@ -404,17 +413,30 @@ function renderMediaItem(item) {
     return `<figure class="media-card"><img src="${escapeAttribute(item.resolvedSrc)}" alt="${escapeAttribute(item.alt ?? item.title ?? "")}" loading="lazy" />${caption}</figure>`;
   }
   if (item.kind === "video") {
+<<<<<<< HEAD
     return `<figure class="media-card"><video src="${escapeAttribute(item.resolvedSrc)}" ${booleanAttribute(item.controls, true)} ${booleanAttribute(item.muted, false)} ${booleanAttribute(item.loop, false)} ${booleanAttribute(item.autoplay, false)} playsinline preload="metadata" ${item.poster ? `poster="${escapeAttribute(item.poster)}"` : ""}></video>${caption}</figure>`;
   }
   if (item.kind === "audio") {
     return `<figure class="media-card"><audio src="${escapeAttribute(item.resolvedSrc)}" ${booleanAttribute(item.controls, true)} preload="metadata"></audio>${caption}</figure>`;
+=======
+    return `<figure class="media-card"><video src="${escapeAttribute(item.resolvedSrc)}" ${renderBooleanAttribute("controls", item.controls, true)} ${renderBooleanAttribute("muted", item.muted, false)} ${renderBooleanAttribute("loop", item.loop, false)} ${renderBooleanAttribute("autoplay", item.autoplay, false)} playsinline preload="metadata" ${item.poster ? `poster="${escapeAttribute(item.poster)}"` : ""}></video>${caption}</figure>`;
+  }
+  if (item.kind === "audio") {
+    return `<figure class="media-card"><audio src="${escapeAttribute(item.resolvedSrc)}" ${renderBooleanAttribute("controls", item.controls, true)} preload="metadata"></audio>${caption}</figure>`;
+>>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)
   }
   return `<figure class="media-card media-embed"><iframe src="${escapeAttribute(item.resolvedSrc)}" title="${escapeAttribute(item.title ?? item.caption ?? "Embedded preview")}" loading="lazy" allow="${escapeAttribute(item.allow ?? "fullscreen; autoplay")}" referrerpolicy="no-referrer"></iframe>${caption}</figure>`;
 }
 
+<<<<<<< HEAD
 function booleanAttribute(value, fallback) {
   const resolved = value === undefined ? fallback : Boolean(value);
   return resolved ? "controls" : "";
+=======
+function renderBooleanAttribute(name, value, fallback) {
+  const resolved = value === undefined ? fallback : Boolean(value);
+  return resolved ? name : "";
+>>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)
 }
 
 export function renderPreviewTheme(manifest) {
@@ -606,4 +628,7 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value).replaceAll("'", "&#39;");
 }
+<<<<<<< HEAD
 
+=======
+>>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)
