@@ -25,6 +25,8 @@ from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from agent_memory.vision import VisualAsset, run_local_visual_enrichment
+
 DEFAULT_AGENT_MEMORY_HOST = "0.0.0.0"
 DEFAULT_AGENT_MEMORY_PORT = 3100
 DEFAULT_AGENT_MEMORY_JOBS = [
@@ -460,6 +462,21 @@ def build_dev_preference_scorecard(
         for signal in signals
         if signal.get("signalKind") == "evidence_format_selected"
     ]
+    hud_densities = [
+        extract_string(signal.get("payload", {}), "density", "value")
+        for signal in signals
+        if signal.get("signalKind") == "hud_density_selected"
+    ]
+    motion_modes = [
+        extract_string(signal.get("payload", {}), "motionMode", "value")
+        for signal in signals
+        if signal.get("signalKind") == "motion_mode_selected"
+    ]
+    preview_subpanes = [
+        extract_string(signal.get("payload", {}), "subpane", "value")
+        for signal in signals
+        if signal.get("signalKind") == "preview_subpane_selected"
+    ]
 
     accepted_actions = [
         decision
@@ -495,6 +512,15 @@ def build_dev_preference_scorecard(
     preferred_evidence_format, evidence_confidence = choose_top_value(
         [value for value in evidence_formats if value]
     )
+    preferred_hud_density, density_mode_confidence = choose_top_value(
+        [value for value in hud_densities if value]
+    )
+    preferred_motion_mode, motion_confidence = choose_top_value(
+        [value for value in motion_modes if value]
+    )
+    preferred_preview_subpane, preview_subpane_confidence = choose_top_value(
+        [value for value in preview_subpanes if value]
+    )
 
     total_action_decisions = (
         len(accepted_actions) + len(rejected_actions) + len(overridden_actions)
@@ -513,6 +539,9 @@ def build_dev_preference_scorecard(
         "acceptedActionCount": len(accepted_actions),
         "rejectedActionCount": len(rejected_actions),
         "overriddenActionCount": len(overridden_actions),
+        "hudDensitySelectionCount": len([value for value in hud_densities if value]),
+        "motionModeSelectionCount": len([value for value in motion_modes if value]),
+        "previewSubpaneSelectionCount": len([value for value in preview_subpanes if value]),
     }
     scorecard = {
         "preferredLandingPanel": {
@@ -534,6 +563,18 @@ def build_dev_preference_scorecard(
         "preferredEvidenceFormat": {
             "value": preferred_evidence_format,
             "confidence": evidence_confidence,
+        },
+        "preferredHudDensity": {
+            "value": preferred_hud_density,
+            "confidence": density_mode_confidence,
+        },
+        "preferredMotionMode": {
+            "value": preferred_motion_mode,
+            "confidence": motion_confidence,
+        },
+        "preferredPreviewSubpane": {
+            "value": preferred_preview_subpane,
+            "confidence": preview_subpane_confidence,
         },
         "automationStyle": {
             "value": automation_style,
@@ -1258,6 +1299,43 @@ class MemoryRepository:
                 uri=f"clartk://workspace/{relative_path}",
                 metadata=metadata,
             )
+
+    def _collect_visual_assets(
+        self,
+        descriptors: list[dict[str, Any]],
+        *,
+        kind_prefixes: tuple[str, ...],
+    ) -> list[VisualAsset]:
+        assets: list[VisualAsset] = []
+        for descriptor in descriptors:
+            kind = str(descriptor.get("kind", "")).strip()
+            relative_path = str(descriptor.get("relativePath", "")).strip()
+            if not kind or not relative_path:
+                continue
+            if not any(kind.startswith(prefix) for prefix in kind_prefixes):
+                continue
+            absolute_path = REPO_ROOT / relative_path
+            assets.append(
+                VisualAsset(
+                    kind=kind,
+                    relative_path=relative_path,
+                    absolute_path=absolute_path,
+                    label=str(descriptor.get("slideId") or absolute_path.name),
+                )
+            )
+        return assets
+
+    def _write_visual_enrichment_artifact(
+        self,
+        base_dir: Path,
+        payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        if not payload:
+            return None
+        base_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = base_dir / "ml-summary.json"
+        artifact_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return self._relative_repo_path(artifact_path), payload
 
     def start_preview_run(
         self,
@@ -4507,6 +4585,32 @@ class MemoryRepository:
                 "mediaType": "application/json",
             }
         )
+        visual_assets = self._collect_visual_assets(
+            artifacts,
+            kind_prefixes=("ui.review.screenshot", "ui.review.failure_screenshot"),
+        )
+        ml_summary = run_local_visual_enrichment(
+            visual_assets,
+            analyzer_kind="ui.review.analyze",
+        )
+        ml_artifact = self._write_visual_enrichment_artifact(
+            analysis_summary_path.parent,
+            ml_summary,
+        )
+        if ml_artifact is not None:
+            ml_relative_path, stored_ml_summary = ml_artifact
+            analysis_summary["ml"] = stored_ml_summary
+            artifacts.append(
+                {
+                    "kind": "ui.review.ml_summary",
+                    "relativePath": ml_relative_path,
+                    "mediaType": "application/json",
+                }
+            )
+            analysis_summary_path.write_text(
+                json.dumps(analysis_summary, indent=2),
+                encoding="utf-8",
+            )
 
         with self.connect() as connection:
             run_row = connection.execute(
@@ -4599,6 +4703,7 @@ class MemoryRepository:
                             "artifactCount": len(artifacts),
                             "surface": run_row["surface"],
                             "scenarioSet": run_row["scenario_set"],
+                            "mlStatus": analysis_summary.get("ml", {}).get("status"),
                         }
                     ),
                 ),
@@ -5139,6 +5244,32 @@ class MemoryRepository:
                 "mediaType": "application/json",
             }
         )
+        visual_assets = self._collect_visual_assets(
+            artifacts,
+            kind_prefixes=("preview.analysis.screenshot",),
+        )
+        ml_summary = run_local_visual_enrichment(
+            visual_assets,
+            analyzer_kind="preview.analyze",
+        )
+        ml_artifact = self._write_visual_enrichment_artifact(
+            analysis_summary_path.parent,
+            ml_summary,
+        )
+        if ml_artifact is not None:
+            ml_relative_path, stored_ml_summary = ml_artifact
+            analysis_summary["ml"] = stored_ml_summary
+            artifacts.append(
+                {
+                    "kind": "preview.ml_summary",
+                    "relativePath": ml_relative_path,
+                    "mediaType": "application/json",
+                }
+            )
+            analysis_summary_path.write_text(
+                json.dumps(analysis_summary, indent=2),
+                encoding="utf-8",
+            )
 
         with self.connect() as connection:
             connection.execute(
@@ -5156,6 +5287,7 @@ class MemoryRepository:
                             "previewRunId": preview_run_id,
                             "artifactCount": len(artifacts),
                             "warningCount": len(analysis_summary.get("warnings", [])),
+                            "mlStatus": analysis_summary.get("ml", {}).get("status"),
                         }
                     ),
                 ),

@@ -3,3 +3,10 @@ psycopg[binary]>=3.2.6
 
 [dev]
 pytest>=8.3.5
+
+[vision]
+easyocr>=1.7.2
+onnxruntime-gpu>=1.24.4
+opencv-python-headless>=4.13.0.92
+scikit-image>=0.26.0
+transformers>=5.4.0

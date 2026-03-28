@@ -23,7 +23,9 @@ import type {
   UiReviewRunCollection,
   WorkspaceOverview
 } from "@clartk/domain";
-import { AppFrame, Panel, StatusPill } from "@clartk/ui-web";
+
+type HudDensity = "compact" | "comfortable";
+type MotionMode = "reduced" | "standard";
 
 function browserBaseUrl(defaultPort: number): string {
   if (typeof window === "undefined") {
@@ -122,6 +124,8 @@ interface ConsoleState {
   reviewBaselines: UiReviewBaselineCollection | null;
   selectedPanel: PanelKey;
   detailDepth: "compact" | "expanded";
+  hudDensity: HudDensity;
+  motionMode: MotionMode;
   selectedRunId: number | null;
   notice: string | null;
   error: string | null;
@@ -153,6 +157,8 @@ export function App() {
     reviewBaselines: null,
     selectedPanel: "preview",
     detailDepth: "expanded",
+    hudDensity: "compact",
+    motionMode: "reduced",
     selectedRunId: null,
     notice: null,
     error: null,
@@ -166,6 +172,8 @@ export function App() {
   const [authMode, setAuthMode] = React.useState<"login" | "bootstrap">("login");
   const lastPanelSignal = React.useRef<PanelKey | null>(null);
   const lastDetailSignal = React.useRef<"compact" | "expanded" | null>(null);
+  const lastHudDensitySignal = React.useRef<HudDensity | null>(null);
+  const lastMotionModeSignal = React.useRef<MotionMode | null>(null);
   const consoleLoadInFlight = React.useRef(false);
   const consoleLoadToken = React.useRef(0);
   const stateRef = React.useRef(state);
@@ -239,6 +247,90 @@ export function App() {
       }));
     }).catch(() => {});
   }, [state.me, state.detailDepth, state.loading, state.devProfile]);
+
+  React.useEffect(() => {
+    if (!state.me || state.me.account.role !== "admin" || state.loading || !state.devProfile) {
+      return;
+    }
+    if (lastHudDensitySignal.current === state.hudDensity) {
+      return;
+    }
+    lastHudDensitySignal.current = state.hudDensity;
+    void devConsoleApi.createDevPreferenceSignal({
+      signalKind: "hud_density_selected",
+      payload: { density: state.hudDensity, value: state.hudDensity }
+    }).then((signal) => {
+      setState((current) => ({
+        ...current,
+        devProfile: current.devProfile
+          ? {
+              ...current.devProfile,
+              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
+            }
+          : current.devProfile
+      }));
+    }).catch(() => {});
+  }, [state.me, state.hudDensity, state.loading, state.devProfile]);
+
+  React.useEffect(() => {
+    if (!state.me || state.me.account.role !== "admin" || state.loading || !state.devProfile) {
+      return;
+    }
+    if (lastMotionModeSignal.current === state.motionMode) {
+      return;
+    }
+    lastMotionModeSignal.current = state.motionMode;
+    void devConsoleApi.createDevPreferenceSignal({
+      signalKind: "motion_mode_selected",
+      payload: { motionMode: state.motionMode, value: state.motionMode }
+    }).then((signal) => {
+      setState((current) => ({
+        ...current,
+        devProfile: current.devProfile
+          ? {
+              ...current.devProfile,
+              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
+            }
+          : current.devProfile
+      }));
+    }).catch(() => {});
+  }, [state.me, state.motionMode, state.loading, state.devProfile]);
+
+  React.useEffect(() => {
+    const scorecard = asRecord(state.devProfile?.score?.scorecard);
+    const preferredHudDensity = parseScorecardChoice(scorecard?.preferredHudDensity, [
+      "compact",
+      "comfortable"
+    ]);
+    const preferredMotionMode = parseScorecardChoice(scorecard?.preferredMotionMode, [
+      "reduced",
+      "standard"
+    ]);
+    if (!preferredHudDensity && !preferredMotionMode) {
+      return;
+    }
+    setState((current) => {
+      const nextHudDensity =
+        current.hudDensity === "compact" && preferredHudDensity
+          ? preferredHudDensity
+          : current.hudDensity;
+      const nextMotionMode =
+        current.motionMode === "reduced" && preferredMotionMode
+          ? preferredMotionMode
+          : current.motionMode;
+      if (
+        nextHudDensity === current.hudDensity &&
+        nextMotionMode === current.motionMode
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        hudDensity: nextHudDensity,
+        motionMode: nextMotionMode
+      };
+    });
+  }, [state.devProfile]);
 
   async function loadSession() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -727,6 +819,30 @@ export function App() {
     }
   }
 
+  async function handlePreviewSubpaneChange(mode: "conversation" | "deck") {
+    if (!state.me || state.me.account.role !== "admin" || state.loading || !state.devProfile) {
+      return;
+    }
+    try {
+      const signal = await devConsoleApi.createDevPreferenceSignal({
+        signalKind: "preview_subpane_selected",
+        panelKey: "preview",
+        payload: { subpane: mode, value: mode }
+      });
+      setState((current) => ({
+        ...current,
+        devProfile: current.devProfile
+          ? {
+              ...current.devProfile,
+              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
+            }
+          : current.devProfile
+      }));
+    } catch {
+      // preference learning stays best-effort
+    }
+  }
+
   async function handleRunSelection(agentRunId: number) {
     try {
       const detail = await devConsoleApi.getRun(agentRunId);
@@ -849,6 +965,15 @@ export function App() {
     : state.runs?.items[0]
       ? `#${state.runs.items[0].agentRunId}`
       : "none";
+  const panelMetrics: Record<PanelKey, string> = {
+    preview: `${state.previewRuns?.runs.length ?? 0} runs`,
+    overview: `${healthyServiceCount}/${totalServiceCount || 0} healthy`,
+    coordination: `${state.tasks?.items.length ?? 0} tasks`,
+    review: `${state.reviewRuns?.runs.length ?? 0} reviews`,
+    knowledge: `${state.claims?.items.length ?? 0} claims`,
+    docs: `${state.docs?.items.length ?? 0} docs`,
+    preferences: `${state.devProfile?.recentSignals.length ?? 0} signals`
+  };
 
   let selectedPanelContent: React.ReactNode = null;
   if (state.selectedPanel === "preview") {
@@ -863,6 +988,7 @@ export function App() {
         onStartPreview={handlePreviewStart}
         onSelectPreviewRun={handlePreviewRunSelection}
         onSubmitFeedback={handlePreviewFeedbackSubmit}
+        onStageModeChange={handlePreviewSubpaneChange}
       />
     );
   } else if (state.selectedPanel === "overview") {
@@ -919,22 +1045,22 @@ export function App() {
   }
 
   const sessionPanel = (
-    <Panel title="Session" eyebrow="Access">
+    <Panel title="Operator Session" eyebrow="Access" accent="muted">
       {state.me ? (
-        <div style={{ display: "grid", gap: tokens.space.md }}>
-          <div style={{ display: "flex", gap: tokens.space.md, alignItems: "center", flexWrap: "wrap" }}>
+        <div className="hud-session-stack">
+          <div className="hud-session-row">
             <StatusPill status={isAdmin ? "ok" : "degraded"}>
               {state.me.account.role}
             </StatusPill>
             <strong>{state.me.account.displayName}</strong>
-            <span>{state.me.account.email}</span>
+            <span className="hud-muted">{state.me.account.email}</span>
             <button onClick={() => void handleLogout()}>Sign out</button>
           </div>
           {!isAdmin ? <p>Development console access is limited to admin accounts.</p> : null}
         </div>
       ) : (
-        <form onSubmit={handleAuthSubmit} style={{ display: "grid", gap: tokens.space.md, maxWidth: 420 }}>
-          <div style={{ display: "flex", gap: tokens.space.sm }}>
+        <form onSubmit={handleAuthSubmit} className="hud-auth-form">
+          <div className="hud-auth-toggle">
             <button type="button" onClick={() => setAuthMode("login")}>
               Login
             </button>
@@ -991,83 +1117,170 @@ export function App() {
   return (
     <AppFrame
       title="ClaRTK Development Interface"
-      subtitle="Admin-only development console for compact workspace review, production screen previews, and bounded coordination."
+      subtitle="Military-ops HUD for preview runs, supervised review, and bounded development coordination."
+      density={state.hudDensity}
+      motionMode={state.motionMode}
     >
       {isAdmin ? (
         <div className="console-shell">
-          <aside className="console-sidebar">
-            {sessionPanel}
-            {state.notice ? <Message tone="ok">{state.notice}</Message> : null}
-            {state.error ? <Message tone="error">{state.error}</Message> : null}
-
-            <Panel title="Console Surface" eyebrow="Navigation" accent="muted">
-              <div className="console-nav">
-                {panelDefinitions.map((panel) => (
-                  <button
-                    key={panel.key}
-                    className={`console-nav-button${state.selectedPanel === panel.key ? " is-active" : ""}`}
-                    onClick={() => setState((current) => ({ ...current, selectedPanel: panel.key }))}
-                  >
-                    <span className="console-nav-title">{panel.label}</span>
-                    <span className="console-nav-description">{panel.description}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="console-toolbar">
-                <label className="console-inline-field">
-                  <span>Detail depth</span>
-                  <select
-                    value={state.detailDepth}
-                    onChange={(event) =>
-                      setState((current) => ({
-                        ...current,
-                        detailDepth: event.target.value as "compact" | "expanded"
-                      }))
-                    }
-                    style={inputStyle}
-                  >
-                    <option value="compact">compact</option>
-                    <option value="expanded">expanded</option>
-                  </select>
-                </label>
-                <button onClick={() => void loadConsoleData(state.selectedRunId ?? undefined)}>
-                  Refresh
-                </button>
-              </div>
-            </Panel>
-
-            <Panel title="Current Focus" eyebrow={activePanel.eyebrow} accent="muted">
-              <div className="console-focus-grid">
-                <InfoCard label="Panel" value={activePanel.label} detail={activePanel.description} />
-                <InfoCard
-                  label="Depth"
+          <div className="telemetry-strip">
+            <div className="telemetry-group">
+              <TelemetryChip label="Workspace" value={state.overview?.status ?? (state.loading ? "loading" : "unknown")} />
+              <TelemetryChip label="Services" value={`${healthyServiceCount}/${totalServiceCount || 0}`} />
+              <TelemetryChip label="Preview" value={state.selectedPreviewRun ? `#${state.selectedPreviewRun.previewRunId}` : "idle"} />
+              <TelemetryChip label="Review" value={state.selectedReviewRun ? `#${state.selectedReviewRun.uiReviewRunId}` : "idle"} />
+              <TelemetryChip label="Queue" value={selectedRunLabel} />
+            </div>
+            <div className="telemetry-controls">
+              <label className="console-inline-field">
+                <span>Density</span>
+                <select
+                  value={state.hudDensity}
+                  onChange={(event) =>
+                    setState((current) => ({
+                      ...current,
+                      hudDensity: event.target.value as HudDensity
+                    }))
+                  }
+                  style={inputStyle}
+                >
+                  <option value="compact">compact</option>
+                  <option value="comfortable">comfortable</option>
+                </select>
+              </label>
+              <label className="console-inline-field">
+                <span>Motion</span>
+                <select
+                  value={state.motionMode}
+                  onChange={(event) =>
+                    setState((current) => ({
+                      ...current,
+                      motionMode: event.target.value as MotionMode
+                    }))
+                  }
+                  style={inputStyle}
+                >
+                  <option value="reduced">reduced</option>
+                  <option value="standard">standard</option>
+                </select>
+              </label>
+              <label className="console-inline-field">
+                <span>Detail depth</span>
+                <select
                   value={state.detailDepth}
-                  detail={
-                    state.detailDepth === "compact"
-                      ? "Summaries trimmed for faster scanning."
-                      : "Expanded payloads and longer lists."
+                  onChange={(event) =>
+                    setState((current) => ({
+                      ...current,
+                      detailDepth: event.target.value as "compact" | "expanded"
+                    }))
                   }
-                />
-                <InfoCard
-                  label="Workspace"
-                  value={state.overview?.status ?? (state.loading ? "loading" : "unknown")}
-                  detail={
-                    totalServiceCount
-                      ? `${healthyServiceCount}/${totalServiceCount} services healthy`
-                      : "Refresh to load current service health."
-                  }
-                />
-                <InfoCard
-                  label="Selected run"
-                  value={selectedRunLabel}
-                  detail={state.runDetail?.run.taskSlug ?? "Choose a run from coordination."}
-                />
-              </div>
-            </Panel>
-          </aside>
+                  style={inputStyle}
+                >
+                  <option value="compact">compact</option>
+                  <option value="expanded">expanded</option>
+                </select>
+              </label>
+              <button onClick={() => void loadConsoleData(state.selectedRunId ?? undefined)}>
+                Refresh
+              </button>
+            </div>
+          </div>
 
-          <div className="console-main">
-            {selectedPanelContent}
+          {state.notice ? <Message tone="ok">{state.notice}</Message> : null}
+          {state.error ? <Message tone="error">{state.error}</Message> : null}
+
+          <div className="console-grid">
+            <aside className="command-rail">
+              <Panel title="Console Surface" eyebrow="Command Rail" accent="muted">
+                <div className="console-nav">
+                  {panelDefinitions.map((panel) => (
+                    <button
+                      key={panel.key}
+                      className={`console-nav-button${state.selectedPanel === panel.key ? " is-active" : ""}`}
+                      onClick={() => setState((current) => ({ ...current, selectedPanel: panel.key }))}
+                    >
+                      <span className="console-nav-title">{panel.label}</span>
+                      <span className="console-nav-description">{panel.description}</span>
+                      <span className="console-nav-metric">{panelMetrics[panel.key]}</span>
+                    </button>
+                  ))}
+                </div>
+              </Panel>
+              {sessionPanel}
+            </aside>
+
+            <main className="console-main">
+              {selectedPanelContent}
+            </main>
+
+            <aside className="context-rail">
+              <Panel title="Current Focus" eyebrow={activePanel.eyebrow} accent="muted">
+                <div className="console-focus-grid">
+                  <InfoCard label="Panel" value={activePanel.label} detail={activePanel.description} />
+                  <InfoCard
+                    label="Density"
+                    value={state.hudDensity}
+                    detail={
+                      state.hudDensity === "compact"
+                        ? "High-density telemetry and tighter cards."
+                        : "More breathing room for longer inspection."
+                    }
+                  />
+                  <InfoCard
+                    label="Motion"
+                    value={state.motionMode}
+                    detail={
+                      state.motionMode === "reduced"
+                        ? "State changes stay restrained."
+                        : "Ambient transitions enabled."
+                    }
+                  />
+                  <InfoCard
+                    label="Selected run"
+                    value={selectedRunLabel}
+                    detail={state.runDetail?.run.taskSlug ?? "Choose a run from coordination."}
+                  />
+                  <InfoCard
+                    label="Preview stage"
+                    value={state.selectedPreviewRun?.status ?? "idle"}
+                    detail={state.selectedPreviewRun?.deckKey ?? "Select a deck to inspect render output."}
+                  />
+                  <InfoCard
+                    label="Review lane"
+                    value={state.selectedReviewRun?.status ?? "idle"}
+                    detail={
+                      state.reviewFindings?.findings.length
+                        ? `${state.reviewFindings.findings.length} findings loaded`
+                        : "No findings loaded."
+                    }
+                  />
+                </div>
+              </Panel>
+              <Panel title="Mission Brief" eyebrow="Ops Context" accent="muted">
+                <div className="detail-stack">
+                  <div className="detail-card">
+                    <div className="section-heading">
+                      <h4>Primary objective</h4>
+                      <p>Preview remains the dominant surface for usable HTML review artifacts.</p>
+                    </div>
+                    <p className="detail-copy">
+                      Use this HUD to render concepts, inspect slide-linked evidence, and keep
+                      human approvals attached to the same development run.
+                    </p>
+                  </div>
+                  <div className="detail-card">
+                    <FactGrid
+                      entries={[
+                        { label: "Deck sources", value: String(state.previewDecks?.items.length ?? 0) },
+                        { label: "Preview runs", value: String(state.previewRuns?.runs.length ?? 0) },
+                        { label: "Review baselines", value: String(state.reviewBaselines?.baselines.length ?? 0) },
+                        { label: "Preference signals", value: String(state.devProfile?.recentSignals.length ?? 0) }
+                      ]}
+                    />
+                  </div>
+                </div>
+              </Panel>
+            </aside>
           </div>
         </div>
       ) : (
@@ -1095,6 +1308,64 @@ function resolveSettledResult<T>(
   return fallback;
 }
 
+function AppFrame(props: {
+  title: string;
+  subtitle: string;
+  density: HudDensity;
+  motionMode: MotionMode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={`hud-frame hud-density-${props.density} hud-motion-${props.motionMode}`}
+    >
+      <header className="hud-hero">
+        <div className="hud-hero-copy">
+          <span className="hud-kicker">ClaRTK // Development Interface</span>
+          <h1>{props.title}</h1>
+          <p>{props.subtitle}</p>
+        </div>
+      </header>
+      <div className="hud-body">{props.children}</div>
+    </div>
+  );
+}
+
+function Panel(props: {
+  title: string;
+  eyebrow: string;
+  accent?: "muted" | "default";
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={`hud-panel${props.accent === "muted" ? " hud-panel-muted" : ""}`}>
+      <header className="hud-panel-header">
+        <span className="hud-panel-eyebrow">{props.eyebrow}</span>
+        <h2>{props.title}</h2>
+      </header>
+      <div className="hud-panel-body">{props.children}</div>
+    </section>
+  );
+}
+
+function StatusPill(props: {
+  status: "ok" | "neutral" | "degraded";
+  children: React.ReactNode;
+}) {
+  return (
+    <span className={`hud-status-pill hud-status-${props.status}`}>{props.children}</span>
+  );
+}
+
+function TelemetryChip(props: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="telemetry-chip">
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
+    </div>
+  );
+}
+
 function PreviewPanel(props: {
   previewDecks: PresentationDeckSourceCollection | null;
   previewRuns: PreviewRunCollection | null;
@@ -1110,6 +1381,7 @@ function PreviewPanel(props: {
     comment: string,
     slideId?: string | null
   ) => void;
+  onStageModeChange: (mode: "conversation" | "deck") => void;
 }) {
   const decks = props.previewDecks?.items ?? [];
   const runs = props.previewRuns?.runs ?? [];
@@ -1126,6 +1398,8 @@ function PreviewPanel(props: {
   const [focusedSlideId, setFocusedSlideId] = React.useState<string | null>(null);
   const [feedbackSlideId, setFeedbackSlideId] = React.useState("");
   const [feedbackComment, setFeedbackComment] = React.useState("");
+  const [stageMode, setStageMode] = React.useState<"conversation" | "deck">("conversation");
+  const lastStageModeSignal = React.useRef<"conversation" | "deck" | null>(null);
   const deckSignature = decks.map((deck) => deck.deckKey).join("|");
   const slideSignature = slides.map((slide) => slide.slideId).join("|");
   const selectedDeck = decks.find((deck) => deck.deckKey === selectedDeckKey) ?? decks[0] ?? null;
@@ -1134,6 +1408,17 @@ function PreviewPanel(props: {
   const previewHtmlPath = extractPreviewHtmlPath(selectedRun);
   const previewUrl = previewHtmlPath ? devConsoleApi.previewAssetUrl(previewHtmlPath) : null;
   const selectedPreviewDeckKey = selectedRun?.deckKey ?? null;
+  const runFeedbackItems = feedbackItems.filter((item) => !item.slideId);
+  const slideFeedbackItems = selectedSlide
+    ? feedbackItems.filter((item) => item.slideId === selectedSlide.slideId)
+    : [];
+  const communicationItems =
+    selectedSlide && slideFeedbackItems.length
+      ? [...slideFeedbackItems, ...runFeedbackItems]
+      : runFeedbackItems.length
+        ? runFeedbackItems
+        : slideFeedbackItems;
+  const communicationSummary = summarizePreviewFeedback(communicationItems);
 
   React.useEffect(() => {
     setSelectedDeckKey((current) => {
@@ -1162,7 +1447,16 @@ function PreviewPanel(props: {
   React.useEffect(() => {
     setFeedbackSlideId("");
     setFeedbackComment("");
+    setStageMode("conversation");
   }, [selectedRun?.previewRunId]);
+
+  React.useEffect(() => {
+    if (lastStageModeSignal.current === stageMode) {
+      return;
+    }
+    lastStageModeSignal.current = stageMode;
+    void props.onStageModeChange(stageMode);
+  }, [props.onStageModeChange, stageMode]);
 
   function submitFeedback(feedbackKind: string) {
     if (!selectedRun) {
@@ -1286,19 +1580,46 @@ function PreviewPanel(props: {
               </p>
             </div>
             {selectedRun ? (
-              <div className="preview-chip-row">
-                <StatusPill status={statusToneForPreviewRun(selectedRun.status)}>
-                  {selectedRun.status}
-                </StatusPill>
-                <StatusPill status={previewAnalysis.hasWarnings ? "neutral" : "ok"}>
-                  {previewAnalysis.hasWarnings ? "analysis warnings" : "analysis clean"}
-                </StatusPill>
+              <div className="preview-stage-actions">
+                <div className="preview-chip-row">
+                  <StatusPill status={statusToneForPreviewRun(selectedRun.status)}>
+                    {selectedRun.status}
+                  </StatusPill>
+                  <StatusPill status={previewAnalysis.hasWarnings ? "neutral" : "ok"}>
+                    {previewAnalysis.hasWarnings ? "analysis warnings" : "analysis clean"}
+                  </StatusPill>
+                </div>
+                <div className="preview-stage-toggle">
+                  <button
+                    className={stageMode === "conversation" ? "is-active" : ""}
+                    onClick={() => setStageMode("conversation")}
+                  >
+                    Slide review
+                  </button>
+                  <button
+                    className={stageMode === "deck" ? "is-active" : ""}
+                    onClick={() => setStageMode("deck")}
+                    disabled={!previewUrl}
+                  >
+                    Full deck
+                  </button>
+                </div>
               </div>
             ) : null}
           </div>
 
           <div className="preview-stage-frame">
-            {previewUrl ? (
+            {selectedRun && stageMode === "conversation" ? (
+              <SlideConversationStage
+                run={selectedRun}
+                selectedSlide={selectedSlide}
+                slides={slides}
+                communicationItems={communicationItems}
+                communicationSummary={communicationSummary}
+                previewUrl={previewUrl}
+                onSelectSlide={setFocusedSlideId}
+              />
+            ) : previewUrl ? (
               <iframe
                 key={previewUrl}
                 title={selectedRun?.title ?? "Preview run"}
@@ -1454,8 +1775,8 @@ function PreviewPanel(props: {
           <section className="preview-section">
             <div className="preview-section-header">
               <div>
-                <h3>Feedback</h3>
-                <p>Run-level decisions and optional slide-level comments are stored together.</p>
+                <h3>Communication Thread</h3>
+                <p>Run-level decisions and slide-specific review stay in one supervised thread.</p>
               </div>
             </div>
             {selectedRun ? (
@@ -1495,6 +1816,19 @@ function PreviewPanel(props: {
             ) : (
               <p className="preview-empty-state">Select a preview run before leaving feedback.</p>
             )}
+
+            {communicationItems.length ? (
+              <div className="preview-feedback-summary">
+                <StatusPill status="neutral">
+                  {selectedSlide ? `${slideFeedbackItems.length} slide-scoped` : "run-scoped"}
+                </StatusPill>
+                <StatusPill status="ok">{communicationSummary.approvedCount} approved</StatusPill>
+                <StatusPill status="neutral">
+                  {communicationSummary.requestedChangesCount} requested changes
+                </StatusPill>
+                <StatusPill status="degraded">{communicationSummary.rejectedCount} rejected</StatusPill>
+              </div>
+            ) : null}
 
             <div className="preview-feedback-list">
               {feedbackItems.length ? (
@@ -2289,17 +2623,10 @@ function ActionRow(props: {
 
 function InfoCard(props: { label: string; value: string; detail?: string }) {
   return (
-    <div
-      style={{
-        background: tokens.color.panelAlt,
-        border: `1px solid ${tokens.color.line}`,
-        borderRadius: tokens.radius.md,
-        padding: tokens.space.md
-      }}
-    >
-      <div style={{ color: tokens.color.muted, fontSize: 12, textTransform: "uppercase" }}>{props.label}</div>
-      <strong style={{ display: "block", marginTop: tokens.space.xs }}>{props.value}</strong>
-      {props.detail ? <div style={{ marginTop: tokens.space.sm, color: tokens.color.muted }}>{props.detail}</div> : null}
+    <div className="hud-info-card">
+      <div className="hud-info-label">{props.label}</div>
+      <strong className="hud-info-value">{props.value}</strong>
+      {props.detail ? <div className="hud-info-detail">{props.detail}</div> : null}
     </div>
   );
 }
@@ -2374,6 +2701,141 @@ function PreviewEmptyState(props: { loading: boolean }) {
         <div className="preview-placeholder-card">
           <strong>Review the result</strong>
           <p>Rendered HTML opens here, while slide notes and feedback stay visible in the inspector.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SlideConversationStage(props: {
+  run: PreviewRun;
+  selectedSlide: PreviewManifestSlide | null;
+  slides: PreviewManifestSlide[];
+  communicationItems: PreviewFeedbackCollection["items"];
+  communicationSummary: ReturnType<typeof summarizePreviewFeedback>;
+  previewUrl: string | null;
+  onSelectSlide: (slideId: string) => void;
+}) {
+  const selectedSlide = props.selectedSlide;
+  const screenshotUrl = selectedSlide?.screenshotPath
+    ? devConsoleApi.previewAssetUrl(selectedSlide.screenshotPath)
+    : null;
+
+  return (
+    <div className="slide-review-stage">
+      <div className="slide-review-media">
+        {screenshotUrl ? (
+          <a href={screenshotUrl} target="_blank" rel="noreferrer" className="slide-review-hero-link">
+            <img
+              src={screenshotUrl}
+              alt={selectedSlide?.title ?? "Slide screenshot"}
+              className="slide-review-hero"
+            />
+          </a>
+        ) : (
+          <div className="slide-review-empty">
+            <span className="deck-preview-eyebrow">Conversation view</span>
+            <h4>{selectedSlide ? selectedSlide.title : props.run.title}</h4>
+            <p>
+              {selectedSlide
+                ? "This slide does not have a captured screenshot yet. Use the source notes and thread context to guide the next revision."
+                : "Open a slide from the rail or use the full-deck view when rendered HTML is the better communication surface."}
+            </p>
+          </div>
+        )}
+        {props.slides.length ? (
+          <div className="slide-review-rail">
+            {props.slides.slice(0, 12).map((slide, index) => (
+              <button
+                key={slide.slideId}
+                className={`slide-review-rail-item${selectedSlide?.slideId === slide.slideId ? " is-active" : ""}`}
+                onClick={() => props.onSelectSlide(slide.slideId)}
+              >
+                <span className="slide-review-rail-index">{String(index + 1).padStart(2, "0")}</span>
+                <span className="slide-review-rail-copy">
+                  <strong>{slide.title}</strong>
+                  <span>{slide.slideId}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="slide-review-panel">
+        <div className="section-heading">
+          <h4>Interactive review context</h4>
+          <p>Human and agent communication anchored to the currently selected deck or slide.</p>
+        </div>
+        <FactGrid
+          entries={[
+            { label: "Run", value: `#${props.run.previewRunId}` },
+            { label: "Current scope", value: selectedSlide?.slideId ?? "Entire run" },
+            { label: "Messages", value: String(props.communicationSummary.totalCount) },
+            { label: "Comments", value: String(props.communicationSummary.commentCount) },
+            { label: "Requested changes", value: String(props.communicationSummary.requestedChangesCount) },
+            { label: "Approvals", value: String(props.communicationSummary.approvedCount) }
+          ]}
+        />
+        {props.previewUrl ? (
+          <a href={props.previewUrl} target="_blank" rel="noreferrer" className="artifact-link">
+            Open rendered deck artifact
+          </a>
+        ) : null}
+        {selectedSlide ? (
+          <div className="detail-stack">
+            <div className="detail-card">
+              <div className="section-heading">
+                <h4>Slide briefing</h4>
+                <p>{selectedSlide.title}</p>
+              </div>
+              <StructuredValue
+                value={{
+                  audienceGoal: selectedSlide.audienceGoal || "Not specified",
+                  visualGuidance: selectedSlide.visualGuidance || "Not specified",
+                  speakerNotes: selectedSlide.speakerNotes || "Not specified"
+                }}
+              />
+            </div>
+            <div className="detail-card">
+              <div className="section-heading">
+                <h4>Slide payload</h4>
+                <p>Bullets, media, and evidence paths that should survive revision.</p>
+              </div>
+              <StructuredValue
+                value={{
+                  bullets: selectedSlide.bullets,
+                  media: selectedSlide.media.map((media) =>
+                    media.source ? `${media.kind}: ${media.source}` : media.kind
+                  ),
+                  evidencePaths: selectedSlide.evidencePaths
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="detail-card">
+            <div className="section-heading">
+              <h4>Run communication surface</h4>
+              <p>No slide metadata is selected yet.</p>
+            </div>
+            <p className="detail-copy">
+              Use this stage for run-level decisions, then switch to a specific slide when manifest
+              or screenshot evidence is available.
+            </p>
+          </div>
+        )}
+        <div className="detail-card">
+          <div className="section-heading">
+            <h4>Recent communication</h4>
+            <p>The newest supervised feedback for this scope appears first.</p>
+          </div>
+          <ListBlock
+            items={props.communicationItems.slice(0, 4).map((item) => ({
+              title: item.feedbackKind,
+              subtitle: `${item.slideId ?? "Entire run"} · ${formatTimestamp(item.createdAt)}`,
+              body: <p className="detail-copy">{item.comment || "No comment provided."}</p>
+            }))}
+          />
         </div>
       </div>
     </div>
@@ -2576,15 +3038,7 @@ function ListBlock(props: { items: Array<{ title: string; subtitle?: string; bod
 
 function Message(props: { tone: "ok" | "error"; children: React.ReactNode }) {
   return (
-    <div
-      style={{
-        padding: tokens.space.md,
-        borderRadius: tokens.radius.md,
-        border: `1px solid ${props.tone === "ok" ? tokens.color.line : "#f2c2bd"}`,
-        background: props.tone === "ok" ? "#edf6f3" : "#fff3f1",
-        color: props.tone === "ok" ? tokens.color.accentStrong : tokens.color.alert
-      }}
-    >
+    <div className={`hud-message hud-message-${props.tone}`}>
       {props.children}
     </div>
   );
@@ -2751,6 +3205,31 @@ function summarizePreviewAnalysis(run: PreviewRun | null): {
   };
 }
 
+function summarizePreviewFeedback(items: PreviewFeedbackCollection["items"]) {
+  return items.reduce(
+    (summary, item) => {
+      summary.totalCount += 1;
+      if (item.feedbackKind === "approved") {
+        summary.approvedCount += 1;
+      } else if (item.feedbackKind === "requested_changes") {
+        summary.requestedChangesCount += 1;
+      } else if (item.feedbackKind === "rejected") {
+        summary.rejectedCount += 1;
+      } else {
+        summary.commentCount += 1;
+      }
+      return summary;
+    },
+    {
+      totalCount: 0,
+      commentCount: 0,
+      requestedChangesCount: 0,
+      approvedCount: 0,
+      rejectedCount: 0
+    }
+  );
+}
+
 interface PreviewManifestSlide {
   slideId: string;
   title: string;
@@ -2817,6 +3296,24 @@ function parsePreviewManifest(run: PreviewRun | null): PreviewManifestData | nul
       })
     : [];
 
+  const knownSlideIds = new Set(slides.map((slide) => slide.slideId));
+  for (const [slideId, screenshotPath] of previewAnalysis.screenshotsBySlideId.entries()) {
+    if (knownSlideIds.has(slideId)) {
+      continue;
+    }
+    slides.push({
+      slideId,
+      title: humanizeKey(slideId),
+      audienceGoal: "",
+      bullets: [],
+      speakerNotes: "",
+      visualGuidance: "",
+      evidencePaths: [],
+      media: [],
+      screenshotPath
+    });
+  }
+
   return {
     markdownPath:
       typeof manifest.markdownPath === "string"
@@ -2839,6 +3336,18 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function parseScorecardChoice<T extends string>(
+  value: unknown,
+  allowedValues: readonly T[]
+): T | null {
+  const record = asRecord(value);
+  const candidate = record?.value;
+  if (typeof candidate !== "string") {
+    return null;
+  }
+  return allowedValues.includes(candidate as T) ? (candidate as T) : null;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -2947,7 +3456,9 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: `${tokens.space.sm}px ${tokens.space.md}px`,
   borderRadius: tokens.radius.sm,
-  border: `1px solid ${tokens.color.line}`,
+  border: "1px solid rgba(148, 164, 121, 0.28)",
+  background: "rgba(10, 17, 18, 0.86)",
+  color: "#e7f1dd",
   marginTop: tokens.space.xs
 };
 

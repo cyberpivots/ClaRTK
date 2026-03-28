@@ -9,6 +9,11 @@ import { chromium } from "playwright";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 
+import {
+  bootstrapChromiumRuntimeLibraries,
+  isLikelyPlaywrightBrowserDependencyError
+} from "./browser-runtime-lib.mjs";
+
 const execFileAsync = promisify(execFile);
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,11 +113,6 @@ async function firstExistingPath(candidates) {
     }
   }
   return null;
-}
-
-function isLikelyPlaywrightBrowserDependencyError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /error while loading shared libraries|cannot open shared object file|libnspr4\.so/i.test(message);
 }
 
 async function isPortInUse(port) {
@@ -324,6 +324,7 @@ async function launchNativeChromium({ viewport, videosDir }) {
   };
 
   try {
+    await bootstrapChromiumRuntimeLibraries(chromium.executablePath()).catch(() => {});
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({
       viewport,

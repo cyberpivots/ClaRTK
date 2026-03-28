@@ -104,6 +104,39 @@
   - panel screenshots are cropped to a stable visible-console region so list-heavy panels do not churn baseline dimensions across runs
 - Live broker-backed review run `uiReviewRunId=3` now proves the full capture -> analyze -> fix_draft -> review path against the current dev-console.
 
+## Slide Communication Update 2026-03-28
+
+- Reworked the preview workspace in `apps/dev-console-web` so deck previews are usable as a human/agent communication surface instead of a raw render bucket.
+- Replaced the previous mostly-empty stage behavior with two explicit viewing modes:
+  - `Slide review` as the default interactive communication mode
+  - `Full deck` as the fallback iframe view for rendered HTML
+- Added slide-review context directly into the main stage:
+  - selected-slide screenshot focus when evidence exists
+  - run-level communication context when slide metadata is incomplete
+  - recent supervised feedback summary for the active run or slide
+  - quick access back to the rendered deck artifact
+- Improved incomplete-manifest handling by synthesizing slide entries from analyzed screenshot artifacts when the render/analyze stages produced screenshots but not full manifest slide metadata.
+- The result is that preview runs can now support slide-scoped human/agent review even when only partial render-analysis output is available.
+
+## HUD and Local Vision Update 2026-03-27
+
+- Reworked `apps/dev-console-web` into a military-ops HUD shell while keeping the preview lane as the dominant surface:
+  - top telemetry strip for live workspace and run state
+  - left command rail for panel navigation and counts
+  - center mission surface for the active workspace
+  - right context rail for focus metadata and mission brief
+- Moved the dev-console shell to app-local HUD primitives instead of relying on the shared light dashboard wrappers.
+- Added supervised HUD preference capture through the existing preference-signal endpoints for:
+  - HUD density
+  - motion mode
+  - preview subpane selection
+- Extended the derived preference scorecard in `services/agent-memory` to surface preferred HUD density, preferred motion mode, and preferred preview subpane without changing the broker contract.
+- Added a local-only advisory vision module in `services/agent-memory` that enriches preview and UI review analysis summaries with:
+  - optional OCR status
+  - local contrast and flat-region heuristics
+  - advisory ML signals persisted as linked JSON artifacts
+- Extracted the Chromium shared-library bootstrap into a reusable script so both preview analysis and UI review use the same local Playwright runtime preparation.
+
 ## Verification Notes
 
 - Current change set verification is recorded here after checks run so presentation artifacts can link to a durable repo source instead of transient chat output.
@@ -144,3 +177,5 @@
   - `GET /v1/reviews/ui/baselines?surface=dev-console-web` returned six active baseline records
 - Baseline comparison rerun — passed
   - `node scripts/ui-review-smoke.mjs` passed after the promoted baselines were refreshed from the stabilized capture geometry
+- Dev-console slide-communication preview capture — passed
+  - `node scripts/ui-review-capture.mjs --artifact-dir .clartk/dev/ui-review/manual-audit-2026-03-27-live-fresh-server --base-url http://127.0.0.1:5180` captured the refreshed preview workspace with the communication-oriented stage on the restarted Vite server

@@ -1,6 +1,7 @@
 pyproject.toml
 src/agent_memory/__init__.py
 src/agent_memory/service.py
+src/agent_memory/vision.py
 src/clartk_agent_memory.egg-info/PKG-INFO
 src/clartk_agent_memory.egg-info/SOURCES.txt
 src/clartk_agent_memory.egg-info/dependency_links.txt
