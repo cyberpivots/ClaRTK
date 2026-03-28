@@ -72,6 +72,8 @@ async function main() {
     summaryPath: path.relative(process.cwd(), renderSummaryPath).replaceAll(path.sep, "/"),
     manifestPath: path.relative(process.cwd(), manifestPath).replaceAll(path.sep, "/"),
     htmlPath: path.relative(process.cwd(), htmlPath).replaceAll(path.sep, "/"),
+    entryRelativePath: path.relative(process.cwd(), htmlPath).replaceAll(path.sep, "/"),
+    slideCount: manifest.slides.length,
     artifacts: [
       {
         kind: "preview.bundle.html",
@@ -100,4 +102,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
-

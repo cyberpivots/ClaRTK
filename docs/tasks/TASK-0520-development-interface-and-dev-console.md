@@ -51,6 +51,34 @@
 - Extended the dev-console docs catalog so `docs/presentations/*` is classified as `presentation`.
 - Updated the docs panel in `apps/dev-console-web` to surface presentation artifacts separately from generic docs.
 
+## Preview Lane Documentation Update 2026-03-27
+
+- Added preview-lane governance docs for the approved dual-source model:
+  - markdown deck source remains authoritative for facts and evidence
+  - preview companion JSON stays limited to layout, theme, Reveal.js config, and media descriptors
+  - generated HTML previews are derived review artifacts only
+- Added an operations workflow for authoring, rendering, reviewing, and approving development previews.
+- Added a repo-local `development-preview-presenter` skill for preview-lane work.
+- Added a concrete preview companion for `docs/presentations/clartk-rd-update-2026-03.md` so the preview lane has a real deck/example pair to render.
+
+## Preview Lane Implementation Plan
+
+1. Add preview-run and preview-feedback persistence in `clartk_dev` with linked `agent.task`, `agent.event`, and `agent.artifact` records.
+2. Add render and analyze task kinds that produce derived HTML previews plus analysis artifacts under `.clartk/dev/presentation-preview/`.
+3. Add broker endpoints and a dev-console preview workspace for:
+   - deck selection
+   - run history
+   - sandboxed preview display
+   - review decisions and comments
+4. Keep the preview surface development-only and enforce a dedicated preview CSP plus iframe sandbox boundary.
+
+## Preview Lane Verification Placeholders
+
+- `docs/presentations/clartk-rd-update-2026-03.preview.json` companion validation against the deck source — pending
+- Preview render smoke for the example R&D deck — pending
+- Broker/API preview-run smoke — pending
+- Sandboxed preview iframe and CSP smoke — pending
+
 ## Implementation Update 2026-03-28
 
 - Added a local-only automated UI review lane for `apps/dev-console-web` with:

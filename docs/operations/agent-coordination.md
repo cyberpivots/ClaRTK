@@ -39,9 +39,18 @@
 
 ## Queue Naming
 
-- Avoid `default` for feature-specific work when a dedicated queue improves isolation or reviewability.
+- Treat `default` as a compatibility queue, not as the preferred target for new scoped work.
+- Move task kinds into dedicated queues when isolation, reviewability, or worker ownership improves.
+- Current routed defaults:
+  - `memory.maintenance` for embeddings, evaluations, and scheduler-owned maintenance
+  - `catalog.refresh` for docs and skill catalog refresh
+  - `preferences.recompute` for dev-preference score recomputes
+  - `ui.review` for dev-console review capture/analyze/fix-draft/baseline promotion
+  - `preview.review` for development preview render/analyze
+  - `hardware.build` for hardware assembly and validation workflows
 - Prefer queue names in the form `<domain>.<feature>` or `<domain>.<feature>.<phase>`.
 - Keep queue choice in the task handoff so retries and worker ownership stay auditable.
+- When legacy or pre-routing rows accumulate in `default`, use `scripts/dev-queue-rebalance.py` to dry-run and then apply a queue rebalance before adding more worker concurrency.
 
 ## Escalation
 

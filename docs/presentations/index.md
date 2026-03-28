@@ -12,6 +12,8 @@
   - operational and research docs in `docs/operations/` and `docs/research/`
   - checks actually run for the current change
 - Produce a versioned slide source in this directory.
+- Add a preview companion in this directory only when layout or media overrides are needed for HTML review.
+- Review the generated HTML preview before external packaging.
 - Produce a paired Canva handoff brief in this directory.
 - Publish into Canva only after the repo slide source is complete and verified.
 
@@ -25,6 +27,18 @@ Every slide definition must include:
 - speaker notes
 - visual guidance
 - evidence links
+
+## Preview companion format
+
+- `*.preview.json` is optional.
+- It may define:
+  - Reveal.js config
+  - theme tokens
+  - per-slide layout
+  - presentational class names
+  - media descriptors
+- It must not define or override factual slide content.
+- The markdown deck remains authoritative even when a preview companion exists.
 
 ## Verification requirements
 
@@ -50,5 +64,5 @@ Update or add a new versioned deck when one of these occurs:
 ## Current deck set
 
 - [`clartk-rd-update-2026-03.md`](clartk-rd-update-2026-03.md)
+- [`clartk-rd-update-2026-03.preview.json`](clartk-rd-update-2026-03.preview.json)
 - [`clartk-rd-update-2026-03-canva-brief.md`](clartk-rd-update-2026-03-canva-brief.md)
-

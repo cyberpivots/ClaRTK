@@ -12,7 +12,9 @@ postgres_port="${CLARTK_RESOLVED_POSTGRES_PORT:-${CLARTK_POSTGRES_PORT:-5432}}"
 
 export CLARTK_DEV_DATABASE_URL="${CLARTK_RESOLVED_DEV_DATABASE_URL:-${CLARTK_DEV_DATABASE_URL:-postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/clartk_dev}}"
 export CLARTK_AGENT_TASK_QUEUE="${CLARTK_AGENT_TASK_QUEUE:-default}"
+export CLARTK_AGENT_TASK_QUEUES="${CLARTK_AGENT_TASK_QUEUES:-default,memory.maintenance,catalog.refresh,preferences.recompute,ui.review,preview.review,hardware.build}"
 export CLARTK_AGENT_TASK_LEASE_SECONDS="${CLARTK_AGENT_TASK_LEASE_SECONDS:-60}"
 export CLARTK_AGENT_TASK_IDLE_TIMEOUT="${CLARTK_AGENT_TASK_IDLE_TIMEOUT:-30}"
+export PYTHONPATH="$(pwd)/services/agent-memory/src${PYTHONPATH:+:${PYTHONPATH}}"
 
-exec uv run clartk-agent-memory run-worker "$@"
+exec uv run python -m agent_memory.service run-worker "$@"

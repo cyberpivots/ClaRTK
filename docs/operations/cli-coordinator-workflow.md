@@ -71,7 +71,8 @@ node scripts/dev-coordinator-status.mjs
 - Overlapping write scopes must be serialized.
 - Concurrent write work requires separate Git worktrees.
 - Read-only exploration and verification can run in parallel without separate worktrees.
-- Avoid `default` for scoped feature or validation work.
+- Treat `default` as the landing zone for uncategorized or legacy tasks only.
+- If `default` starts accumulating scoped work, rebalance it immediately before increasing worker concurrency.
 - Preferred queue naming:
   - `<domain>.<feature>`
   - `<domain>.<feature>.<phase>`
@@ -79,6 +80,57 @@ node scripts/dev-coordinator-status.mjs
   - `coordination.ui-review`
   - `hardware.base-station`
   - `gateway.fixture-verify`
+
+## Current dev-plane queue policy
+
+- `default`:
+  keep only uncategorized and legacy tasks here; do not target it for new scoped flows
+- `memory.maintenance`:
+  embeddings, evaluations, and scheduler-owned maintenance work
+- `catalog.refresh`:
+  doc and skill catalog refresh jobs
+- `preferences.recompute`:
+  dev-preference score recomputes
+- `ui.review`:
+  dev-console UI review capture, analysis, fix-draft, and baseline-promotion work
+- `preview.review`:
+  development preview render and analysis work
+- `hardware.build`:
+  hardware prepare, reserve, build, validate, and runtime-register tasks
+
+## Queue cleanup commands
+
+- Dry-run the queue rebalance first:
+
+```bash
+source scripts/lib/dev-env.sh
+clartk_load_env
+uv run python scripts/dev-queue-rebalance.py
+```
+
+- Apply the rebalance only after reviewing the move and dedupe plan:
+
+```bash
+source scripts/lib/dev-env.sh
+clartk_load_env
+uv run python scripts/dev-queue-rebalance.py --apply
+```
+
+- After rebalance, run one bounded worker pass across the routed queues:
+
+```bash
+bash scripts/dev-agent-memory-worker.sh --stop-after 8
+```
+
+- If queue-routing code changed in `services/agent-memory/`, restart the long-running broker service before trusting new enqueue behavior:
+
+```bash
+bash scripts/dev-agent-memory.sh
+```
+
+- The worker now defaults to this queue set:
+  `default,memory.maintenance,catalog.refresh,preferences.recompute,ui.review,preview.review,hardware.build`
+- Preference score recomputes are deduplicated by `runtimeAccountId` before enqueue, so a burst of signal writes should collapse to one queued recompute per account instead of piling up in `default`.
 
 ## Handoff packet
 

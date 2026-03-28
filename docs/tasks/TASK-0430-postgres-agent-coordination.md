@@ -31,6 +31,16 @@
 - `services/agent-memory` now supports worker leasing with `FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY` wakeups, and transaction-scoped advisory locks for scheduler and lease-repair duties.
 - `agent.run`, `agent.event`, and `agent.artifact` are now used as execution history for queued embedding and evaluation jobs.
 - The queue now also carries development-interface preference score recompute tasks plus bounded doc and skill catalog refresh jobs, keeping that transient coordination state inside `clartk_dev` rather than in more task files.
+- Task-kind routing now keeps scoped work out of `default` by default:
+  - `memory.run_embeddings` / `memory.run_evaluations` -> `memory.maintenance`
+  - `catalog.refresh_*` -> `catalog.refresh`
+  - `preferences.compute_dev_preference_scores` -> `preferences.recompute`
+  - `ui.review.*` -> `ui.review`
+  - `preview.*` -> `preview.review`
+  - `hardware.*` -> `hardware.build`
+- Worker startup now accepts and defaults to a bounded multi-queue set rather than a single queue, so one local worker can drain the routed lanes without extra process sprawl.
+- Dev-preference score recompute enqueue is now deduplicated by `runtimeAccountId`, preventing repeated signal writes from flooding the queue with redundant recompute jobs.
+- `scripts/dev-queue-rebalance.py` now provides a dry-run/apply repair path for moving legacy queued rows out of `default` and collapsing duplicate queued preference recomputes.
 - The repo now includes coordinator-facing development artifacts for the parallel planning loop:
   - `.codex/config.toml` explicitly pins high plan-mode reasoning
   - `.codex/agents/cli_coordinator.toml` defines a read-only coordination role
@@ -40,9 +50,27 @@
 
 ## Remaining Gaps
 
-- The current queue handles embeddings and evaluations only; broader multi-agent scheduling, dependency release, and richer retry policy still remain to be implemented.
+- Queue routing now covers maintenance, catalog, preference, UI review, preview, and hardware lanes, but broader multi-agent scheduling, dependency release, and richer retry policy still remain to be implemented.
 - The worker currently uses periodic maintenance scheduling inside the Python process; there is not yet a separate reconciler or dependency-release service.
 - The coordinator status script is a broker-backed read surface only; it does not yet claim tasks, lease work, or annotate worktree ownership directly in `clartk_dev`.
+- The gateway remains a separate degraded service in the live snapshot; queue cleanup improved dev-plane coordination, but it did not by itself resolve gateway health.
+
+## Latest Validation Slice
+
+- Dry-run queue rebalance on `clartk_dev`:
+  identified 56 queued `default` rows that belonged in routed queues and 50 redundant preference recomputes for the same runtime account
+- Applied queue rebalance:
+  moved those 56 queued rows into their routed queues and marked the 50 redundant preference recomputes as `skipped`
+- Live coordinator snapshot after rebalance:
+  `default` queue `queuedCount` dropped to `0`
+- Bounded worker replay:
+  a single worker pass completed routed maintenance and preference tasks, then continued into `ui.review`
+- Service refresh:
+  restarted the long-running `agent-memory` HTTP service so brokered enqueue paths picked up the new queue-routing and dedupe logic
+- Post-restart enqueue proof:
+  a direct `dev-signals` write created a new `preferences.compute_dev_preference_scores` task in `preferences.recompute`, not `default`
+- Final queue-rebalance dry run:
+  `moveCount: 0` and `duplicatePreferenceCount: 0`
 
 ## Initial Plan
 

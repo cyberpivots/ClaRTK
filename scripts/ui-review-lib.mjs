@@ -29,7 +29,7 @@ const panelScenarios = [
   {
     panelKey: "preview",
     label: "Preview",
-    expectedTexts: ["Production Deployment Screen Preview", "Mission Control", "Evidence Board"]
+    expectedTexts: ["Preview Workspace", "Deck Sources", "Preview Runs"]
   },
   {
     panelKey: "overview",
@@ -39,7 +39,7 @@ const panelScenarios = [
   {
     panelKey: "coordination",
     label: "Coordination",
-    expectedTexts: ["Safe Controls", "Queues", "Run Detail"]
+    expectedTexts: ["Safe Controls", "Queue Lanes", "Run Detail"]
   },
   {
     panelKey: "knowledge",
@@ -253,6 +253,15 @@ async function capturePanelScreenshot(page, screenshotPath) {
   });
 
   const rawPng = await loadPng(rawScreenshotPath);
+  if (rawPng.height <= 1 || rawPng.width <= 1 || visibleBox.height <= 1) {
+    await page.screenshot({
+      path: screenshotPath,
+      animations: "disabled"
+    });
+    await fs.unlink(rawScreenshotPath).catch(() => {});
+    return;
+  }
+
   const cropWidth = Math.max(1, Math.min(rawPng.width, visibleBox.width));
   const cropHeight = Math.max(1, Math.min(rawPng.height, visibleBox.height));
   if (cropWidth === rawPng.width && cropHeight === rawPng.height) {

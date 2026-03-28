@@ -1,0 +1,56 @@
+{
+  "revealConfig": {
+    "transition": "slide",
+    "hash": false,
+    "controls": true,
+    "progress": true,
+    "center": false
+  },
+  "theme": {
+    "accentColor": "#155b47",
+    "backgroundColor": "#f2f5f3",
+    "textColor": "#102024"
+  },
+  "slides": {
+    "slide-01": {
+      "layout": "hero",
+      "className": "opening-frame"
+    },
+    "slide-02": {
+      "layout": "media-grid",
+      "className": "summary-grid"
+    },
+    "slide-03": {
+      "layout": "media-right",
+      "className": "governance-flow"
+    },
+    "slide-04": {
+      "layout": "media-right",
+      "className": "handoff-gate"
+    },
+    "slide-05": {
+      "layout": "media-grid",
+      "className": "console-surface"
+    },
+    "slide-06": {
+      "layout": "bullet",
+      "className": "verification-checklist"
+    },
+    "slide-07": {
+      "layout": "media-grid",
+      "className": "value-cards"
+    },
+    "slide-08": {
+      "layout": "bullet",
+      "className": "risk-panel"
+    },
+    "slide-09": {
+      "layout": "media-grid",
+      "className": "roadmap-tracks"
+    },
+    "slide-10": {
+      "layout": "bullet",
+      "className": "source-map"
+    }
+  }
+}

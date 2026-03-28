@@ -10,6 +10,10 @@ import type {
   DocsCatalogResponse,
   EvaluationResultRecord,
   KnowledgeClaimRecord,
+  PresentationDeckSourceCollection,
+  PreviewFeedbackCollection,
+  PreviewRun,
+  PreviewRunCollection,
   ResourceCollection,
   SkillCatalogResponse,
   SourceDocumentRecord,
@@ -53,8 +57,8 @@ const panelDefinitions: Array<{
   {
     key: "preview",
     label: "Preview",
-    eyebrow: "Themes",
-    description: "Compact production screen samples for deployment reviews."
+    eyebrow: "Decks",
+    description: "Slide-style HTML previews with media, run history, and human review."
   },
   {
     key: "overview",
@@ -106,6 +110,11 @@ interface ConsoleState {
   docs: DocsCatalogResponse | null;
   skills: SkillCatalogResponse | null;
   devProfile: DevPreferenceProfile | null;
+  previewDecks: PresentationDeckSourceCollection | null;
+  previewRuns: PreviewRunCollection | null;
+  selectedPreviewRunId: number | null;
+  selectedPreviewRun: PreviewRun | null;
+  previewFeedback: PreviewFeedbackCollection | null;
   reviewRuns: UiReviewRunCollection | null;
   selectedReviewRunId: number | null;
   selectedReviewRun: UiReviewRun | null;
@@ -132,6 +141,11 @@ export function App() {
     docs: null,
     skills: null,
     devProfile: null,
+    previewDecks: null,
+    previewRuns: null,
+    selectedPreviewRunId: null,
+    selectedPreviewRun: null,
+    previewFeedback: null,
     reviewRuns: null,
     selectedReviewRunId: null,
     selectedReviewRun: null,
@@ -153,6 +167,12 @@ export function App() {
   const lastPanelSignal = React.useRef<PanelKey | null>(null);
   const lastDetailSignal = React.useRef<"compact" | "expanded" | null>(null);
   const consoleLoadInFlight = React.useRef(false);
+  const consoleLoadToken = React.useRef(0);
+  const stateRef = React.useRef(state);
+
+  React.useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   React.useEffect(() => {
     void loadSession();
@@ -251,6 +271,7 @@ export function App() {
     if (consoleLoadInFlight.current) {
       return;
     }
+    const loadToken = ++consoleLoadToken.current;
     consoleLoadInFlight.current = true;
     setState((current) => ({
       ...current,
@@ -260,22 +281,16 @@ export function App() {
     }));
     try {
       const warnings: string[] = [];
-      const previousState = state;
+      const previousState = stateRef.current;
       const primaryResults = await Promise.allSettled([
         devConsoleApi.getWorkspaceOverview(),
         devConsoleApi.listTasks(),
         devConsoleApi.listRuns(),
-        devConsoleApi.listUiReviewRuns({ surface: "dev-console-web", limit: 12 }),
-        devConsoleApi.listUiReviewBaselines({ surface: "dev-console-web", limit: 24 }),
-        devConsoleApi.listDocsCatalog(),
-        devConsoleApi.listSkills()
+        devConsoleApi.listPreviewDecks()
       ]);
-      const secondaryResults = await Promise.allSettled([
-        devConsoleApi.listSourceDocuments(),
-        devConsoleApi.listClaims(),
-        devConsoleApi.listEvaluations(),
-        devConsoleApi.getDevProfile()
-      ]);
+      if (consoleLoadToken.current !== loadToken) {
+        return;
+      }
 
       const overview = resolveSettledResult(
         primaryResults[0],
@@ -285,70 +300,14 @@ export function App() {
       );
       const tasks = resolveSettledResult(primaryResults[1], previousState.tasks, "coordination tasks", warnings);
       const runs = resolveSettledResult(primaryResults[2], previousState.runs, "coordination runs", warnings);
-      const reviewRuns = resolveSettledResult(
+      const previewDecks = resolveSettledResult(
         primaryResults[3],
-        previousState.reviewRuns,
-        "ui review runs",
-        warnings
-      );
-      const reviewBaselines = resolveSettledResult(
-        primaryResults[4],
-        previousState.reviewBaselines,
-        "ui review baselines",
-        warnings
-      );
-      const docs = resolveSettledResult(primaryResults[5], previousState.docs, "docs catalog", warnings);
-      const skills = resolveSettledResult(primaryResults[6], previousState.skills, "skills catalog", warnings);
-      const sourceDocuments = resolveSettledResult(
-        secondaryResults[0],
-        previousState.sourceDocuments,
-        "source documents",
-        warnings
-      );
-      const claims = resolveSettledResult(secondaryResults[1], previousState.claims, "claims", warnings);
-      const evaluations = resolveSettledResult(
-        secondaryResults[2],
-        previousState.evaluations,
-        "evaluations",
-        warnings
-      );
-      const devProfile = resolveSettledResult(
-        secondaryResults[3],
-        previousState.devProfile,
-        "dev profile",
+        previousState.previewDecks,
+        "preview decks",
         warnings
       );
 
-      const nextRunId = selectedRunId ?? runs?.items[0]?.agentRunId ?? null;
-      let runDetail = nextRunId === null ? null : previousState.runDetail;
-      if (nextRunId !== null) {
-        try {
-          runDetail = await devConsoleApi.getRun(nextRunId);
-        } catch {
-          warnings.push("run detail");
-        }
-      }
-
-      const nextReviewRunId =
-        previousState.selectedReviewRunId ?? reviewRuns?.runs[0]?.uiReviewRunId ?? null;
-      let selectedReviewRun = nextReviewRunId === null ? null : previousState.selectedReviewRun;
-      let reviewFindings = previousState.reviewFindings;
-      if (nextReviewRunId !== null) {
-        try {
-          selectedReviewRun = await devConsoleApi.getUiReviewRun(nextReviewRunId);
-        } catch {
-          warnings.push("ui review detail");
-        }
-        try {
-          reviewFindings = await devConsoleApi.listUiReviewFindings({
-            uiReviewRunId: nextReviewRunId,
-            limit: 200
-          });
-        } catch {
-          warnings.push("ui review findings");
-        }
-      }
-
+      const nextRunId = selectedRunId ?? previousState.selectedRunId ?? runs?.items[0]?.agentRunId ?? null;
       const nextNotice =
         warnings.length > 0
           ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
@@ -359,23 +318,16 @@ export function App() {
         ...current,
         overview,
         tasks,
-        runDetail,
-        sourceDocuments,
-        claims,
-        evaluations,
-        docs,
-        skills,
-        devProfile,
-        reviewRuns,
-        selectedReviewRunId: nextReviewRunId,
-        selectedReviewRun,
-        reviewFindings,
-        reviewBaselines,
+        previewDecks,
         runs,
         selectedRunId: nextRunId,
         notice: nextNotice,
         loading: false
       }));
+
+      void loadRunDetailData(loadToken, nextRunId);
+      void loadPreviewRunData(loadToken);
+      void loadSupplementalConsoleData(loadToken);
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -385,6 +337,202 @@ export function App() {
     } finally {
       consoleLoadInFlight.current = false;
     }
+  }
+
+  async function loadRunDetailData(loadToken: number, nextRunId: number | null) {
+    const previousState = stateRef.current;
+    const warnings: string[] = [];
+    const detailResults = await Promise.allSettled([
+      nextRunId === null ? Promise.resolve(previousState.runDetail) : devConsoleApi.getRun(nextRunId)
+    ]);
+    if (consoleLoadToken.current !== loadToken) {
+      return;
+    }
+
+    const runDetail = resolveSettledResult(detailResults[0], previousState.runDetail, "run detail", warnings);
+
+    setState((current) => ({
+      ...current,
+      runDetail,
+      notice:
+        warnings.length > 0
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : current.notice
+    }));
+  }
+
+  async function loadPreviewRunData(loadToken: number) {
+    const previousState = stateRef.current;
+    const warnings: string[] = [];
+    const previewRunsResult = await Promise.allSettled([
+      devConsoleApi.listPreviewRuns({ limit: 12 })
+    ]);
+    if (consoleLoadToken.current !== loadToken) {
+      return;
+    }
+
+    const previewRuns = resolveSettledResult(
+      previewRunsResult[0],
+      previousState.previewRuns,
+      "preview runs",
+      warnings
+    );
+    const nextPreviewRunId =
+      previousState.selectedPreviewRunId ?? previewRuns?.runs[0]?.previewRunId ?? null;
+    const selectedPreviewRunSummary =
+      nextPreviewRunId === null
+        ? null
+        : previewRuns?.runs.find((run) => run.previewRunId === nextPreviewRunId) ?? null;
+
+    setState((current) => ({
+      ...current,
+      previewRuns,
+      selectedPreviewRunId: nextPreviewRunId,
+      selectedPreviewRun: selectedPreviewRunSummary ?? current.selectedPreviewRun,
+      notice:
+        warnings.length > 0
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : current.notice
+    }));
+
+    const detailResults = await Promise.allSettled([
+      nextPreviewRunId === null
+        ? Promise.resolve(stateRef.current.selectedPreviewRun)
+        : devConsoleApi.getPreviewRun(nextPreviewRunId),
+      nextPreviewRunId === null
+        ? Promise.resolve(stateRef.current.previewFeedback)
+        : devConsoleApi.listPreviewFeedback({
+            previewRunId: nextPreviewRunId,
+            limit: 200
+          })
+    ]);
+    if (consoleLoadToken.current !== loadToken) {
+      return;
+    }
+
+    const selectedPreviewRun = resolveSettledResult(
+      detailResults[0],
+      stateRef.current.selectedPreviewRun,
+      "preview run detail",
+      warnings
+    );
+    const previewFeedback = resolveSettledResult(
+      detailResults[1],
+      stateRef.current.previewFeedback,
+      "preview feedback",
+      warnings
+    );
+
+    setState((current) => ({
+      ...current,
+      selectedPreviewRun,
+      previewFeedback,
+      notice:
+        warnings.length > 0
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : current.notice
+    }));
+  }
+
+  async function loadSupplementalConsoleData(loadToken: number) {
+    const previousState = stateRef.current;
+    const warnings: string[] = [];
+    const secondaryResults = await Promise.allSettled([
+      devConsoleApi.listUiReviewRuns({ surface: "dev-console-web", limit: 12 }),
+      devConsoleApi.listUiReviewBaselines({ surface: "dev-console-web", limit: 24 }),
+      devConsoleApi.listDocsCatalog(),
+      devConsoleApi.listSkills(),
+      devConsoleApi.listSourceDocuments(),
+      devConsoleApi.listClaims(),
+      devConsoleApi.listEvaluations(),
+      devConsoleApi.getDevProfile()
+    ]);
+    if (consoleLoadToken.current !== loadToken) {
+      return;
+    }
+
+    const reviewRuns = resolveSettledResult(
+      secondaryResults[0],
+      previousState.reviewRuns,
+      "ui review runs",
+      warnings
+    );
+    const reviewBaselines = resolveSettledResult(
+      secondaryResults[1],
+      previousState.reviewBaselines,
+      "ui review baselines",
+      warnings
+    );
+    const docs = resolveSettledResult(secondaryResults[2], previousState.docs, "docs catalog", warnings);
+    const skills = resolveSettledResult(secondaryResults[3], previousState.skills, "skills catalog", warnings);
+    const sourceDocuments = resolveSettledResult(
+      secondaryResults[4],
+      previousState.sourceDocuments,
+      "source documents",
+      warnings
+    );
+    const claims = resolveSettledResult(secondaryResults[5], previousState.claims, "claims", warnings);
+    const evaluations = resolveSettledResult(
+      secondaryResults[6],
+      previousState.evaluations,
+      "evaluations",
+      warnings
+    );
+    const devProfile = resolveSettledResult(
+      secondaryResults[7],
+      previousState.devProfile,
+      "dev profile",
+      warnings
+    );
+
+    const nextReviewRunId =
+      previousState.selectedReviewRunId ?? reviewRuns?.runs[0]?.uiReviewRunId ?? null;
+    const reviewDetailResults = await Promise.allSettled([
+      nextReviewRunId === null
+        ? Promise.resolve(previousState.selectedReviewRun)
+        : devConsoleApi.getUiReviewRun(nextReviewRunId),
+      nextReviewRunId === null
+        ? Promise.resolve(previousState.reviewFindings)
+        : devConsoleApi.listUiReviewFindings({
+            uiReviewRunId: nextReviewRunId,
+            limit: 200
+          })
+    ]);
+    if (consoleLoadToken.current !== loadToken) {
+      return;
+    }
+
+    const selectedReviewRun = resolveSettledResult(
+      reviewDetailResults[0],
+      previousState.selectedReviewRun,
+      "ui review detail",
+      warnings
+    );
+    const reviewFindings = resolveSettledResult(
+      reviewDetailResults[1],
+      previousState.reviewFindings,
+      "ui review findings",
+      warnings
+    );
+
+    setState((current) => ({
+      ...current,
+      sourceDocuments,
+      claims,
+      evaluations,
+      docs,
+      skills,
+      devProfile,
+      reviewRuns,
+      selectedReviewRunId: nextReviewRunId,
+      selectedReviewRun,
+      reviewFindings,
+      reviewBaselines,
+      notice:
+        warnings.length > 0
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : current.notice
+    }));
   }
 
   async function handleAuthSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -427,6 +575,11 @@ export function App() {
       docs: null,
       skills: null,
       devProfile: null,
+      previewDecks: null,
+      previewRuns: null,
+      selectedPreviewRunId: null,
+      selectedPreviewRun: null,
+      previewFeedback: null,
       reviewRuns: null,
       selectedReviewRunId: null,
       selectedReviewRun: null,
@@ -493,6 +646,78 @@ export function App() {
         ...current,
         devProfile: profile,
         notice: `${decisionKind} recommendation ${subjectKey}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handlePreviewStart(deckKey: string) {
+    try {
+      const run = await devConsoleApi.startPreviewRun({
+        deckKey,
+        viewportJson: { width: 1440, height: 900 }
+      });
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        selectedPreviewRunId: run.previewRunId,
+        selectedPreviewRun: run,
+        previewFeedback: { items: [], source: "dev-memory", total: 0 },
+        notice: `Started preview run #${run.previewRunId} for ${deckKey}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handlePreviewRunSelection(previewRunId: number) {
+    try {
+      const [run, feedback] = await Promise.all([
+        devConsoleApi.getPreviewRun(previewRunId),
+        devConsoleApi.listPreviewFeedback({ previewRunId, limit: 200 })
+      ]);
+      setState((current) => ({
+        ...current,
+        selectedPreviewRunId: previewRunId,
+        selectedPreviewRun: run,
+        previewFeedback: feedback
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handlePreviewFeedbackSubmit(
+    previewRunId: number,
+    feedbackKind: string,
+    comment: string,
+    slideId?: string | null
+  ) {
+    try {
+      await devConsoleApi.createPreviewFeedback({
+        previewRunId,
+        feedbackKind,
+        comment,
+        slideId,
+        payload: {
+          selectedPanel: state.selectedPanel,
+          detailDepth: state.detailDepth
+        }
+      });
+      await handlePreviewRunSelection(previewRunId);
+      setState((current) => ({
+        ...current,
+        notice: `${feedbackKind} recorded for preview run #${previewRunId}.`
       }));
     } catch (error) {
       setState((current) => ({
@@ -629,12 +854,15 @@ export function App() {
   if (state.selectedPanel === "preview") {
     selectedPanelContent = (
       <PreviewPanel
-        overview={state.overview}
-        tasks={state.tasks}
-        docs={state.docs}
-        skills={state.skills}
-        claims={state.claims}
-        evaluations={state.evaluations}
+        previewDecks={state.previewDecks}
+        previewRuns={state.previewRuns}
+        selectedPreviewRunId={state.selectedPreviewRunId}
+        selectedPreviewRun={state.selectedPreviewRun}
+        previewFeedback={state.previewFeedback}
+        loading={state.loading}
+        onStartPreview={handlePreviewStart}
+        onSelectPreviewRun={handlePreviewRunSelection}
+        onSubmitFeedback={handlePreviewFeedbackSubmit}
       />
     );
   } else if (state.selectedPanel === "overview") {
@@ -868,133 +1096,428 @@ function resolveSettledResult<T>(
 }
 
 function PreviewPanel(props: {
-  overview: WorkspaceOverview | null;
-  tasks: AgentTaskCollection | null;
-  docs: DocsCatalogResponse | null;
-  skills: SkillCatalogResponse | null;
-  claims: ResourceCollection<KnowledgeClaimRecord> | null;
-  evaluations: ResourceCollection<EvaluationResultRecord> | null;
+  previewDecks: PresentationDeckSourceCollection | null;
+  previewRuns: PreviewRunCollection | null;
+  selectedPreviewRunId: number | null;
+  selectedPreviewRun: PreviewRun | null;
+  previewFeedback: PreviewFeedbackCollection | null;
+  loading: boolean;
+  onStartPreview: (deckKey: string) => void;
+  onSelectPreviewRun: (previewRunId: number) => void;
+  onSubmitFeedback: (
+    previewRunId: number,
+    feedbackKind: string,
+    comment: string,
+    slideId?: string | null
+  ) => void;
 }) {
-  const totalServices = props.overview?.services.length ?? 0;
-  const healthyServices = props.overview?.services.filter((service) => service.status === "ok").length ?? 0;
-  const attentionQueues = props.tasks?.queues.filter((queue) => queue.failedCount > 0).length ?? 0;
-  const queuedTasks = props.tasks?.queues.reduce((total, queue) => total + queue.queuedCount, 0) ?? 0;
-  const latestBackup = props.overview?.backup?.latestBackupKind ?? "pending";
-  const docCount = props.docs?.items.length ?? 0;
-  const skillCount = props.skills?.items.length ?? 0;
-  const claimCount = props.claims?.items.length ?? 0;
-  const evaluationCount = props.evaluations?.items.length ?? 0;
+  const decks = props.previewDecks?.items ?? [];
+  const runs = props.previewRuns?.runs ?? [];
+  const selectedRun =
+    props.selectedPreviewRun ??
+    (props.selectedPreviewRunId === null
+      ? null
+      : runs.find((run) => run.previewRunId === props.selectedPreviewRunId) ?? null);
+  const feedbackItems = props.previewFeedback?.items ?? [];
+  const manifest = parsePreviewManifest(selectedRun);
+  const previewAnalysis = summarizePreviewAnalysis(selectedRun);
+  const slides = manifest?.slides ?? [];
+  const [selectedDeckKey, setSelectedDeckKey] = React.useState("");
+  const [focusedSlideId, setFocusedSlideId] = React.useState<string | null>(null);
+  const [feedbackSlideId, setFeedbackSlideId] = React.useState("");
+  const [feedbackComment, setFeedbackComment] = React.useState("");
+  const deckSignature = decks.map((deck) => deck.deckKey).join("|");
+  const slideSignature = slides.map((slide) => slide.slideId).join("|");
+  const selectedDeck = decks.find((deck) => deck.deckKey === selectedDeckKey) ?? decks[0] ?? null;
+  const selectedSlide =
+    slides.find((slide) => slide.slideId === focusedSlideId) ?? slides[0] ?? null;
+  const previewHtmlPath = extractPreviewHtmlPath(selectedRun);
+  const previewUrl = previewHtmlPath ? devConsoleApi.previewAssetUrl(previewHtmlPath) : null;
+  const selectedPreviewDeckKey = selectedRun?.deckKey ?? null;
+
+  React.useEffect(() => {
+    setSelectedDeckKey((current) => {
+      if (current && decks.some((deck) => deck.deckKey === current)) {
+        return current;
+      }
+      if (
+        selectedPreviewDeckKey &&
+        decks.some((deck) => deck.deckKey === selectedPreviewDeckKey)
+      ) {
+        return selectedPreviewDeckKey;
+      }
+      return decks[0]?.deckKey ?? "";
+    });
+  }, [deckSignature, selectedPreviewDeckKey, decks]);
+
+  React.useEffect(() => {
+    setFocusedSlideId((current) => {
+      if (current && slides.some((slide) => slide.slideId === current)) {
+        return current;
+      }
+      return slides[0]?.slideId ?? null;
+    });
+  }, [selectedRun?.previewRunId, slideSignature, slides]);
+
+  React.useEffect(() => {
+    setFeedbackSlideId("");
+    setFeedbackComment("");
+  }, [selectedRun?.previewRunId]);
+
+  function submitFeedback(feedbackKind: string) {
+    if (!selectedRun) {
+      return;
+    }
+    void props.onSubmitFeedback(
+      selectedRun.previewRunId,
+      feedbackKind,
+      feedbackComment.trim(),
+      feedbackSlideId || null
+    );
+    setFeedbackComment("");
+  }
 
   return (
-    <Panel title="Production Deployment Screen Preview" eyebrow="Proposed">
-      <div className="preview-overview">
-        <div>
-          <h3 style={{ margin: 0, marginBottom: tokens.space.sm }}>Compact review-first surface</h3>
-          <p style={{ margin: 0, color: tokens.color.muted }}>
-            These samples reuse the runtime dashboard visual language, but compress the first screen into
-            denser cards so deployment reviews need less vertical travel.
-          </p>
-        </div>
-        <div className="preview-chip-row">
-          <StatusPill status={totalServices > 0 && healthyServices === totalServices ? "ok" : "neutral"}>
-            {totalServices ? `${healthyServices}/${totalServices} services healthy` : "service health pending"}
-          </StatusPill>
-          <StatusPill status={attentionQueues > 0 ? "degraded" : "ok"}>
-            {attentionQueues > 0 ? `${attentionQueues} queue alerts` : `${queuedTasks} queued tasks`}
-          </StatusPill>
-          <StatusPill status={docCount > 0 ? "ok" : "neutral"}>
-            {docCount} docs · {skillCount} skills
-          </StatusPill>
-        </div>
+    <Panel title="Preview Workspace" eyebrow="Decks">
+      <div className="preview-summary-row">
+        <InfoCard
+          label="Decks"
+          value={String(decks.length)}
+          detail={selectedDeck?.deckKey ?? "Choose a deck source to start a preview run."}
+        />
+        <InfoCard
+          label="Runs"
+          value={String(runs.length)}
+          detail={
+            selectedRun
+              ? `Selected #${selectedRun.previewRunId} · ${selectedRun.status}`
+              : "No preview run selected."
+          }
+        />
+        <InfoCard
+          label="Slides"
+          value={String(slides.length)}
+          detail={
+            previewAnalysis.slideCount
+              ? `${previewAnalysis.slideCount} analyzed screenshots`
+              : "Manifest only"
+          }
+        />
       </div>
 
-      <div className="preview-grid">
-        <PreviewCard
-          tone="forest"
-          label="Theme 01"
-          title="Mission Control"
-          description="Desktop-first launch surface for cutovers, health review, and fast escalation."
-          span="wide"
-        >
-          <div className="preview-toolbar">
-            <span className="preview-pill">Deployment</span>
-            <span className="preview-pill preview-pill-strong">Status ribbon</span>
-            <span className="preview-pill">Map + queue split</span>
-          </div>
-          <div className="preview-stat-grid">
-            <PreviewMetric label="Services" value={totalServices ? `${healthyServices}/${totalServices}` : "0/0"} />
-            <PreviewMetric label="Queue alerts" value={String(attentionQueues)} />
-            <PreviewMetric label="Backup" value={latestBackup} />
-          </div>
-          <div className="preview-split">
-            <div className="preview-map">
-              <div className="preview-map-badge">Regional coverage</div>
-              <div className="preview-map-grid">
-                <span />
-                <span />
-                <span />
-                <span />
+      <div className="preview-workspace">
+        <aside className="preview-sidebar">
+          <section className="preview-section">
+            <div className="preview-section-header">
+              <div>
+                <h3>Deck Sources</h3>
+                <p>Markdown and preview companion files are cataloged before render.</p>
+              </div>
+              <button
+                onClick={() => void props.onStartPreview(selectedDeckKey)}
+                disabled={!selectedDeckKey}
+              >
+                Start preview run
+              </button>
+            </div>
+            <div className="preview-list">
+              {decks.length ? (
+                decks.map((deck) => (
+                  <button
+                    key={deck.deckKey}
+                    className={`preview-list-item${selectedDeckKey === deck.deckKey ? " is-active" : ""}`}
+                    onClick={() => setSelectedDeckKey(deck.deckKey)}
+                  >
+                    <span className="preview-list-title">{deck.title}</span>
+                    <span className="preview-list-subtitle">{deck.deckKey}</span>
+                    <span className="preview-list-meta">
+                      {deck.slideCount} slides · {deck.hasPreviewCompanion ? "companion ready" : "markdown only"}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="preview-empty-state">
+                  {props.loading ? "Loading preview decks…" : "No preview decks found."}
+                </p>
+              )}
+            </div>
+          </section>
+
+          <section className="preview-section">
+            <div className="preview-section-header">
+              <div>
+                <h3>Preview Runs</h3>
+                <p>Render and analysis history from the dev plane.</p>
               </div>
             </div>
-            <div className="preview-stack">
-              <PreviewListRow label="Runtime API" value={serviceStatusLabel(props.overview, "runtime-api")} />
-              <PreviewListRow label="Gateway" value={serviceStatusLabel(props.overview, "gateway")} />
-              <PreviewListRow label="Queued tasks" value={String(queuedTasks)} />
-              <PreviewListRow label="Newest evidence" value={`${claimCount} claims`} />
+            <div className="preview-list">
+              {runs.length ? (
+                runs.map((run) => (
+                  <button
+                    key={run.previewRunId}
+                    className={`preview-list-item${selectedRun?.previewRunId === run.previewRunId ? " is-active" : ""}`}
+                    onClick={() => void props.onSelectPreviewRun(run.previewRunId)}
+                  >
+                    <div className="preview-run-heading">
+                      <span className="preview-list-title">Run #{run.previewRunId}</span>
+                      <StatusPill status={statusToneForPreviewRun(run.status)}>{run.status}</StatusPill>
+                    </div>
+                    <span className="preview-list-subtitle">{run.deckKey}</span>
+                    <span className="preview-list-meta">Updated {formatTimestamp(run.updatedAt)}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="preview-empty-state">
+                  {props.loading ? "Loading preview runs…" : "No preview runs recorded yet."}
+                </p>
+              )}
             </div>
-          </div>
-        </PreviewCard>
+          </section>
+        </aside>
 
-        <PreviewCard
-          tone="sand"
-          label="Theme 02"
-          title="Field Tablet"
-          description="Tight operator workflow for tripod setup, link checks, and fix confirmation."
-        >
-          <div className="preview-toolbar">
-            <span className="preview-pill">Touch targets</span>
-            <span className="preview-pill">One-handed scan</span>
+        <section className="preview-stage-column">
+          <div className="preview-stage-toolbar">
+            <div>
+              <h3>{selectedRun?.title ?? "Select a preview run"}</h3>
+              <p>
+                {selectedRun
+                  ? `${selectedRun.deckKey} · ${selectedRun.browser} · ${formatViewport(selectedRun.viewportJson)}`
+                  : "Open a generated HTML deck here after starting or selecting a run."}
+              </p>
+            </div>
+            {selectedRun ? (
+              <div className="preview-chip-row">
+                <StatusPill status={statusToneForPreviewRun(selectedRun.status)}>
+                  {selectedRun.status}
+                </StatusPill>
+                <StatusPill status={previewAnalysis.hasWarnings ? "neutral" : "ok"}>
+                  {previewAnalysis.hasWarnings ? "analysis warnings" : "analysis clean"}
+                </StatusPill>
+              </div>
+            ) : null}
           </div>
-          <div className="preview-stat-grid preview-stat-grid-tight">
-            <PreviewMetric label="Fix target" value="2 cm" />
-            <PreviewMetric label="Base link" value="42 ms" />
-          </div>
-          <div className="preview-checklist">
-            <PreviewChecklistItem title="Sky view verified" detail="satellite mask + compass" />
-            <PreviewChecklistItem title="Correction link stable" detail="latency and packet-loss band" />
-            <PreviewChecklistItem title="Start survey" detail="single primary action above fold" />
-          </div>
-          <div className="preview-bars">
-            <span style={{ height: 34 }} />
-            <span style={{ height: 58 }} />
-            <span style={{ height: 78 }} />
-            <span style={{ height: 50 }} />
-            <span style={{ height: 68 }} />
-          </div>
-        </PreviewCard>
 
-        <PreviewCard
-          tone="ink"
-          label="Theme 03"
-          title="Evidence Board"
-          description="Approval-oriented surface for deployment sign-off, docs review, and supervised choices."
-        >
-          <div className="preview-toolbar">
-            <span className="preview-pill">Docs</span>
-            <span className="preview-pill preview-pill-strong">Approvals</span>
-            <span className="preview-pill">Knowledge</span>
+          <div className="preview-stage-frame">
+            {previewUrl ? (
+              <iframe
+                key={previewUrl}
+                title={selectedRun?.title ?? "Preview run"}
+                src={previewUrl}
+                sandbox="allow-scripts allow-popups allow-presentation"
+                className="preview-iframe"
+              />
+            ) : selectedDeck ? (
+              <DeckSourcePreview deck={selectedDeck} />
+            ) : (
+              <PreviewEmptyState loading={props.loading} />
+            )}
           </div>
-          <div className="preview-ledger">
-            <PreviewListRow label="Cataloged docs" value={String(docCount)} />
-            <PreviewListRow label="Verified skills" value={String(skillCount)} />
-            <PreviewListRow label="Claims" value={String(claimCount)} />
-            <PreviewListRow label="Evaluations" value={String(evaluationCount)} />
+
+          <div className="preview-stage-footer">
+            <div className="preview-paths">
+              <span>Markdown: {manifest?.markdownPath ?? selectedRun?.markdownPath ?? "n/a"}</span>
+              <span>Companion: {manifest?.companionPath ?? selectedRun?.companionPath ?? "none"}</span>
+              <span>HTML: {previewHtmlPath ?? "not rendered yet"}</span>
+            </div>
+            {previewUrl ? (
+              <a href={previewUrl} target="_blank" rel="noreferrer">
+                Open preview artifact
+              </a>
+            ) : null}
           </div>
-          <div className="preview-note">
-            Show deployment rationale, supporting artifacts, and approval shortcuts on one screen instead of
-            stacking long review panes.
-          </div>
-        </PreviewCard>
+
+          {previewAnalysis.hasWarnings ? (
+            <div className="preview-warning-block">
+              {previewAnalysis.warnings.length ? <p>{previewAnalysis.warnings.join(" ")}</p> : null}
+              {previewAnalysis.consoleErrors.length ? (
+                <p>Console errors: {previewAnalysis.consoleErrors.join(" | ")}</p>
+              ) : null}
+              {previewAnalysis.requestFailures.length ? (
+                <p>Request failures: {previewAnalysis.requestFailures.join(" | ")}</p>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+
+        <aside className="preview-inspector">
+          <section className="preview-section">
+            <div className="preview-section-header">
+              <div>
+                <h3>Slides</h3>
+                <p>Slide navigation and source data come from `manifestJson`.</p>
+              </div>
+            </div>
+            <div className="preview-slide-list">
+              {slides.length ? (
+                slides.map((slide, index) => (
+                  <button
+                    key={slide.slideId}
+                    className={`preview-slide-button${selectedSlide?.slideId === slide.slideId ? " is-active" : ""}`}
+                    onClick={() => setFocusedSlideId(slide.slideId)}
+                  >
+                    <span className="preview-slide-index">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="preview-slide-copy">
+                      <strong>{slide.title}</strong>
+                      <span>{slide.slideId}</span>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="preview-empty-state">
+                  {selectedRun ? "No slide manifest data available yet." : "Select a preview run to inspect slides."}
+                </p>
+              )}
+            </div>
+          </section>
+
+          <section className="preview-section">
+            <div className="preview-section-header">
+              <div>
+                <h3>Slide Source</h3>
+                <p>{selectedSlide ? selectedSlide.slideId : "No slide selected."}</p>
+              </div>
+            </div>
+            {selectedSlide ? (
+              <div className="preview-slide-detail">
+                <div className="preview-detail-group">
+                  <span className="preview-detail-label">Audience goal</span>
+                  <p>{selectedSlide.audienceGoal || "Not specified."}</p>
+                </div>
+                <div className="preview-detail-group">
+                  <span className="preview-detail-label">Visual guidance</span>
+                  <p>{selectedSlide.visualGuidance || "Not specified."}</p>
+                </div>
+                <div className="preview-detail-group">
+                  <span className="preview-detail-label">Bullets</span>
+                  {selectedSlide.bullets.length ? (
+                    <ul className="preview-detail-list">
+                      {selectedSlide.bullets.map((bullet) => (
+                        <li key={bullet}>{bullet}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No bullets captured.</p>
+                  )}
+                </div>
+                <div className="preview-detail-group">
+                  <span className="preview-detail-label">Media</span>
+                  {selectedSlide.media.length ? (
+                    <ul className="preview-detail-list">
+                      {selectedSlide.media.map((media, index) => (
+                        <li key={`${media.kind}-${media.source ?? index}`}>
+                          {media.kind}
+                          {media.source ? ` · ${media.source}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No media declared.</p>
+                  )}
+                </div>
+                <div className="preview-detail-group">
+                  <span className="preview-detail-label">Evidence paths</span>
+                  {selectedSlide.evidencePaths.length ? (
+                    <ul className="preview-detail-list">
+                      {selectedSlide.evidencePaths.map((evidencePath) => (
+                        <li key={evidencePath}>{evidencePath}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No evidence references listed.</p>
+                  )}
+                </div>
+                <div className="preview-detail-group">
+                  <span className="preview-detail-label">Speaker notes</span>
+                  <p>{selectedSlide.speakerNotes || "No speaker notes."}</p>
+                </div>
+                {selectedSlide.screenshotPath ? (
+                  <a
+                    href={devConsoleApi.previewAssetUrl(selectedSlide.screenshotPath)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="preview-screenshot-link"
+                  >
+                    <img
+                      src={devConsoleApi.previewAssetUrl(selectedSlide.screenshotPath)}
+                      alt={`${selectedSlide.title} screenshot`}
+                      className="preview-screenshot"
+                    />
+                    <span>{selectedSlide.screenshotPath}</span>
+                  </a>
+                ) : null}
+              </div>
+            ) : (
+              <p className="preview-empty-state">No slide detail available.</p>
+            )}
+          </section>
+
+          <section className="preview-section">
+            <div className="preview-section-header">
+              <div>
+                <h3>Feedback</h3>
+                <p>Run-level decisions and optional slide-level comments are stored together.</p>
+              </div>
+            </div>
+            {selectedRun ? (
+              <div className="preview-feedback-form">
+                <label className="preview-field">
+                  <span>Feedback scope</span>
+                  <select
+                    value={feedbackSlideId}
+                    onChange={(event) => setFeedbackSlideId(event.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">Entire run</option>
+                    {slides.map((slide) => (
+                      <option key={slide.slideId} value={slide.slideId}>
+                        {slide.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="preview-field">
+                  <span>Comment</span>
+                  <textarea
+                    value={feedbackComment}
+                    onChange={(event) => setFeedbackComment(event.target.value)}
+                    rows={4}
+                    style={inputStyle}
+                    placeholder="What should change, what was accepted, or what evidence is missing?"
+                  />
+                </label>
+                <div className="preview-feedback-actions">
+                  <button onClick={() => submitFeedback("comment")}>Comment</button>
+                  <button onClick={() => submitFeedback("requested_changes")}>Request changes</button>
+                  <button onClick={() => submitFeedback("approved")}>Approve</button>
+                  <button onClick={() => submitFeedback("rejected")}>Reject</button>
+                </div>
+              </div>
+            ) : (
+              <p className="preview-empty-state">Select a preview run before leaving feedback.</p>
+            )}
+
+            <div className="preview-feedback-list">
+              {feedbackItems.length ? (
+                feedbackItems.map((item) => (
+                  <div key={item.previewFeedbackId} className="preview-feedback-item">
+                    <div className="preview-run-heading">
+                      <strong>{item.feedbackKind}</strong>
+                      <span>{formatTimestamp(item.createdAt)}</span>
+                    </div>
+                    <div className="preview-feedback-target">
+                      {item.slideId ? `Slide ${item.slideId}` : "Entire run"}
+                    </div>
+                    <p>{item.comment || "No comment provided."}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="preview-empty-state">
+                  {selectedRun ? "No feedback recorded for this run yet." : "Feedback history appears once a run is selected."}
+                </p>
+              )}
+            </div>
+          </section>
+        </aside>
       </div>
     </Panel>
   );
@@ -1050,10 +1573,15 @@ function CoordinationPanel(props: {
   onEnqueue: (taskKind: string) => void;
   onSupervision: (decisionKind: "accepted" | "rejected" | "overridden", subjectKey: string, chosenValue?: string) => void;
 }) {
+  const queues = props.tasks?.queues ?? [];
+  const tasks = props.tasks?.items.slice(0, 12) ?? [];
+  const runs = props.runs?.items.slice(0, 8) ?? [];
+  const selectedTask = props.runDetail?.task ?? null;
+
   return (
-    <div style={{ display: "grid", gap: tokens.space.lg }}>
+    <div className="surface-stack">
       <Panel title="Safe Controls" eyebrow="Actions">
-        <div style={{ display: "grid", gap: tokens.space.md }}>
+        <div className="card-list">
           <ActionRow
             label="Refresh embeddings"
             taskKind="memory.run_embeddings"
@@ -1081,99 +1609,185 @@ function CoordinationPanel(props: {
         </div>
       </Panel>
 
-      <Panel title="Queues" eyebrow="Coordination">
-        {props.tasks ? (
-          <div style={{ display: "grid", gap: tokens.space.sm }}>
-            {props.tasks.queues.map((queue) => (
-              <div key={queue.queueName} style={rowStyle}>
-                <div>
-                  <strong>{queue.queueName}</strong>
-                  <div style={{ color: tokens.color.muted }}>
-                    queued {queue.queuedCount} · leased {queue.leasedCount} · failed {queue.failedCount}
+      <Panel title="Queue Lanes" eyebrow="Coordination">
+        {queues.length ? (
+          <div className="queue-grid">
+            {queues.map((queue) => (
+              <div key={queue.queueName} className={`queue-card${queue.failedCount > 0 ? " is-danger" : ""}`}>
+                <div className="record-header">
+                  <div className="queue-title">
+                    <strong>{queue.queueName}</strong>
+                    <p className="record-subtitle">
+                      {queue.succeededCount} succeeded overall
+                    </p>
                   </div>
+                  <StatusPill status={queue.failedCount > 0 ? "degraded" : queue.queuedCount > 0 || queue.leasedCount > 0 ? "neutral" : "ok"}>
+                    {queue.failedCount > 0 ? "attention" : queue.queuedCount > 0 || queue.leasedCount > 0 ? "active" : "clear"}
+                  </StatusPill>
                 </div>
-                <StatusPill status={queue.failedCount > 0 ? "degraded" : "ok"}>
-                  {queue.failedCount > 0 ? "attention" : "healthy"}
-                </StatusPill>
+                <div className="queue-meta">
+                  <span className="token-chip">queued {queue.queuedCount}</span>
+                  <span className="token-chip">leased {queue.leasedCount}</span>
+                  <span className="token-chip">failed {queue.failedCount}</span>
+                </div>
               </div>
             ))}
           </div>
-        ) : props.loading ? <p>Loading tasks…</p> : null}
+        ) : props.loading ? <p className="empty-copy">Loading queue lanes…</p> : <p className="empty-copy">No queue data available.</p>}
       </Panel>
 
-      <div style={splitGridStyle}>
+      <div className="surface-split">
         <Panel title="Recent Tasks" eyebrow="Queue History">
-          {props.tasks ? (
-            <div style={{ display: "grid", gap: tokens.space.sm }}>
-              {props.tasks.items.slice(0, 12).map((task) => (
-                <div key={task.agentTaskId} style={rowStyle}>
-                  <div>
-                    <strong>{task.taskKind}</strong>
-                    <div style={{ color: tokens.color.muted }}>
-                      #{task.agentTaskId} · {task.status} · attempts {task.attemptCount}/{task.maxAttempts}
+          {tasks.length ? (
+            <div className="card-list">
+              {tasks.map((task) => (
+                <div
+                  key={task.agentTaskId}
+                  className={`record-card${task.status === "failed" ? " is-danger" : task.status === "queued" || task.status === "leased" ? " is-warning" : ""}`}
+                >
+                  <div className="record-header">
+                    <div className="record-title">
+                      <strong>{task.taskKind}</strong>
+                      <p className="record-subtitle">
+                        Task #{task.agentTaskId} in {task.queueName}
+                      </p>
                     </div>
+                    <StatusPill status={task.status === "succeeded" ? "ok" : task.status === "failed" ? "degraded" : "neutral"}>
+                      {task.status}
+                    </StatusPill>
                   </div>
-                  <StatusPill status={task.status === "failed" ? "degraded" : "neutral"}>
-                    {task.status}
-                  </StatusPill>
+                  <div className="record-meta">
+                    <span className="token-chip">
+                      attempts {task.attemptCount}/{task.maxAttempts}
+                    </span>
+                    <span className="token-chip">updated {formatTimestamp(task.updatedAt)}</span>
+                    {task.completedAt ? <span className="token-chip">completed {formatTimestamp(task.completedAt)}</span> : null}
+                  </div>
+                  {task.lastError ? <p className="record-copy">{task.lastError}</p> : null}
                 </div>
               ))}
             </div>
-          ) : props.loading ? <p>Loading task history…</p> : null}
+          ) : props.loading ? <p className="empty-copy">Loading task history…</p> : <p className="empty-copy">No recent tasks available.</p>}
         </Panel>
 
         <Panel title="Run Detail" eyebrow="Timeline">
           {props.runDetail ? (
-            <div style={{ display: "grid", gap: tokens.space.md }}>
-              <div style={rowStyle}>
-                <div>
-                  <strong>{props.runDetail.run.taskSlug}</strong>
-                  <div style={{ color: tokens.color.muted }}>
-                    run #{props.runDetail.run.agentRunId} · {props.runDetail.run.agentName}
+            <div className="surface-stack">
+              <div className={`record-card${props.runDetail.run.status === "failed" ? " is-danger" : ""}`}>
+                <div className="record-header">
+                  <div className="record-title">
+                    <strong>{props.runDetail.run.taskSlug}</strong>
+                    <p className="record-subtitle">
+                      Run #{props.runDetail.run.agentRunId} by {props.runDetail.run.agentName}
+                    </p>
                   </div>
+                  <StatusPill status={props.runDetail.run.status === "succeeded" ? "ok" : props.runDetail.run.status === "failed" ? "degraded" : "neutral"}>
+                    {props.runDetail.run.status}
+                  </StatusPill>
                 </div>
-                <StatusPill status={props.runDetail.run.status === "succeeded" ? "ok" : props.runDetail.run.status === "failed" ? "degraded" : "neutral"}>
-                  {props.runDetail.run.status}
-                </StatusPill>
+                <FactGrid
+                  entries={[
+                    { label: "Started", value: formatTimestamp(props.runDetail.run.startedAt) },
+                    { label: "Finished", value: props.runDetail.run.finishedAt ? formatTimestamp(props.runDetail.run.finishedAt) : "Still running" },
+                    { label: "Task queue", value: selectedTask?.queueName ?? "Detached from task row" },
+                    { label: "Attempts", value: selectedTask ? `${selectedTask.attemptCount}/${selectedTask.maxAttempts}` : "n/a" }
+                  ]}
+                />
+                {selectedTask ? (
+                  <div className="action-strip">
+                    <button onClick={() => void props.onRetrySelectedTask()}>Retry selected task</button>
+                    <span className="token-chip">Task #{selectedTask.agentTaskId}</span>
+                    <span className="token-chip">{selectedTask.status}</span>
+                  </div>
+                ) : null}
+                {selectedTask?.lastError ? (
+                  <div className="detail-card is-danger">
+                    <div className="section-heading">
+                      <h4>Latest failure detail</h4>
+                    </div>
+                    <p className="detail-copy">{selectedTask.lastError}</p>
+                  </div>
+                ) : null}
               </div>
-              {props.runDetail.task ? (
-                <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap" }}>
-                  <button onClick={() => void props.onRetrySelectedTask()}>Retry selected task</button>
-                  <span style={{ color: tokens.color.muted }}>
-                    task #{props.runDetail.task.agentTaskId} · {props.runDetail.task.queueName}
-                  </span>
+
+              <div className="surface-split">
+                <div className="detail-stack">
+                  <div className="section-heading">
+                    <h3>Execution timeline</h3>
+                    <p>Recent event payloads are summarized by field instead of raw JSON.</p>
+                  </div>
+                  <div className="timeline-list">
+                    {props.runDetail.events.slice(0, 8).map((event) => (
+                      <div key={event.agentEventId} className="timeline-item">
+                        <div className="record-header">
+                          <div className="record-title">
+                            <strong>{event.eventType}</strong>
+                            <p className="record-subtitle">{formatTimestamp(event.createdAt)}</p>
+                          </div>
+                        </div>
+                        <StructuredValue value={event.payload} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ) : null}
-              <div style={{ display: "grid", gap: tokens.space.sm }}>
-                {props.runDetail.events.slice(0, 8).map((event) => (
-                  <div key={event.agentEventId} style={eventStyle}>
-                    <strong>{event.eventType}</strong>
-                    <pre style={preStyle}>{JSON.stringify(event.payload, null, 2)}</pre>
+
+                <div className="detail-stack">
+                  <div className="section-heading">
+                    <h3>Artifacts</h3>
+                    <p>Captured outputs and metadata linked from the dev plane.</p>
                   </div>
-                ))}
-                {props.runDetail.artifacts.slice(0, 6).map((artifact) => (
-                  <div key={artifact.artifactId} style={eventStyle}>
-                    <strong>{artifact.artifactKind}</strong>
-                    <div>{artifact.uri}</div>
-                    <pre style={preStyle}>{JSON.stringify(artifact.metadata, null, 2)}</pre>
+                  <div className="artifact-list">
+                    {props.runDetail.artifacts.length ? (
+                      props.runDetail.artifacts.slice(0, 6).map((artifact) => (
+                        <div key={artifact.artifactId} className="artifact-card">
+                          <div className="record-header">
+                            <div className="record-title">
+                              <strong>{artifact.artifactKind}</strong>
+                              <p className="record-subtitle">Artifact #{artifact.artifactId}</p>
+                            </div>
+                          </div>
+                          <ResourceLink uri={artifact.uri} />
+                          {artifact.metadata && Object.keys(artifact.metadata).length ? (
+                            <StructuredValue value={artifact.metadata} />
+                          ) : (
+                            <p className="empty-copy">No artifact metadata recorded.</p>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="empty-copy">No artifacts linked to this run.</p>
+                    )}
                   </div>
-                ))}
+                </div>
               </div>
             </div>
-          ) : props.loading ? <p>Loading run detail…</p> : <p>No agent runs available.</p>}
+          ) : props.loading ? <p className="empty-copy">Loading run detail…</p> : <p className="empty-copy">No agent runs available yet.</p>}
         </Panel>
       </div>
 
       <Panel title="Recent Runs" eyebrow="Selection">
-        {props.runs?.items.length ? (
-          <div style={{ display: "grid", gap: tokens.space.sm }}>
-            {props.runs.items.slice(0, 8).map((run) => (
-              <button key={`run-link-${run.agentRunId}`} onClick={() => void props.onSelectRun(run.agentRunId)}>
-                Inspect run #{run.agentRunId} · {run.taskSlug}
+        {runs.length ? (
+          <div className="card-list">
+            {runs.map((run) => (
+              <button
+                key={`run-link-${run.agentRunId}`}
+                className="selection-button"
+                onClick={() => void props.onSelectRun(run.agentRunId)}
+              >
+                <strong>
+                  #{run.agentRunId} · {run.taskSlug}
+                </strong>
+                <span className="console-nav-description">
+                  {run.agentName} · started {formatTimestamp(run.startedAt)}
+                  {run.finishedAt ? ` · finished ${formatTimestamp(run.finishedAt)}` : ""}
+                </span>
+                <StatusPill status={run.status === "succeeded" ? "ok" : run.status === "failed" ? "degraded" : "neutral"}>
+                  {run.status}
+                </StatusPill>
               </button>
             ))}
           </div>
-        ) : <p>Use the queue and safe controls above to seed new runs.</p>}
+        ) : <p className="empty-copy">Use the queue and safe controls above to seed new runs.</p>}
       </Panel>
     </div>
   );
@@ -1198,12 +1812,15 @@ function ReviewPanel(props: {
   const captureSteps = extractCaptureSteps(props.selectedReviewRun);
   const screenshotLimit = props.detailDepth === "compact" ? 3 : 6;
   const baselineLimit = props.detailDepth === "compact" ? 4 : 8;
+  const selectedRun = props.selectedReviewRun;
+  const captureSummary = summarizeReviewSummary(selectedRun?.captureSummaryJson ?? {});
+  const analysisSummary = summarizeReviewSummary(selectedRun?.analysisSummaryJson ?? {});
 
   return (
-    <div style={{ display: "grid", gap: tokens.space.lg }}>
+    <div className="surface-stack">
       <Panel title="Review Automation" eyebrow="Local Only">
-        <div style={{ display: "grid", gap: tokens.space.md }}>
-          <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap" }}>
+        <div className="detail-stack">
+          <div className="action-strip">
             <button onClick={() => void props.onStartReview()}>Start new UI review</button>
             <button
               onClick={() => void props.onPromoteBaseline()}
@@ -1212,7 +1829,7 @@ function ReviewPanel(props: {
               Promote selected run baselines
             </button>
           </div>
-          <div style={gridStyle}>
+          <div className="summary-grid">
             <InfoCard
               label="Runs"
               value={String(runs.length)}
@@ -1232,83 +1849,122 @@ function ReviewPanel(props: {
         </div>
       </Panel>
 
-      <div style={splitGridStyle}>
+      <div className="surface-split">
         <Panel title="Recent Review Runs" eyebrow="Selection">
           {runs.length ? (
-            <div style={{ display: "grid", gap: tokens.space.sm }}>
+            <div className="card-list">
               {runs.map((run) => (
-                <button key={run.uiReviewRunId} onClick={() => void props.onSelectReviewRun(run.uiReviewRunId)}>
-                  Inspect review #{run.uiReviewRunId} · {run.status}
+                <button
+                  key={run.uiReviewRunId}
+                  className="selection-button"
+                  onClick={() => void props.onSelectReviewRun(run.uiReviewRunId)}
+                >
+                  <strong>Review #{run.uiReviewRunId}</strong>
+                  <span className="console-nav-description">
+                    {run.surface} · {run.browser} · {formatTimestamp(run.updatedAt)}
+                  </span>
+                  <StatusPill status={statusToneForReviewRun(run.status)}>{run.status}</StatusPill>
                 </button>
               ))}
             </div>
           ) : props.loading ? (
-            <p>Loading UI review runs…</p>
+            <p className="empty-copy">Loading UI review runs…</p>
           ) : (
-            <p>No UI review runs yet.</p>
+            <p className="empty-copy">No UI review runs yet.</p>
           )}
         </Panel>
 
         <Panel title="Selected Review Run" eyebrow="Status">
-          {props.selectedReviewRun ? (
-            <div style={{ display: "grid", gap: tokens.space.md }}>
-              <div style={rowStyle}>
-                <div>
-                  <strong>
-                    Review #{props.selectedReviewRun.uiReviewRunId} · {props.selectedReviewRun.surface}
-                  </strong>
-                  <div style={{ color: tokens.color.muted }}>
-                    {props.selectedReviewRun.browser} · {props.selectedReviewRun.baseUrl}
+          {selectedRun ? (
+            <div className="detail-stack">
+              <div className={`record-card${selectedRun.status === "failed" ? " is-danger" : ""}`}>
+                <div className="record-header">
+                  <div className="record-title">
+                    <strong>
+                      Review #{selectedRun.uiReviewRunId} · {selectedRun.surface}
+                    </strong>
+                    <p className="record-subtitle">
+                      {selectedRun.browser} · {selectedRun.baseUrl}
+                    </p>
                   </div>
+                  <StatusPill status={statusToneForReviewRun(selectedRun.status)}>
+                    {selectedRun.status}
+                  </StatusPill>
                 </div>
-                <StatusPill status={statusToneForReviewRun(props.selectedReviewRun.status)}>
-                  {props.selectedReviewRun.status}
-                </StatusPill>
+                <FactGrid
+                  entries={[
+                    { label: "Viewport", value: formatViewport(selectedRun.viewportJson) },
+                    { label: "Capture steps", value: String(captureSummary.stepCount ?? 0) },
+                    { label: "Artifacts", value: String(captureSummary.artifactCount ?? 0) },
+                    { label: "Threshold", value: analysisSummary.threshold ? String(analysisSummary.threshold) : "default" },
+                    { label: "Capture completed", value: captureSummary.completedAt ? formatTimestamp(String(captureSummary.completedAt)) : "pending" },
+                    { label: "Analysis completed", value: analysisSummary.completedAt ? formatTimestamp(String(analysisSummary.completedAt)) : "pending" }
+                  ]}
+                />
               </div>
-              <pre style={preStyle}>
-                {JSON.stringify(
-                  {
-                    viewport: props.selectedReviewRun.viewportJson,
-                    manifest: props.selectedReviewRun.manifestJson,
-                    captureSummary: summarizeReviewSummary(props.selectedReviewRun.captureSummaryJson),
-                    analysisSummary: summarizeReviewSummary(props.selectedReviewRun.analysisSummaryJson)
-                  },
-                  null,
-                  2
-                )}
-              </pre>
+              <div className="surface-split">
+                <div className="detail-card">
+                  <div className="section-heading">
+                    <h4>Review manifest</h4>
+                    <p>Run context and initiation parameters.</p>
+                  </div>
+                  <StructuredValue value={selectedRun.manifestJson} />
+                </div>
+                <div className="detail-card">
+                  <div className="section-heading">
+                    <h4>Capture summary</h4>
+                    <p>Derived from the capture and analyzer stages.</p>
+                  </div>
+                  <StructuredValue
+                    value={{
+                      capture: captureSummary,
+                      analysis: analysisSummary
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           ) : props.loading ? (
-            <p>Loading selected UI review run…</p>
+            <p className="empty-copy">Loading selected UI review run…</p>
           ) : (
-            <p>Select a review run to inspect its evidence and findings.</p>
+            <p className="empty-copy">Select a review run to inspect its evidence and findings.</p>
           )}
         </Panel>
       </div>
 
-      <div style={splitGridStyle}>
+      <div className="surface-split">
         <Panel title="Findings" eyebrow="Deterministic Analysis">
           {findings.length ? (
-            <div style={{ display: "grid", gap: tokens.space.md }}>
+            <div className="card-list">
               {findings.map((finding) => (
-                <div key={finding.uiReviewFindingId} style={eventStyle}>
-                  <div style={rowStyle}>
-                    <div>
+                <div
+                  key={finding.uiReviewFindingId}
+                  className={`record-card${finding.severity === "critical" || finding.severity === "error" ? " is-danger" : finding.severity === "warning" ? " is-warning" : ""}`}
+                >
+                  <div className="record-header">
+                    <div className="record-title">
                       <strong>{finding.title}</strong>
-                      <div style={{ color: tokens.color.muted }}>
+                      <p className="record-subtitle">
                         {finding.category} · {finding.severity}
                         {finding.scenarioName ? ` · ${finding.scenarioName}` : ""}
-                      </div>
+                      </p>
                     </div>
                     <StatusPill status={statusToneForFinding(finding.severity)}>
                       {finding.status}
                     </StatusPill>
                   </div>
-                  <p style={{ marginBottom: tokens.space.sm }}>{finding.summary}</p>
+                  <p className="record-copy">{finding.summary}</p>
+                  <FactGrid
+                    entries={[
+                      { label: "Scenario", value: finding.scenarioName ?? "Not scoped" },
+                      { label: "Checkpoint", value: finding.checkpointName ?? "Not scoped" },
+                      { label: "Created", value: formatTimestamp(finding.createdAt) }
+                    ]}
+                  />
                   {finding.fixDraftJson && Object.keys(finding.fixDraftJson).length ? (
-                    <pre style={preStyle}>{JSON.stringify(finding.fixDraftJson, null, 2)}</pre>
+                    <FindingFixDraft value={finding.fixDraftJson} />
                   ) : null}
-                  <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap", marginTop: tokens.space.sm }}>
+                  <div className="action-strip">
                     <button onClick={() => void props.onReviewFinding(finding.uiReviewFindingId, "accepted")}>
                       Accept
                     </button>
@@ -1321,46 +1977,53 @@ function ReviewPanel(props: {
               ))}
             </div>
           ) : props.loading ? (
-            <p>Loading UI review findings…</p>
+            <p className="empty-copy">Loading UI review findings…</p>
           ) : (
-            <p>No findings recorded for the selected run.</p>
+            <p className="empty-copy">No findings recorded for the selected run.</p>
           )}
         </Panel>
 
         <Panel title="Approved Baselines" eyebrow="Reference Images">
           {baselines.length ? (
-            <div style={{ display: "grid", gap: tokens.space.md }}>
+            <div className="card-list">
               {baselines.slice(0, baselineLimit).map((baseline) => (
-                <div key={baseline.uiReviewBaselineId} style={eventStyle}>
-                  <strong>
-                    {baseline.scenarioName} · {baseline.checkpointName}
-                  </strong>
-                  <div style={{ color: tokens.color.muted }}>
-                    {baseline.browser} · {baseline.viewportKey}
+                <div key={baseline.uiReviewBaselineId} className="record-card">
+                  <div className="record-title">
+                    <strong>
+                      {baseline.scenarioName} · {baseline.checkpointName}
+                    </strong>
+                    <p className="record-subtitle">
+                      {baseline.browser} · {baseline.viewportKey}
+                    </p>
                   </div>
                   <ReviewImagePreview relativePath={baseline.relativePath} alt={`${baseline.scenarioName} baseline`} />
                 </div>
               ))}
             </div>
           ) : props.loading ? (
-            <p>Loading baselines…</p>
+            <p className="empty-copy">Loading baselines…</p>
           ) : (
-            <p>No approved baselines yet.</p>
+            <p className="empty-copy">No approved baselines yet.</p>
           )}
         </Panel>
       </div>
 
       <Panel title="Checkpoint Screenshots" eyebrow="Capture Evidence">
         {captureSteps.length ? (
-          <div style={splitGridStyle}>
+          <div className="surface-split">
             {captureSteps.slice(0, screenshotLimit).map((step, index) => (
-              <div key={`${step.scenarioName ?? "step"}-${index}`} style={eventStyle}>
-                <strong>
-                  {step.scenarioName ?? "scenario"} · {step.checkpointName ?? "loaded"}
-                </strong>
-                <div style={{ color: tokens.color.muted }}>
-                  {Array.isArray(step.expectedTexts) ? `${step.expectedTexts.length} expected markers` : "stable checkpoint"}
+              <div key={`${step.scenarioName ?? "step"}-${index}`} className="record-card">
+                <div className="record-title">
+                  <strong>
+                    {step.scenarioName ?? "scenario"} · {step.checkpointName ?? "loaded"}
+                  </strong>
+                  <p className="record-subtitle">
+                    {Array.isArray(step.expectedTexts) && step.expectedTexts.length
+                      ? `${step.expectedTexts.length} expected markers`
+                      : "stable checkpoint"}
+                  </p>
                 </div>
+                {step.expectedTexts.length ? <PillList values={step.expectedTexts} /> : null}
                 <ReviewImagePreview
                   relativePath={step.screenshot?.relativePath ?? null}
                   alt={`${step.scenarioName ?? "scenario"} screenshot`}
@@ -1369,9 +2032,9 @@ function ReviewPanel(props: {
             ))}
           </div>
         ) : props.loading ? (
-          <p>Loading review capture evidence…</p>
+          <p className="empty-copy">Loading review capture evidence…</p>
         ) : (
-          <p>No checkpoint screenshots captured yet.</p>
+          <p className="empty-copy">No checkpoint screenshots captured yet.</p>
         )}
       </Panel>
     </div>
@@ -1385,9 +2048,9 @@ function KnowledgePanel(props: {
   detailDepth: "compact" | "expanded";
 }) {
   return (
-    <div style={{ display: "grid", gap: tokens.space.lg }}>
+    <div className="surface-stack">
       <Panel title="Knowledge Stores" eyebrow="Dev Memory">
-        <div style={gridStyle}>
+        <div className="summary-grid">
           <InfoCard label="Source documents" value={String(props.sourceDocuments?.items.length ?? 0)} />
           <InfoCard label="Claims" value={String(props.claims?.items.length ?? 0)} />
           <InfoCard label="Evaluations" value={String(props.evaluations?.items.length ?? 0)} />
@@ -1397,8 +2060,12 @@ function KnowledgePanel(props: {
         <ListBlock
           items={(props.sourceDocuments?.items ?? []).slice(0, props.detailDepth === "compact" ? 4 : 8).map((item) => ({
             title: item.title ?? item.uri,
-            subtitle: item.sourceKind,
-            body: props.detailDepth === "expanded" ? item.body : undefined
+            subtitle: `${item.sourceKind} · ${item.uri}`,
+            body: (
+              <p className="detail-copy">
+                {summarizeText(item.body, props.detailDepth === "expanded" ? 320 : 180)}
+              </p>
+            )
           }))}
         />
       </Panel>
@@ -1407,7 +2074,11 @@ function KnowledgePanel(props: {
           items={(props.claims?.items ?? []).slice(0, props.detailDepth === "compact" ? 4 : 8).map((item) => ({
             title: item.summary,
             subtitle: item.status,
-            body: item.tags.length ? JSON.stringify(item.tags) : undefined
+            body: item.tags.length ? (
+              <PillList values={item.tags.map((tag) => String(tag))} />
+            ) : (
+              <p className="empty-copy">No tags recorded.</p>
+            )
           }))}
         />
       </Panel>
@@ -1416,7 +2087,12 @@ function KnowledgePanel(props: {
           items={(props.evaluations?.items ?? []).slice(0, props.detailDepth === "compact" ? 4 : 8).map((item) => ({
             title: item.subject,
             subtitle: item.outcome,
-            body: props.detailDepth === "expanded" ? JSON.stringify(item.detail, null, 2) : undefined
+            body:
+              props.detailDepth === "expanded" ? (
+                <StructuredValue value={item.detail} />
+              ) : (
+                <p className="detail-copy">{summarizeUnknownValue(item.detail)}</p>
+              )
           }))}
         />
       </Panel>
@@ -1436,14 +2112,14 @@ function DocsPanel(props: {
   const docsLimit = props.detailDepth === "compact" ? 8 : 16;
 
   return (
-    <div style={splitGridStyle}>
-      <div style={{ display: "grid", gap: tokens.space.lg }}>
+    <div className="surface-split">
+      <div className="surface-stack">
         <Panel title="Presentations" eyebrow="R&D">
           <ListBlock
             items={presentationDocs.slice(0, presentationLimit).map((item) => ({
               title: item.title,
               subtitle: `${item.path}${item.tags.includes("canva") ? " · Canva brief" : ""}`,
-              body: item.summary
+              body: <p className="detail-copy">{item.summary}</p>
             }))}
           />
         </Panel>
@@ -1452,7 +2128,7 @@ function DocsPanel(props: {
             items={otherDocs.slice(0, docsLimit).map((item) => ({
               title: item.title,
               subtitle: `${item.kind} · ${item.path}`,
-              body: item.summary
+              body: <p className="detail-copy">{item.summary}</p>
             }))}
           />
         </Panel>
@@ -1462,7 +2138,7 @@ function DocsPanel(props: {
           items={(props.skills?.items ?? []).slice(0, props.detailDepth === "compact" ? 8 : 16).map((item) => ({
             title: item.name,
             subtitle: `${item.source} · ${item.path}`,
-            body: item.description
+            body: <p className="detail-copy">{item.description}</p>
           }))}
         />
       </Panel>
@@ -1476,19 +2152,32 @@ function PreferencesPanel(props: {
   onSupervision: (decisionKind: "accepted" | "rejected" | "overridden", subjectKey: string, chosenValue?: string) => void;
 }) {
   return (
-    <div style={{ display: "grid", gap: tokens.space.lg }}>
+    <div className="surface-stack">
       <Panel title="Runtime Profile Summary" eyebrow="Authoritative">
-        {props.me ? <pre style={preStyle}>{JSON.stringify(props.me.profile.defaults, null, 2)}</pre> : null}
+        {props.me ? (
+          <StructuredValue value={props.me.profile.defaults} emptyLabel="No runtime profile defaults recorded." />
+        ) : (
+          <p className="empty-copy">No authenticated runtime profile available.</p>
+        )}
       </Panel>
       <Panel title="Development Preference Scorecard" eyebrow="Derived">
         {props.devProfile?.score ? (
-          <pre style={preStyle}>{JSON.stringify(props.devProfile.score.scorecard, null, 2)}</pre>
+          <div className="surface-stack">
+            <FactGrid
+              entries={[
+                { label: "Runtime account", value: props.devProfile.score.runtimeAccountId },
+                { label: "Signals used", value: String(props.devProfile.score.computedFromSignalCount) },
+                { label: "Updated", value: formatTimestamp(props.devProfile.score.updatedAt) }
+              ]}
+            />
+            <StructuredValue value={props.devProfile.score.scorecard} emptyLabel="No derived scorecard detail." />
+          </div>
         ) : (
-          <p>No derived dev-console scorecard yet.</p>
+          <p className="empty-copy">No derived dev-console scorecard yet.</p>
         )}
       </Panel>
       <Panel title="Supervision Shortcuts" eyebrow="Labels">
-        <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap" }}>
+        <div className="action-strip">
           <button onClick={() => void props.onSupervision("accepted", "catalog.refresh_doc_catalog", "catalog.refresh_doc_catalog")}>
             Accept doc refresh recommendation
           </button>
@@ -1500,13 +2189,13 @@ function PreferencesPanel(props: {
           </button>
         </div>
       </Panel>
-      <div style={splitGridStyle}>
+      <div className="surface-split">
         <Panel title="Recent Signals" eyebrow="Observed">
           <ListBlock
             items={(props.devProfile?.recentSignals ?? []).slice(0, 10).map((signal) => ({
               title: signal.signalKind,
               subtitle: `${signal.surface}${signal.panelKey ? ` · ${signal.panelKey}` : ""}`,
-              body: JSON.stringify(signal.payload)
+              body: <StructuredValue value={signal.payload} emptyLabel="No signal payload." />
             }))}
           />
         </Panel>
@@ -1515,7 +2204,7 @@ function PreferencesPanel(props: {
             items={(props.devProfile?.recentDecisions ?? []).slice(0, 10).map((decision) => ({
               title: `${decision.decisionKind} · ${decision.subjectKey}`,
               subtitle: decision.subjectKind,
-              body: JSON.stringify(decision.payload)
+              body: <StructuredValue value={decision.payload} emptyLabel="No decision payload." />
             }))}
           />
         </Panel>
@@ -1568,53 +2257,6 @@ function ReviewImagePreview(props: { relativePath: string | null; alt: string })
   );
 }
 
-function PreviewCard(props: {
-  tone: "forest" | "sand" | "ink";
-  label: string;
-  title: string;
-  description: string;
-  span?: "wide";
-  children: React.ReactNode;
-}) {
-  return (
-    <article className={`preview-card preview-card-${props.tone}${props.span === "wide" ? " preview-card-wide" : ""}`}>
-      <div style={{ display: "grid", gap: tokens.space.xs }}>
-        <span className="preview-card-label">{props.label}</span>
-        <h3 style={{ margin: 0 }}>{props.title}</h3>
-        <p style={{ margin: 0, color: "inherit", opacity: 0.82 }}>{props.description}</p>
-      </div>
-      <div className="preview-screen">{props.children}</div>
-    </article>
-  );
-}
-
-function PreviewMetric(props: { label: string; value: string }) {
-  return (
-    <div className="preview-metric">
-      <span>{props.label}</span>
-      <strong>{props.value}</strong>
-    </div>
-  );
-}
-
-function PreviewListRow(props: { label: string; value: string }) {
-  return (
-    <div className="preview-list-row">
-      <span>{props.label}</span>
-      <strong>{props.value}</strong>
-    </div>
-  );
-}
-
-function PreviewChecklistItem(props: { title: string; detail: string }) {
-  return (
-    <div className="preview-checklist-item">
-      <strong>{props.title}</strong>
-      <span>{props.detail}</span>
-    </div>
-  );
-}
-
 function ActionRow(props: {
   label: string;
   taskKind: string;
@@ -1622,12 +2264,14 @@ function ActionRow(props: {
   onSupervision: (decisionKind: "accepted" | "rejected" | "overridden", subjectKey: string, chosenValue?: string) => void;
 }) {
   return (
-    <div style={rowStyle}>
-      <div>
+    <div className="record-card">
+      <div className="record-header">
+        <div className="record-title">
         <strong>{props.label}</strong>
-        <div style={{ color: tokens.color.muted }}>{props.taskKind}</div>
+          <p className="record-subtitle">{props.taskKind}</p>
+        </div>
       </div>
-      <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap" }}>
+      <div className="action-strip">
         <button onClick={() => void props.onEnqueue(props.taskKind)}>Enqueue</button>
         <button onClick={() => void props.onSupervision("accepted", props.taskKind, props.taskKind)}>
           Accept
@@ -1660,19 +2304,273 @@ function InfoCard(props: { label: string; value: string; detail?: string }) {
   );
 }
 
-function ListBlock(props: { items: Array<{ title: string; subtitle?: string; body?: string }> }) {
+function DeckSourcePreview(props: {
+  deck: PresentationDeckSourceCollection["items"][number];
+}) {
+  return (
+    <div className="deck-preview-card">
+      <div className="deck-preview-header">
+        <span className="deck-preview-eyebrow">Source deck preview</span>
+        <h4>{props.deck.title}</h4>
+        <p>{props.deck.summary || "No summary captured for this deck source yet."}</p>
+      </div>
+      <div className="deck-preview-facts">
+        <div className="deck-preview-fact">
+          <span>Slides</span>
+          <strong>{props.deck.slideCount}</strong>
+        </div>
+        <div className="deck-preview-fact">
+          <span>Companion</span>
+          <strong>{props.deck.hasPreviewCompanion ? "Ready" : "Not yet"}</strong>
+        </div>
+        <div className="deck-preview-fact">
+          <span>Updated</span>
+          <strong>{formatTimestamp(props.deck.updatedAt)}</strong>
+        </div>
+      </div>
+      <div className="deck-preview-surface">
+        <div className="deck-preview-slide deck-preview-slide-primary">
+          <span className="deck-preview-slide-index">01</span>
+          <strong>{props.deck.title}</strong>
+          <p>{props.deck.summary || "Start a preview run to inspect rendered slide content."}</p>
+        </div>
+        <div className="deck-preview-slide deck-preview-slide-secondary">
+          <span className="deck-preview-slide-index">02</span>
+          <strong>Source of truth</strong>
+          <p>{props.deck.markdownPath}</p>
+        </div>
+        <div className="deck-preview-slide deck-preview-slide-secondary">
+          <span className="deck-preview-slide-index">03</span>
+          <strong>Companion</strong>
+          <p>{props.deck.companionPath ?? "Markdown-only source at the moment."}</p>
+        </div>
+      </div>
+      {props.deck.tags.length ? <PillList values={props.deck.tags} /> : null}
+    </div>
+  );
+}
+
+function PreviewEmptyState(props: { loading: boolean }) {
+  return (
+    <div className="preview-placeholder">
+      <div className="preview-placeholder-copy">
+        <span className="deck-preview-eyebrow">Preview stage</span>
+        <h4>{props.loading ? "Loading preview workspace" : "No preview selected yet"}</h4>
+        <p>
+          {props.loading
+            ? "ClaRTK is still loading deck sources and prior preview runs from the dev plane."
+            : "Select a deck source or a previous run to populate this stage with rendered slides, evidence, and source-linked notes."}
+        </p>
+      </div>
+      <div className="preview-placeholder-grid">
+        <div className="preview-placeholder-card">
+          <strong>Choose a source</strong>
+          <p>Deck metadata, slide counts, and companion availability appear in the left column.</p>
+        </div>
+        <div className="preview-placeholder-card">
+          <strong>Render a run</strong>
+          <p>Start a preview run to generate HTML, screenshots, and run-level analysis artifacts.</p>
+        </div>
+        <div className="preview-placeholder-card">
+          <strong>Review the result</strong>
+          <p>Rendered HTML opens here, while slide notes and feedback stay visible in the inspector.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FactGrid(props: { entries: Array<{ label: string; value: React.ReactNode }> }) {
+  const visibleEntries = props.entries.filter((entry) => entry.value !== undefined && entry.value !== null);
+  if (!visibleEntries.length) {
+    return <p className="empty-copy">No structured facts available.</p>;
+  }
+
+  return (
+    <div className="structured-grid">
+      {visibleEntries.map((entry, index) => (
+        <div key={`${entry.label}-${index}`} className="structured-item">
+          <span className="structured-label">{entry.label}</span>
+          <div className="structured-inline">{entry.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PillList(props: { values: string[] }) {
+  if (!props.values.length) {
+    return <p className="empty-copy">No values recorded.</p>;
+  }
+
+  return (
+    <div className="token-list">
+      {props.values.map((value) => (
+        <span key={value} className="token-chip">
+          {value}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function StructuredValue(props: {
+  value: unknown;
+  depth?: number;
+  emptyLabel?: string;
+}) {
+  const { value, depth = 0, emptyLabel = "No detail available." } = props;
+
+  if (value === null || value === undefined || value === "") {
+    return <p className="structured-empty">{emptyLabel}</p>;
+  }
+
+  if (typeof value === "string") {
+    return <p className="detail-copy">{value}</p>;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return <p className="detail-copy">{String(value)}</p>;
+  }
+
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return <p className="structured-empty">{emptyLabel}</p>;
+    }
+
+    if (value.every((item) => item === null || item === undefined || typeof item !== "object")) {
+      return <PillList values={value.map((item) => String(item))} />;
+    }
+
+    return (
+      <div className="structured-stack">
+        {value.slice(0, 6).map((item, index) => (
+          <div key={`structured-${index}`} className="structured-card">
+            {shouldRenderInline(item, depth + 1) ? (
+              <div className="structured-inline">{summarizeUnknownValue(item)}</div>
+            ) : (
+              <StructuredValue value={item} depth={depth + 1} emptyLabel="No nested detail." />
+            )}
+          </div>
+        ))}
+        {value.length > 6 ? (
+          <p className="structured-empty">{value.length - 6} more items not shown.</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return <p className="detail-copy">{String(value)}</p>;
+  }
+
+  const entries = Object.entries(record).filter(([, item]) => item !== undefined);
+  if (!entries.length) {
+    return <p className="structured-empty">{emptyLabel}</p>;
+  }
+
+  const visibleEntries = entries.slice(0, depth === 0 ? 8 : 6);
+  return (
+    <div className="structured-grid">
+      {visibleEntries.map(([key, item]) => (
+        <div key={key} className="structured-item">
+          <span className="structured-label">{humanizeKey(key)}</span>
+          {shouldRenderInline(item, depth + 1) ? (
+            <div className="structured-inline">{summarizeUnknownValue(item)}</div>
+          ) : (
+            <StructuredValue value={item} depth={depth + 1} emptyLabel="Not set." />
+          )}
+        </div>
+      ))}
+      {entries.length > visibleEntries.length ? (
+        <div className="structured-item">
+          <span className="structured-label">Additional fields</span>
+          <p className="structured-empty">{entries.length - visibleEntries.length} more not shown.</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FindingFixDraft(props: { value: Record<string, unknown> }) {
+  const regressionClass = pickString(props.value, [
+    "regressionClass",
+    "suspectedRegressionClass",
+    "regression_type"
+  ]);
+  const affectedPaths = pickStringArray(props.value, [
+    "likelyAffectedPaths",
+    "affectedPaths",
+    "pathHints",
+    "candidatePaths"
+  ]);
+  const validationSteps = pickStringArray(props.value, [
+    "requiredValidation",
+    "validationSteps",
+    "validation",
+    "checks"
+  ]);
+  const evidencePaths = pickStringArray(props.value, [
+    "evidencePaths",
+    "evidenceLinks",
+    "artifactPaths"
+  ]);
+
+  return (
+    <div className="detail-card">
+      <div className="section-heading">
+        <h4>Draft remediation brief</h4>
+        <p>Structured proposal generated from the local analyzer.</p>
+      </div>
+      <FactGrid
+        entries={[
+          { label: "Regression class", value: regressionClass ?? "Not classified" },
+          { label: "Affected paths", value: affectedPaths.length ? `${affectedPaths.length} path hints` : "No path hints" },
+          { label: "Validation steps", value: validationSteps.length ? `${validationSteps.length} checks` : "No validation plan" }
+        ]}
+      />
+      {affectedPaths.length ? <PillList values={affectedPaths} /> : null}
+      {validationSteps.length ? <PillList values={validationSteps} /> : null}
+      {evidencePaths.length ? (
+        <div className="detail-stack">
+          <div className="section-heading">
+            <h4>Evidence references</h4>
+          </div>
+          <PillList values={evidencePaths} />
+        </div>
+      ) : null}
+      <StructuredValue value={props.value} depth={1} emptyLabel="No additional draft detail." />
+    </div>
+  );
+}
+
+function ResourceLink(props: { uri: string }) {
+  const href = resolveArtifactHref(props.uri);
+  if (href) {
+    return (
+      <a className="artifact-link" href={href} target="_blank" rel="noreferrer">
+        {props.uri}
+      </a>
+    );
+  }
+
+  return <p className="detail-copy">{props.uri}</p>;
+}
+
+function ListBlock(props: { items: Array<{ title: string; subtitle?: string; body?: React.ReactNode }> }) {
   return props.items.length ? (
-    <div style={{ display: "grid", gap: tokens.space.sm }}>
+    <div className="list-block">
       {props.items.map((item, index) => (
-        <div key={`${item.title}-${index}`} style={eventStyle}>
+        <div key={`${item.title}-${index}`} className="list-block-item">
           <strong>{item.title}</strong>
-          {item.subtitle ? <div style={{ color: tokens.color.muted }}>{item.subtitle}</div> : null}
-          {item.body ? <pre style={preStyle}>{item.body}</pre> : null}
+          {item.subtitle ? <div className="list-block-subtitle">{item.subtitle}</div> : null}
+          {item.body ? <div className="list-block-body">{item.body}</div> : null}
         </div>
       ))}
     </div>
   ) : (
-    <p>No items available.</p>
+    <p className="empty-copy">No items available.</p>
   );
 }
 
@@ -1776,8 +2674,273 @@ function extractEvidenceDescriptors(evidenceJson: Record<string, unknown>): Arra
   return descriptors;
 }
 
-function serviceStatusLabel(overview: WorkspaceOverview | null, serviceName: string) {
-  return overview?.services.find((service) => service.service === serviceName)?.status ?? "pending";
+function statusToneForPreviewRun(status: string): "ok" | "neutral" | "degraded" {
+  if (status === "ready_for_review" || status === "rendered") {
+    return "ok";
+  }
+  if (status === "failed" || status === "cancelled") {
+    return "degraded";
+  }
+  return "neutral";
+}
+
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) {
+    return "unknown";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
+function formatViewport(viewportJson: Record<string, unknown>): string {
+  const width = typeof viewportJson.width === "number" ? viewportJson.width : null;
+  const height = typeof viewportJson.height === "number" ? viewportJson.height : null;
+  if (width && height) {
+    return `${width}x${height}`;
+  }
+  return "viewport unavailable";
+}
+
+function extractPreviewHtmlPath(run: PreviewRun | null): string | null {
+  const summary = asRecord(run?.renderSummaryJson ?? null);
+  return typeof summary?.htmlPath === "string" ? summary.htmlPath : null;
+}
+
+function summarizePreviewAnalysis(run: PreviewRun | null): {
+  hasWarnings: boolean;
+  warnings: string[];
+  consoleErrors: string[];
+  requestFailures: string[];
+  slideCount: number;
+  screenshotsBySlideId: Map<string, string>;
+} {
+  const summary = asRecord(run?.analysisSummaryJson ?? null);
+  const warnings = asStringArray(summary?.warnings);
+  const consoleErrors = asStringArray(summary?.consoleErrors);
+  const requestFailures = Array.isArray(summary?.requestFailures)
+    ? summary.requestFailures.map((failure) => JSON.stringify(failure))
+    : [];
+  const slides = Array.isArray(summary?.slides) ? summary.slides : [];
+  const screenshotsBySlideId = new Map<string, string>();
+
+  for (const slide of slides) {
+    const slideRecord = asRecord(slide);
+    if (!slideRecord) {
+      continue;
+    }
+    if (typeof slideRecord.slideId !== "string" || typeof slideRecord.screenshotPath !== "string") {
+      continue;
+    }
+    screenshotsBySlideId.set(slideRecord.slideId, slideRecord.screenshotPath);
+  }
+
+  return {
+    hasWarnings:
+      warnings.length > 0 ||
+      consoleErrors.length > 0 ||
+      requestFailures.length > 0 ||
+      summary?.status === "warning",
+    warnings,
+    consoleErrors,
+    requestFailures,
+    slideCount: screenshotsBySlideId.size,
+    screenshotsBySlideId
+  };
+}
+
+interface PreviewManifestSlide {
+  slideId: string;
+  title: string;
+  audienceGoal: string;
+  bullets: string[];
+  speakerNotes: string;
+  visualGuidance: string;
+  evidencePaths: string[];
+  media: Array<{ kind: string; source: string | null }>;
+  screenshotPath: string | null;
+}
+
+interface PreviewManifestData {
+  markdownPath: string;
+  companionPath: string | null;
+  slides: PreviewManifestSlide[];
+}
+
+function parsePreviewManifest(run: PreviewRun | null): PreviewManifestData | null {
+  const renderSummary = asRecord(run?.renderSummaryJson ?? null);
+  const manifest =
+    asRecord(renderSummary?.manifest) ??
+    asRecord(run?.manifestJson ?? null);
+  if (!manifest) {
+    return null;
+  }
+  const previewAnalysis = summarizePreviewAnalysis(run);
+  const slides = Array.isArray(manifest.slides)
+    ? manifest.slides.flatMap((slide) => {
+        const slideRecord = asRecord(slide);
+        if (!slideRecord || typeof slideRecord.slideId !== "string") {
+          return [];
+        }
+
+        const media = Array.isArray(slideRecord.media)
+          ? slideRecord.media.flatMap((entry) => {
+              const mediaRecord = asRecord(entry);
+              if (!mediaRecord) {
+                return [];
+              }
+              return [{
+                kind: typeof mediaRecord.kind === "string" ? mediaRecord.kind : "media",
+                source:
+                  typeof mediaRecord.relativePath === "string"
+                    ? mediaRecord.relativePath
+                    : typeof mediaRecord.url === "string"
+                      ? mediaRecord.url
+                      : null
+              }];
+            })
+          : [];
+
+        return [{
+          slideId: slideRecord.slideId,
+          title: typeof slideRecord.title === "string" ? slideRecord.title : slideRecord.slideId,
+          audienceGoal: typeof slideRecord.audienceGoal === "string" ? slideRecord.audienceGoal : "",
+          bullets: asStringArray(slideRecord.bullets),
+          speakerNotes: typeof slideRecord.speakerNotes === "string" ? slideRecord.speakerNotes : "",
+          visualGuidance: typeof slideRecord.visualGuidance === "string" ? slideRecord.visualGuidance : "",
+          evidencePaths: asStringArray(slideRecord.evidencePaths),
+          media,
+          screenshotPath: previewAnalysis.screenshotsBySlideId.get(slideRecord.slideId) ?? null
+        }];
+      })
+    : [];
+
+  return {
+    markdownPath:
+      typeof manifest.markdownPath === "string"
+        ? manifest.markdownPath
+        : typeof renderSummary?.markdownPath === "string"
+          ? renderSummary.markdownPath
+          : "",
+    companionPath:
+      typeof manifest.companionPath === "string"
+        ? manifest.companionPath
+        : typeof renderSummary?.companionPath === "string"
+          ? renderSummary.companionPath
+          : null,
+    slides
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function humanizeKey(value: string): string {
+  const normalized = value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[._/-]+/g, " ")
+    .trim();
+  if (!normalized) {
+    return "Field";
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function summarizeText(value: string | null | undefined, limit = 220): string {
+  const source = (value ?? "").trim();
+  if (!source) {
+    return "No detail available.";
+  }
+  if (source.length <= limit) {
+    return source;
+  }
+  return `${source.slice(0, limit).trimEnd()}...`;
+}
+
+function summarizeUnknownValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return "Not set";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return "None";
+    }
+    if (value.every((item) => item === null || item === undefined || typeof item !== "object")) {
+      return value.map((item) => String(item)).join(", ");
+    }
+    return `${value.length} items`;
+  }
+  const record = asRecord(value);
+  if (record) {
+    const entryCount = Object.keys(record).length;
+    return entryCount === 0 ? "No fields" : `${entryCount} fields`;
+  }
+  return String(value);
+}
+
+function shouldRenderInline(value: unknown, depth: number): boolean {
+  if (value === null || value === undefined || typeof value !== "object") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return depth >= 2 || value.every((item) => item === null || item === undefined || typeof item !== "object");
+  }
+  return depth >= 2;
+}
+
+function pickString(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function pickStringArray(record: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = record[key];
+    const items = asStringArray(value);
+    if (items.length) {
+      return items;
+    }
+  }
+  return [];
+}
+
+function resolveArtifactHref(uri: string): string | null {
+  if (/^https?:\/\//.test(uri)) {
+    return uri;
+  }
+
+  const normalized = uri.replace(/^\/mnt\/h\/ClaRTK\//, "");
+  if (normalized.startsWith(".clartk/dev/ui-review/")) {
+    return devConsoleApi.uiReviewAssetUrl(normalized);
+  }
+  if (normalized.startsWith(".clartk/dev/presentation-preview/")) {
+    return devConsoleApi.previewAssetUrl(normalized);
+  }
+  return null;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -1794,12 +2957,6 @@ const gridStyle: React.CSSProperties = {
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))"
 };
 
-const splitGridStyle: React.CSSProperties = {
-  display: "grid",
-  gap: tokens.space.lg,
-  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))"
-};
-
 const rowStyle: React.CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
@@ -1807,27 +2964,4 @@ const rowStyle: React.CSSProperties = {
   gap: tokens.space.md,
   paddingBottom: tokens.space.sm,
   borderBottom: `1px solid ${tokens.color.line}`
-};
-
-const preStyle: React.CSSProperties = {
-  margin: 0,
-  marginTop: tokens.space.sm,
-  padding: tokens.space.sm,
-  background: "#f8fbfa",
-  borderRadius: tokens.radius.sm,
-  overflowX: "auto",
-  whiteSpace: "pre-wrap"
-};
-
-const eventStyle: React.CSSProperties = {
-  padding: tokens.space.md,
-  borderRadius: tokens.radius.md,
-  background: "#f8fbfa",
-  border: `1px solid ${tokens.color.line}`
-};
-
-const activeButtonStyle: React.CSSProperties = {
-  background: tokens.color.accentStrong,
-  color: "#ffffff",
-  borderColor: tokens.color.accentStrong
 };

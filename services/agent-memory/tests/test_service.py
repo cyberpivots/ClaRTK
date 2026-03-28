@@ -7,6 +7,8 @@ from agent_memory import (
     build_default_worker_name,
     build_health_payload,
     chunk_document,
+    parse_queue_names,
+    resolve_task_queue_name,
     suggestion_confidence_for_occurrences,
     summarize_claim,
     task_retry_delay_seconds,
@@ -76,3 +78,31 @@ def test_build_default_worker_name_uses_hostname_and_pid() -> None:
 
     assert "-" in worker_name
     assert worker_name.split("-")[-1].isdigit()
+
+
+def test_resolve_task_queue_name_routes_known_task_kinds() -> None:
+    assert (
+        resolve_task_queue_name("preferences.compute_dev_preference_scores", "default")
+        == "preferences.recompute"
+    )
+    assert resolve_task_queue_name("ui.review.capture", "") == "ui.review"
+    assert resolve_task_queue_name("memory.run_evaluations", None) == "memory.maintenance"
+    assert resolve_task_queue_name("memory.run_evaluations", "custom.queue") == "custom.queue"
+    assert resolve_task_queue_name("unknown.task", "default") == "default"
+
+
+def test_parse_queue_names_splits_commas_and_dedupes() -> None:
+    assert parse_queue_names("default, preferences.recompute ,default,ui.review") == [
+        "default",
+        "preferences.recompute",
+        "ui.review",
+    ]
+    assert parse_queue_names("") == [
+        "default",
+        "memory.maintenance",
+        "catalog.refresh",
+        "preferences.recompute",
+        "ui.review",
+        "preview.review",
+        "hardware.build",
+    ]

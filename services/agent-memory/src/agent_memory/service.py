@@ -35,6 +35,12 @@ DEFAULT_AGENT_MEMORY_JOBS = [
 ]
 DEFAULT_INTERNAL_REVIEW_TOKEN = "dev-review-token"
 DEFAULT_AGENT_TASK_QUEUE = "default"
+MEMORY_MAINTENANCE_TASK_QUEUE = "memory.maintenance"
+CATALOG_TASK_QUEUE = "catalog.refresh"
+PREFERENCE_SCORE_TASK_QUEUE = "preferences.recompute"
+UI_REVIEW_TASK_QUEUE = "ui.review"
+PREVIEW_TASK_QUEUE = "preview.review"
+HARDWARE_TASK_QUEUE = "hardware.build"
 DEFAULT_AGENT_TASK_LEASE_SECONDS = 60
 DEFAULT_AGENT_TASK_IDLE_TIMEOUT = 30.0
 DEFAULT_EMBEDDING_BATCH_LIMIT = 128
@@ -109,6 +115,34 @@ UI_REVIEW_CAPTURE_SCRIPT = REPO_ROOT / "scripts" / "ui-review-capture.mjs"
 UI_REVIEW_ANALYZE_SCRIPT = REPO_ROOT / "scripts" / "ui-review-analyze.mjs"
 PREVIEW_RENDER_SCRIPT = REPO_ROOT / "scripts" / "preview-render.mjs"
 PREVIEW_ANALYZE_SCRIPT = REPO_ROOT / "scripts" / "preview-analyze.mjs"
+TASK_KIND_DEFAULT_QUEUES = {
+    DEV_PREFERENCE_TASK_KIND: PREFERENCE_SCORE_TASK_QUEUE,
+    REFRESH_DOC_CATALOG_TASK_KIND: CATALOG_TASK_QUEUE,
+    REFRESH_SKILL_CATALOG_TASK_KIND: CATALOG_TASK_QUEUE,
+    "memory.run_embeddings": MEMORY_MAINTENANCE_TASK_QUEUE,
+    "memory.run_evaluations": MEMORY_MAINTENANCE_TASK_QUEUE,
+    UI_REVIEW_CAPTURE_TASK_KIND: UI_REVIEW_TASK_QUEUE,
+    UI_REVIEW_ANALYZE_TASK_KIND: UI_REVIEW_TASK_QUEUE,
+    UI_REVIEW_FIX_DRAFT_TASK_KIND: UI_REVIEW_TASK_QUEUE,
+    UI_REVIEW_PROMOTE_BASELINE_TASK_KIND: UI_REVIEW_TASK_QUEUE,
+    PREVIEW_RENDER_TASK_KIND: PREVIEW_TASK_QUEUE,
+    PREVIEW_ANALYZE_TASK_KIND: PREVIEW_TASK_QUEUE,
+    HARDWARE_PREPARE_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_RESERVE_PARTS_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_BUILD_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_BENCH_VALIDATE_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_RUNTIME_REGISTER_TASK_KIND: HARDWARE_TASK_QUEUE,
+}
+DEFAULT_AGENT_WORKER_QUEUE_NAMES = [
+    DEFAULT_AGENT_TASK_QUEUE,
+    MEMORY_MAINTENANCE_TASK_QUEUE,
+    CATALOG_TASK_QUEUE,
+    PREFERENCE_SCORE_TASK_QUEUE,
+    UI_REVIEW_TASK_QUEUE,
+    PREVIEW_TASK_QUEUE,
+    HARDWARE_TASK_QUEUE,
+]
+DEFAULT_AGENT_WORKER_QUEUE = ",".join(DEFAULT_AGENT_WORKER_QUEUE_NAMES)
 
 
 @dataclass(frozen=True)
@@ -525,6 +559,24 @@ def maintenance_task_specs(chunk_size: int) -> dict[str, dict[str, Any]]:
             "intervalSeconds": 300,
         },
     }
+
+
+def resolve_task_queue_name(task_kind: str, queue_name: str | None) -> str:
+    normalized = queue_name.strip() if isinstance(queue_name, str) else ""
+    if normalized and normalized != DEFAULT_AGENT_TASK_QUEUE:
+        return normalized
+    return TASK_KIND_DEFAULT_QUEUES.get(task_kind, DEFAULT_AGENT_TASK_QUEUE)
+
+
+def parse_queue_names(queue_name: str | None) -> list[str]:
+    source = queue_name.strip() if isinstance(queue_name, str) and queue_name.strip() else DEFAULT_AGENT_WORKER_QUEUE
+    queue_names: list[str] = []
+    for item in source.split(","):
+        normalized = item.strip()
+        if not normalized or normalized in queue_names:
+            continue
+        queue_names.append(normalized)
+    return queue_names or [DEFAULT_AGENT_TASK_QUEUE]
 
 
 class MemoryRepository:
@@ -1123,6 +1175,7 @@ class MemoryRepository:
         priority: int,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(task_kind, queue_name)
         row = connection.execute(
             """
             INSERT INTO agent.task (task_kind, queue_name, priority, payload)
@@ -1206,8 +1259,6 @@ class MemoryRepository:
                 metadata=metadata,
             )
 
-<<<<<<< HEAD
-=======
     def start_preview_run(
         self,
         payload: dict[str, Any],
@@ -1224,6 +1275,7 @@ class MemoryRepository:
             if isinstance(payload.get("queueName"), str) and str(payload.get("queueName")).strip()
             else DEFAULT_AGENT_TASK_QUEUE
         )
+        queue_name = resolve_task_queue_name(PREVIEW_RENDER_TASK_KIND, queue_name)
         priority = int(payload.get("priority", 0))
         viewport_json = ensure_dict(payload.get("viewportJson")) or dict(PREVIEW_DEFAULT_VIEWPORT)
 
@@ -1509,8 +1561,6 @@ class MemoryRepository:
             connection.commit()
 
         return map_preview_feedback(row)
-
->>>>>>> b01dd50 (feat(preview): add endpoints for managing presentation previews and feedback)
     def start_ui_review(
         self,
         payload: dict[str, Any],
@@ -1525,6 +1575,7 @@ class MemoryRepository:
             if isinstance(payload.get("queueName"), str) and str(payload.get("queueName")).strip()
             else DEFAULT_AGENT_TASK_QUEUE
         )
+        queue_name = resolve_task_queue_name(UI_REVIEW_CAPTURE_TASK_KIND, queue_name)
         priority = int(payload.get("priority", 0))
         viewport_json = ensure_dict(payload.get("viewportJson")) or dict(UI_REVIEW_DEFAULT_VIEWPORT)
         manifest_json = ensure_dict(payload.get("manifestJson"))
@@ -1838,6 +1889,7 @@ class MemoryRepository:
             if isinstance(payload.get("queueName"), str) and str(payload.get("queueName")).strip()
             else DEFAULT_AGENT_TASK_QUEUE
         )
+        queue_name = resolve_task_queue_name(PREVIEW_RENDER_TASK_KIND, queue_name)
         priority = int(payload.get("priority", 0))
         viewport_json = ensure_dict(payload.get("viewportJson")) or dict(PREVIEW_DEFAULT_VIEWPORT)
         manifest_json = {
@@ -2215,6 +2267,7 @@ class MemoryRepository:
         queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
         priority: int = 0,
     ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(UI_REVIEW_PROMOTE_BASELINE_TASK_KIND, queue_name)
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -2279,6 +2332,7 @@ class MemoryRepository:
         priority: int = 0,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(task_kind, queue_name)
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -2394,6 +2448,7 @@ class MemoryRepository:
         priority: int,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(task_kind, queue_name)
         row = connection.execute(
             """
             INSERT INTO agent.task (task_kind, queue_name, priority, payload)
@@ -2473,6 +2528,7 @@ class MemoryRepository:
             if isinstance(payload.get("queueName"), str) and payload.get("queueName")
             else DEFAULT_AGENT_TASK_QUEUE
         )
+        queue_name = resolve_task_queue_name(HARDWARE_PREPARE_TASK_KIND, str(queue_name))
         priority = int(payload.get("priority", 0))
         expected_site = str(payload.get("expectedSite")) if payload.get("expectedSite") else None
         plan_json = payload.get("planJson")
@@ -2604,6 +2660,7 @@ class MemoryRepository:
         queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
         priority: int = 0,
     ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(HARDWARE_RUNTIME_REGISTER_TASK_KIND, queue_name)
         with self.connect() as connection:
             build = connection.execute(
                 """
@@ -3001,10 +3058,9 @@ class MemoryRepository:
                     Jsonb(payload or {}),
                 ),
             ).fetchone()
-            self._enqueue_internal_task(
+            self._enqueue_preference_score_task(
                 connection,
-                task_kind=DEV_PREFERENCE_TASK_KIND,
-                payload={"runtimeAccountId": str(runtime_account_id)},
+                runtime_account_id=str(runtime_account_id),
                 priority=90,
             )
             connection.commit()
@@ -3055,10 +3111,9 @@ class MemoryRepository:
                     Jsonb(payload or {}),
                 ),
             ).fetchone()
-            self._enqueue_internal_task(
+            self._enqueue_preference_score_task(
                 connection,
-                task_kind=DEV_PREFERENCE_TASK_KIND,
-                payload={"runtimeAccountId": str(runtime_account_id)},
+                runtime_account_id=str(runtime_account_id),
                 priority=95,
             )
             connection.commit()
@@ -3392,7 +3447,7 @@ class MemoryRepository:
     def run_scheduler_once(
         self,
         *,
-        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        queue_name: str = MEMORY_MAINTENANCE_TASK_QUEUE,
         chunk_size: int = 120,
     ) -> dict[str, Any]:
         if not self.configured:
@@ -3416,7 +3471,7 @@ class MemoryRepository:
         self,
         *,
         worker_name: str,
-        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        queue_name: str = DEFAULT_AGENT_WORKER_QUEUE,
         lease_seconds: int = DEFAULT_AGENT_TASK_LEASE_SECONDS,
         idle_timeout: float = DEFAULT_AGENT_TASK_IDLE_TIMEOUT,
         chunk_size: int = 120,
@@ -3430,15 +3485,19 @@ class MemoryRepository:
             }
 
         processed_count = 0
+        queue_names = parse_queue_names(queue_name)
         with self.connect() as listener:
             listener.execute(f"LISTEN {TASK_READY_CHANNEL}")
             listener.commit()
 
             while True:
-                self.schedule_maintenance_tasks(queue_name=queue_name, chunk_size=chunk_size)
+                self.schedule_maintenance_tasks(
+                    queue_name=MEMORY_MAINTENANCE_TASK_QUEUE,
+                    chunk_size=chunk_size,
+                )
                 self.requeue_expired_tasks()
-                task = self.claim_task(
-                    queue_name=queue_name,
+                task = self.claim_task_from_queues(
+                    queue_names=queue_names,
                     worker_name=worker_name,
                     lease_seconds=lease_seconds,
                 )
@@ -3460,13 +3519,13 @@ class MemoryRepository:
             "configured": True,
             "processedCount": processed_count,
             "workerName": worker_name,
-            "queueName": queue_name,
+            "queueNames": queue_names,
         }
 
     def schedule_maintenance_tasks(
         self,
         *,
-        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        queue_name: str = MEMORY_MAINTENANCE_TASK_QUEUE,
         chunk_size: int = 120,
     ) -> dict[str, Any]:
         if not self.configured:
@@ -3626,6 +3685,23 @@ class MemoryRepository:
 
         return map_agent_task(row) if row is not None else None
 
+    def claim_task_from_queues(
+        self,
+        *,
+        queue_names: list[str],
+        worker_name: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        for current_queue_name in queue_names:
+            task = self.claim_task(
+                queue_name=current_queue_name,
+                worker_name=worker_name,
+                lease_seconds=lease_seconds,
+            )
+            if task is not None:
+                return task
+        return None
+
     def process_task(
         self,
         task: dict[str, Any],
@@ -3753,6 +3829,7 @@ class MemoryRepository:
         priority: int,
         interval_seconds: int,
     ) -> dict[str, Any] | None:
+        queue_name = resolve_task_queue_name(task_kind, queue_name)
         open_row = connection.execute(
             """
             SELECT 1
@@ -3822,6 +3899,7 @@ class MemoryRepository:
         priority: int,
         queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
     ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(task_kind, queue_name)
         row = connection.execute(
             """
             INSERT INTO agent.task (task_kind, queue_name, priority, payload)
@@ -3847,6 +3925,52 @@ class MemoryRepository:
         ).fetchone()
         self._notify_task_ready(connection, queue_name=queue_name, task_kind=task_kind)
         return map_agent_task(row)
+
+    def _enqueue_preference_score_task(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        runtime_account_id: str,
+        priority: int,
+    ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(DEV_PREFERENCE_TASK_KIND, PREFERENCE_SCORE_TASK_QUEUE)
+        existing_row = connection.execute(
+            """
+            SELECT
+              agent_task_id,
+              task_kind,
+              queue_name,
+              status,
+              priority,
+              payload,
+              available_at,
+              lease_owner,
+              lease_expires_at,
+              attempt_count,
+              max_attempts,
+              last_error,
+              created_at,
+              updated_at,
+              completed_at
+            FROM agent.task
+            WHERE task_kind = %s
+              AND queue_name = %s
+              AND status IN ('queued', 'leased')
+              AND payload ->> 'runtimeAccountId' = %s
+            ORDER BY priority DESC, available_at ASC, agent_task_id ASC
+            LIMIT 1
+            """,
+            (DEV_PREFERENCE_TASK_KIND, queue_name, runtime_account_id),
+        ).fetchone()
+        if existing_row is not None:
+            return map_agent_task(existing_row)
+        return self._enqueue_internal_task(
+            connection,
+            task_kind=DEV_PREFERENCE_TASK_KIND,
+            payload={"runtimeAccountId": runtime_account_id},
+            priority=priority,
+            queue_name=queue_name,
+        )
 
     def _notify_task_ready(
         self,
@@ -4872,7 +4996,7 @@ class MemoryRepository:
                 str(PREVIEW_RENDER_SCRIPT),
                 "--artifact-dir",
                 str(artifact_dir),
-                "--markdown-path",
+                "--deck-path",
                 str(markdown_path),
                 *(
                     ["--companion-path", str(companion_path)]
@@ -4992,12 +5116,13 @@ class MemoryRepository:
             connection.commit()
 
         summary_path = REPO_ROOT / render_summary_path
+        artifact_dir = summary_path.parent
         result = self._run_json_command(
             [
                 UI_REVIEW_NODE_BINARY,
                 str(PREVIEW_ANALYZE_SCRIPT),
-                "--summary-path",
-                str(summary_path),
+                "--artifact-dir",
+                str(artifact_dir),
             ]
         )
         analysis_summary_path = REPO_ROOT / str(result["analysisSummaryPath"])
@@ -6910,7 +7035,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scheduler_parser.add_argument(
         "--queue-name",
-        default=os.environ.get("CLARTK_AGENT_TASK_QUEUE", DEFAULT_AGENT_TASK_QUEUE),
+        default=os.environ.get("CLARTK_AGENT_SCHEDULER_QUEUE", MEMORY_MAINTENANCE_TASK_QUEUE),
     )
     scheduler_parser.add_argument("--chunk-size", type=int, default=120)
 
@@ -6921,7 +7046,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worker_parser.add_argument(
         "--queue-name",
-        default=os.environ.get("CLARTK_AGENT_TASK_QUEUE", DEFAULT_AGENT_TASK_QUEUE),
+        default=os.environ.get(
+            "CLARTK_AGENT_TASK_QUEUES",
+            os.environ.get("CLARTK_AGENT_TASK_QUEUE", DEFAULT_AGENT_WORKER_QUEUE),
+        ),
     )
     worker_parser.add_argument(
         "--worker-name",
