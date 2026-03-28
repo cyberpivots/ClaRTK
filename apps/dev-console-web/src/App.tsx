@@ -17,14 +17,65 @@ import type {
 } from "@clartk/domain";
 import { AppFrame, Panel, StatusPill } from "@clartk/ui-web";
 
+function browserBaseUrl(defaultPort: number): string {
+  if (typeof window === "undefined") {
+    return `http://localhost:${defaultPort}`;
+  }
+  return `${window.location.protocol}//${window.location.hostname}:${defaultPort}`;
+}
+
 const runtimeApi = new ApiClient({
-  baseUrl: import.meta.env.VITE_CLARTK_API_BASE_URL ?? "http://localhost:3000"
+  baseUrl: import.meta.env.VITE_CLARTK_API_BASE_URL ?? browserBaseUrl(3000)
 });
 const devConsoleApi = new DevConsoleClient({
-  baseUrl: import.meta.env.VITE_CLARTK_DEV_CONSOLE_API_BASE_URL ?? "http://localhost:3300"
+  baseUrl: import.meta.env.VITE_CLARTK_DEV_CONSOLE_API_BASE_URL ?? browserBaseUrl(3300)
 });
 
-type PanelKey = "overview" | "coordination" | "knowledge" | "docs" | "preferences";
+type PanelKey = "preview" | "overview" | "coordination" | "knowledge" | "docs" | "preferences";
+
+const panelDefinitions: Array<{
+  key: PanelKey;
+  label: string;
+  eyebrow: string;
+  description: string;
+}> = [
+  {
+    key: "preview",
+    label: "Preview",
+    eyebrow: "Themes",
+    description: "Compact production screen samples for deployment reviews."
+  },
+  {
+    key: "overview",
+    label: "Overview",
+    eyebrow: "Health",
+    description: "Environment status, resolved endpoints, and backups."
+  },
+  {
+    key: "coordination",
+    label: "Coordination",
+    eyebrow: "Queues",
+    description: "Task queues, safe control actions, and run inspection."
+  },
+  {
+    key: "knowledge",
+    label: "Knowledge",
+    eyebrow: "Dev Memory",
+    description: "Source documents, claims, and evaluation review."
+  },
+  {
+    key: "docs",
+    label: "Docs",
+    eyebrow: "Filesystem",
+    description: "Documentation and skill catalog snapshots."
+  },
+  {
+    key: "preferences",
+    label: "Preferences",
+    eyebrow: "Signals",
+    description: "Supervised decisions and derived scorecards."
+  }
+];
 
 interface ConsoleState {
   me: AuthenticatedMe | null;
@@ -59,7 +110,7 @@ export function App() {
     docs: null,
     skills: null,
     devProfile: null,
-    selectedPanel: "overview",
+    selectedPanel: "preview",
     detailDepth: "expanded",
     selectedRunId: null,
     notice: null,
@@ -141,9 +192,17 @@ export function App() {
   async function loadSession() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const me = await runtimeApi.getMe();
-      setState((current) => ({ ...current, me }));
-      if (me.account.role === "admin") {
+      const sessionState = await runtimeApi.getSessionState();
+      if (!sessionState.authenticated || !sessionState.me) {
+        setState((current) => ({
+          ...current,
+          me: null,
+          loading: false
+        }));
+        return;
+      }
+      setState((current) => ({ ...current, me: sessionState.me }));
+      if (sessionState.me.account.role === "admin") {
         await loadConsoleData(undefined, true);
       } else {
         setState((current) => ({ ...current, loading: false }));
@@ -339,92 +398,164 @@ export function App() {
   }
 
   const isAdmin = state.me?.account.role === "admin";
+  const activePanel =
+    panelDefinitions.find((panel) => panel.key === state.selectedPanel) ?? panelDefinitions[0];
+  const healthyServiceCount = state.overview?.services.filter((service) => service.status === "ok").length ?? 0;
+  const totalServiceCount = state.overview?.services.length ?? 0;
+  const selectedRunLabel = state.runDetail?.run
+    ? `#${state.runDetail.run.agentRunId}`
+    : state.runs?.items[0]
+      ? `#${state.runs.items[0].agentRunId}`
+      : "none";
+
+  let selectedPanelContent: React.ReactNode = null;
+  if (state.selectedPanel === "preview") {
+    selectedPanelContent = (
+      <PreviewPanel
+        overview={state.overview}
+        tasks={state.tasks}
+        docs={state.docs}
+        skills={state.skills}
+        claims={state.claims}
+        evaluations={state.evaluations}
+      />
+    );
+  } else if (state.selectedPanel === "overview") {
+    selectedPanelContent = <OverviewPanel overview={state.overview} loading={state.loading} />;
+  } else if (state.selectedPanel === "coordination") {
+    selectedPanelContent = (
+      <CoordinationPanel
+        tasks={state.tasks}
+        runs={state.runs}
+        runDetail={state.runDetail}
+        loading={state.loading}
+        onSelectRun={handleRunSelection}
+        onRetrySelectedTask={handleRetrySelectedTask}
+        onEnqueue={handleEnqueue}
+        onSupervision={handleSupervision}
+      />
+    );
+  } else if (state.selectedPanel === "knowledge") {
+    selectedPanelContent = (
+      <KnowledgePanel
+        sourceDocuments={state.sourceDocuments}
+        claims={state.claims}
+        evaluations={state.evaluations}
+        detailDepth={state.detailDepth}
+      />
+    );
+  } else if (state.selectedPanel === "docs") {
+    selectedPanelContent = (
+      <DocsPanel docs={state.docs} skills={state.skills} detailDepth={state.detailDepth} />
+    );
+  } else if (state.selectedPanel === "preferences") {
+    selectedPanelContent = (
+      <PreferencesPanel
+        me={state.me}
+        devProfile={state.devProfile}
+        onSupervision={handleSupervision}
+      />
+    );
+  }
+
+  const sessionPanel = (
+    <Panel title="Session" eyebrow="Access">
+      {state.me ? (
+        <div style={{ display: "grid", gap: tokens.space.md }}>
+          <div style={{ display: "flex", gap: tokens.space.md, alignItems: "center", flexWrap: "wrap" }}>
+            <StatusPill status={isAdmin ? "ok" : "degraded"}>
+              {state.me.account.role}
+            </StatusPill>
+            <strong>{state.me.account.displayName}</strong>
+            <span>{state.me.account.email}</span>
+            <button onClick={() => void handleLogout()}>Sign out</button>
+          </div>
+          {!isAdmin ? <p>Development console access is limited to admin accounts.</p> : null}
+        </div>
+      ) : (
+        <form onSubmit={handleAuthSubmit} style={{ display: "grid", gap: tokens.space.md, maxWidth: 420 }}>
+          <div style={{ display: "flex", gap: tokens.space.sm }}>
+            <button type="button" onClick={() => setAuthMode("login")}>
+              Login
+            </button>
+            <button type="button" onClick={() => setAuthMode("bootstrap")}>
+              Bootstrap
+            </button>
+          </div>
+          <label>
+            Email
+            <input
+              type="email"
+              name="email"
+              autoComplete="username"
+              value={loginForm.email}
+              onChange={(event) =>
+                setLoginForm((current) => ({ ...current, email: event.target.value }))
+              }
+              style={inputStyle}
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              name="password"
+              autoComplete={authMode === "bootstrap" ? "new-password" : "current-password"}
+              value={loginForm.password}
+              onChange={(event) =>
+                setLoginForm((current) => ({ ...current, password: event.target.value }))
+              }
+              style={inputStyle}
+            />
+          </label>
+          {authMode === "bootstrap" ? (
+            <label>
+              Display name
+              <input
+                name="displayName"
+                autoComplete="name"
+                value={loginForm.displayName}
+                onChange={(event) =>
+                  setLoginForm((current) => ({ ...current, displayName: event.target.value }))
+                }
+                style={inputStyle}
+              />
+            </label>
+          ) : null}
+          <button type="submit">{authMode === "bootstrap" ? "Create admin" : "Sign in"}</button>
+        </form>
+      )}
+    </Panel>
+  );
 
   return (
     <AppFrame
       title="ClaRTK Development Interface"
-      subtitle="Admin-only development console for workspace health, agent coordination, knowledge review, and supervised preference signals."
+      subtitle="Admin-only development console for compact workspace review, production screen previews, and bounded coordination."
     >
-      <div style={{ display: "grid", gap: tokens.space.lg }}>
-        <Panel title="Session" eyebrow="Access">
-          {state.me ? (
-            <div style={{ display: "grid", gap: tokens.space.md }}>
-              <div style={{ display: "flex", gap: tokens.space.md, alignItems: "center", flexWrap: "wrap" }}>
-                <StatusPill status={isAdmin ? "ok" : "degraded"}>
-                  {state.me.account.role}
-                </StatusPill>
-                <strong>{state.me.account.displayName}</strong>
-                <span>{state.me.account.email}</span>
-                <button onClick={() => void handleLogout()}>Sign out</button>
-              </div>
-              {!isAdmin ? <p>Development console access is limited to admin accounts.</p> : null}
-            </div>
-          ) : (
-            <form onSubmit={handleAuthSubmit} style={{ display: "grid", gap: tokens.space.md, maxWidth: 420 }}>
-              <div style={{ display: "flex", gap: tokens.space.sm }}>
-                <button type="button" onClick={() => setAuthMode("login")}>
-                  Login
-                </button>
-                <button type="button" onClick={() => setAuthMode("bootstrap")}>
-                  Bootstrap
-                </button>
-              </div>
-              <label>
-                Email
-                <input
-                  value={loginForm.email}
-                  onChange={(event) =>
-                    setLoginForm((current) => ({ ...current, email: event.target.value }))
-                  }
-                  style={inputStyle}
-                />
-              </label>
-              <label>
-                Password
-                <input
-                  type="password"
-                  value={loginForm.password}
-                  onChange={(event) =>
-                    setLoginForm((current) => ({ ...current, password: event.target.value }))
-                  }
-                  style={inputStyle}
-                />
-              </label>
-              {authMode === "bootstrap" ? (
-                <label>
-                  Display name
-                  <input
-                    value={loginForm.displayName}
-                    onChange={(event) =>
-                      setLoginForm((current) => ({ ...current, displayName: event.target.value }))
-                    }
-                    style={inputStyle}
-                  />
-                </label>
-              ) : null}
-              <button type="submit">{authMode === "bootstrap" ? "Create admin" : "Sign in"}</button>
-            </form>
-          )}
-        </Panel>
+      {isAdmin ? (
+        <div className="console-shell">
+          <aside className="console-sidebar">
+            {sessionPanel}
+            {state.notice ? <Message tone="ok">{state.notice}</Message> : null}
+            {state.error ? <Message tone="error">{state.error}</Message> : null}
 
-        {state.notice ? <Message tone="ok">{state.notice}</Message> : null}
-        {state.error ? <Message tone="error">{state.error}</Message> : null}
-
-        {isAdmin ? (
-          <>
-            <Panel title="View State" eyebrow="Signals" accent="muted">
-              <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap", alignItems: "center" }}>
-                {(["overview", "coordination", "knowledge", "docs", "preferences"] as PanelKey[]).map((panel) => (
+            <Panel title="Console Surface" eyebrow="Navigation" accent="muted">
+              <div className="console-nav">
+                {panelDefinitions.map((panel) => (
                   <button
-                    key={panel}
-                    onClick={() => setState((current) => ({ ...current, selectedPanel: panel }))}
-                    style={state.selectedPanel === panel ? activeButtonStyle : undefined}
+                    key={panel.key}
+                    className={`console-nav-button${state.selectedPanel === panel.key ? " is-active" : ""}`}
+                    onClick={() => setState((current) => ({ ...current, selectedPanel: panel.key }))}
                   >
-                    {panel}
+                    <span className="console-nav-title">{panel.label}</span>
+                    <span className="console-nav-description">{panel.description}</span>
                   </button>
                 ))}
-                <label style={{ display: "inline-flex", alignItems: "center", gap: tokens.space.sm }}>
-                  Detail depth
+              </div>
+              <div className="console-toolbar">
+                <label className="console-inline-field">
+                  <span>Detail depth</span>
                   <select
                     value={state.detailDepth}
                     onChange={(event) =>
@@ -445,47 +576,181 @@ export function App() {
               </div>
             </Panel>
 
-            {state.selectedPanel === "overview" ? (
-              <OverviewPanel overview={state.overview} loading={state.loading} />
-            ) : null}
+            <Panel title="Current Focus" eyebrow={activePanel.eyebrow} accent="muted">
+              <div className="console-focus-grid">
+                <InfoCard label="Panel" value={activePanel.label} detail={activePanel.description} />
+                <InfoCard
+                  label="Depth"
+                  value={state.detailDepth}
+                  detail={
+                    state.detailDepth === "compact"
+                      ? "Summaries trimmed for faster scanning."
+                      : "Expanded payloads and longer lists."
+                  }
+                />
+                <InfoCard
+                  label="Workspace"
+                  value={state.overview?.status ?? (state.loading ? "loading" : "unknown")}
+                  detail={
+                    totalServiceCount
+                      ? `${healthyServiceCount}/${totalServiceCount} services healthy`
+                      : "Refresh to load current service health."
+                  }
+                />
+                <InfoCard
+                  label="Selected run"
+                  value={selectedRunLabel}
+                  detail={state.runDetail?.run.taskSlug ?? "Choose a run from coordination."}
+                />
+              </div>
+            </Panel>
+          </aside>
 
-            {state.selectedPanel === "coordination" ? (
-              <CoordinationPanel
-                tasks={state.tasks}
-                runs={state.runs}
-                runDetail={state.runDetail}
-                loading={state.loading}
-                onSelectRun={handleRunSelection}
-                onRetrySelectedTask={handleRetrySelectedTask}
-                onEnqueue={handleEnqueue}
-                onSupervision={handleSupervision}
-              />
-            ) : null}
-
-            {state.selectedPanel === "knowledge" ? (
-              <KnowledgePanel
-                sourceDocuments={state.sourceDocuments}
-                claims={state.claims}
-                evaluations={state.evaluations}
-                detailDepth={state.detailDepth}
-              />
-            ) : null}
-
-            {state.selectedPanel === "docs" ? (
-              <DocsPanel docs={state.docs} skills={state.skills} detailDepth={state.detailDepth} />
-            ) : null}
-
-            {state.selectedPanel === "preferences" ? (
-              <PreferencesPanel
-                me={state.me}
-                devProfile={state.devProfile}
-                onSupervision={handleSupervision}
-              />
-            ) : null}
-          </>
-        ) : null}
-      </div>
+          <div className="console-main">
+            {selectedPanelContent}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: tokens.space.lg, maxWidth: 480 }}>
+          {sessionPanel}
+          {state.notice ? <Message tone="ok">{state.notice}</Message> : null}
+          {state.error ? <Message tone="error">{state.error}</Message> : null}
+        </div>
+      )}
     </AppFrame>
+  );
+}
+
+function PreviewPanel(props: {
+  overview: WorkspaceOverview | null;
+  tasks: AgentTaskCollection | null;
+  docs: DocsCatalogResponse | null;
+  skills: SkillCatalogResponse | null;
+  claims: ResourceCollection<KnowledgeClaimRecord> | null;
+  evaluations: ResourceCollection<EvaluationResultRecord> | null;
+}) {
+  const totalServices = props.overview?.services.length ?? 0;
+  const healthyServices = props.overview?.services.filter((service) => service.status === "ok").length ?? 0;
+  const attentionQueues = props.tasks?.queues.filter((queue) => queue.failedCount > 0).length ?? 0;
+  const queuedTasks = props.tasks?.queues.reduce((total, queue) => total + queue.queuedCount, 0) ?? 0;
+  const latestBackup = props.overview?.backup?.latestBackupKind ?? "pending";
+  const docCount = props.docs?.items.length ?? 0;
+  const skillCount = props.skills?.items.length ?? 0;
+  const claimCount = props.claims?.items.length ?? 0;
+  const evaluationCount = props.evaluations?.items.length ?? 0;
+
+  return (
+    <Panel title="Production Deployment Screen Preview" eyebrow="Proposed">
+      <div className="preview-overview">
+        <div>
+          <h3 style={{ margin: 0, marginBottom: tokens.space.sm }}>Compact review-first surface</h3>
+          <p style={{ margin: 0, color: tokens.color.muted }}>
+            These samples reuse the runtime dashboard visual language, but compress the first screen into
+            denser cards so deployment reviews need less vertical travel.
+          </p>
+        </div>
+        <div className="preview-chip-row">
+          <StatusPill status={totalServices > 0 && healthyServices === totalServices ? "ok" : "neutral"}>
+            {totalServices ? `${healthyServices}/${totalServices} services healthy` : "service health pending"}
+          </StatusPill>
+          <StatusPill status={attentionQueues > 0 ? "degraded" : "ok"}>
+            {attentionQueues > 0 ? `${attentionQueues} queue alerts` : `${queuedTasks} queued tasks`}
+          </StatusPill>
+          <StatusPill status={docCount > 0 ? "ok" : "neutral"}>
+            {docCount} docs · {skillCount} skills
+          </StatusPill>
+        </div>
+      </div>
+
+      <div className="preview-grid">
+        <PreviewCard
+          tone="forest"
+          label="Theme 01"
+          title="Mission Control"
+          description="Desktop-first launch surface for cutovers, health review, and fast escalation."
+          span="wide"
+        >
+          <div className="preview-toolbar">
+            <span className="preview-pill">Deployment</span>
+            <span className="preview-pill preview-pill-strong">Status ribbon</span>
+            <span className="preview-pill">Map + queue split</span>
+          </div>
+          <div className="preview-stat-grid">
+            <PreviewMetric label="Services" value={totalServices ? `${healthyServices}/${totalServices}` : "0/0"} />
+            <PreviewMetric label="Queue alerts" value={String(attentionQueues)} />
+            <PreviewMetric label="Backup" value={latestBackup} />
+          </div>
+          <div className="preview-split">
+            <div className="preview-map">
+              <div className="preview-map-badge">Regional coverage</div>
+              <div className="preview-map-grid">
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+            <div className="preview-stack">
+              <PreviewListRow label="Runtime API" value={serviceStatusLabel(props.overview, "runtime-api")} />
+              <PreviewListRow label="Gateway" value={serviceStatusLabel(props.overview, "gateway")} />
+              <PreviewListRow label="Queued tasks" value={String(queuedTasks)} />
+              <PreviewListRow label="Newest evidence" value={`${claimCount} claims`} />
+            </div>
+          </div>
+        </PreviewCard>
+
+        <PreviewCard
+          tone="sand"
+          label="Theme 02"
+          title="Field Tablet"
+          description="Tight operator workflow for tripod setup, link checks, and fix confirmation."
+        >
+          <div className="preview-toolbar">
+            <span className="preview-pill">Touch targets</span>
+            <span className="preview-pill">One-handed scan</span>
+          </div>
+          <div className="preview-stat-grid preview-stat-grid-tight">
+            <PreviewMetric label="Fix target" value="2 cm" />
+            <PreviewMetric label="Base link" value="42 ms" />
+          </div>
+          <div className="preview-checklist">
+            <PreviewChecklistItem title="Sky view verified" detail="satellite mask + compass" />
+            <PreviewChecklistItem title="Correction link stable" detail="latency and packet-loss band" />
+            <PreviewChecklistItem title="Start survey" detail="single primary action above fold" />
+          </div>
+          <div className="preview-bars">
+            <span style={{ height: 34 }} />
+            <span style={{ height: 58 }} />
+            <span style={{ height: 78 }} />
+            <span style={{ height: 50 }} />
+            <span style={{ height: 68 }} />
+          </div>
+        </PreviewCard>
+
+        <PreviewCard
+          tone="ink"
+          label="Theme 03"
+          title="Evidence Board"
+          description="Approval-oriented surface for deployment sign-off, docs review, and supervised choices."
+        >
+          <div className="preview-toolbar">
+            <span className="preview-pill">Docs</span>
+            <span className="preview-pill preview-pill-strong">Approvals</span>
+            <span className="preview-pill">Knowledge</span>
+          </div>
+          <div className="preview-ledger">
+            <PreviewListRow label="Cataloged docs" value={String(docCount)} />
+            <PreviewListRow label="Verified skills" value={String(skillCount)} />
+            <PreviewListRow label="Claims" value={String(claimCount)} />
+            <PreviewListRow label="Evaluations" value={String(evaluationCount)} />
+          </div>
+          <div className="preview-note">
+            Show deployment rationale, supporting artifacts, and approval shortcuts on one screen instead of
+            stacking long review panes.
+          </div>
+        </PreviewCard>
+      </div>
+    </Panel>
   );
 }
 
@@ -590,7 +855,7 @@ function CoordinationPanel(props: {
         ) : props.loading ? <p>Loading tasks…</p> : null}
       </Panel>
 
-      <div style={{ display: "grid", gap: tokens.space.lg, gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)" }}>
+      <div style={splitGridStyle}>
         <Panel title="Recent Tasks" eyebrow="Queue History">
           {props.tasks ? (
             <div style={{ display: "grid", gap: tokens.space.sm }}>
@@ -719,17 +984,34 @@ function DocsPanel(props: {
   skills: SkillCatalogResponse | null;
   detailDepth: "compact" | "expanded";
 }) {
+  const allDocs = props.docs?.items ?? [];
+  const presentationDocs = allDocs.filter((item) => item.kind === "presentation");
+  const otherDocs = allDocs.filter((item) => item.kind !== "presentation");
+  const presentationLimit = props.detailDepth === "compact" ? 4 : 8;
+  const docsLimit = props.detailDepth === "compact" ? 8 : 16;
+
   return (
-    <div style={{ display: "grid", gap: tokens.space.lg, gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)" }}>
-      <Panel title="Documentation Catalog" eyebrow="Filesystem">
-        <ListBlock
-          items={(props.docs?.items ?? []).slice(0, props.detailDepth === "compact" ? 8 : 16).map((item) => ({
-            title: item.title,
-            subtitle: `${item.kind} · ${item.path}`,
-            body: item.summary
-          }))}
-        />
-      </Panel>
+    <div style={splitGridStyle}>
+      <div style={{ display: "grid", gap: tokens.space.lg }}>
+        <Panel title="Presentations" eyebrow="R&D">
+          <ListBlock
+            items={presentationDocs.slice(0, presentationLimit).map((item) => ({
+              title: item.title,
+              subtitle: `${item.path}${item.tags.includes("canva") ? " · Canva brief" : ""}`,
+              body: item.summary
+            }))}
+          />
+        </Panel>
+        <Panel title="Documentation Catalog" eyebrow="Filesystem">
+          <ListBlock
+            items={otherDocs.slice(0, docsLimit).map((item) => ({
+              title: item.title,
+              subtitle: `${item.kind} · ${item.path}`,
+              body: item.summary
+            }))}
+          />
+        </Panel>
+      </div>
       <Panel title="Skills Catalog" eyebrow="Verified">
         <ListBlock
           items={(props.skills?.items ?? []).slice(0, props.detailDepth === "compact" ? 8 : 16).map((item) => ({
@@ -773,7 +1055,7 @@ function PreferencesPanel(props: {
           </button>
         </div>
       </Panel>
-      <div style={{ display: "grid", gap: tokens.space.lg, gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)" }}>
+      <div style={splitGridStyle}>
         <Panel title="Recent Signals" eyebrow="Observed">
           <ListBlock
             items={(props.devProfile?.recentSignals ?? []).slice(0, 10).map((signal) => ({
@@ -793,6 +1075,53 @@ function PreferencesPanel(props: {
           />
         </Panel>
       </div>
+    </div>
+  );
+}
+
+function PreviewCard(props: {
+  tone: "forest" | "sand" | "ink";
+  label: string;
+  title: string;
+  description: string;
+  span?: "wide";
+  children: React.ReactNode;
+}) {
+  return (
+    <article className={`preview-card preview-card-${props.tone}${props.span === "wide" ? " preview-card-wide" : ""}`}>
+      <div style={{ display: "grid", gap: tokens.space.xs }}>
+        <span className="preview-card-label">{props.label}</span>
+        <h3 style={{ margin: 0 }}>{props.title}</h3>
+        <p style={{ margin: 0, color: "inherit", opacity: 0.82 }}>{props.description}</p>
+      </div>
+      <div className="preview-screen">{props.children}</div>
+    </article>
+  );
+}
+
+function PreviewMetric(props: { label: string; value: string }) {
+  return (
+    <div className="preview-metric">
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
+    </div>
+  );
+}
+
+function PreviewListRow(props: { label: string; value: string }) {
+  return (
+    <div className="preview-list-row">
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
+    </div>
+  );
+}
+
+function PreviewChecklistItem(props: { title: string; detail: string }) {
+  return (
+    <div className="preview-checklist-item">
+      <strong>{props.title}</strong>
+      <span>{props.detail}</span>
     </div>
   );
 }
@@ -874,6 +1203,10 @@ function Message(props: { tone: "ok" | "error"; children: React.ReactNode }) {
   );
 }
 
+function serviceStatusLabel(overview: WorkspaceOverview | null, serviceName: string) {
+  return overview?.services.find((service) => service.service === serviceName)?.status ?? "pending";
+}
+
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: `${tokens.space.sm}px ${tokens.space.md}px`,
@@ -886,6 +1219,12 @@ const gridStyle: React.CSSProperties = {
   display: "grid",
   gap: tokens.space.md,
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))"
+};
+
+const splitGridStyle: React.CSSProperties = {
+  display: "grid",
+  gap: tokens.space.lg,
+  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))"
 };
 
 const rowStyle: React.CSSProperties = {

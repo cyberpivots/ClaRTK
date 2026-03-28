@@ -200,6 +200,125 @@ export interface DevPreferenceDecisionCreateRequest {
   payloadJson: string;
 }
 
+export interface InventoryItem {
+  itemId: number;
+  itemKey: string;
+  partName: string;
+  manufacturer: string;
+  model: string;
+  category: string;
+  classification: string;
+  status: string;
+  totalUnits: number;
+  latestEventId: string;
+  notesJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InventoryItemCollection {
+  items: InventoryItem[];
+  source: string;
+  total: number;
+}
+
+export interface InventoryUnit {
+  unitId: number;
+  itemId: number;
+  unitLabel: string;
+  serialNumber: string;
+  assetTag: string;
+  status: string;
+  location: string;
+  currentBuildId: number;
+  latestEventId: string;
+  metadataJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InventoryUnitCollection {
+  units: InventoryUnit[];
+  source: string;
+  total: number;
+}
+
+export interface InventoryBuild {
+  buildId: number;
+  buildName: string;
+  buildKind: string;
+  status: string;
+  baseUnitId: number;
+  roverUnitId: number;
+  reservedByAccountId: number;
+  runtimeDeviceId: string;
+  currentTaskId: number;
+  expectedSite: string;
+  planJson: string;
+  resultJson: string;
+  latestEventId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InventoryBuildCollection {
+  builds: InventoryBuild[];
+  source: string;
+  total: number;
+}
+
+export interface InventoryEvent {
+  eventId: number;
+  subjectKind: string;
+  subjectId: number;
+  eventKind: string;
+  payloadJson: string;
+  actor: string;
+  agentTaskId: number;
+  createdAt: string;
+}
+
+export interface InventoryEventCollection {
+  events: InventoryEvent[];
+  source: string;
+  total: number;
+}
+
+export interface StartHardwareBuildRequest {
+  buildName: string;
+  buildKind: string;
+  baseUnitId: number;
+  roverUnitId: number;
+  queueName: string;
+  priority: number;
+  expectedSite: string;
+  planJson: string;
+}
+
+export interface StartHardwareBuildResponse {
+  build: InventoryBuild;
+  tasks: AgentTask[];
+}
+
+export interface TriggerHardwareRuntimePublishRequest {
+  buildId: number;
+  runtimeDeviceId: string;
+  queueName: string;
+  priority: number;
+}
+
+export interface SeedInventoryRequest {
+  manifestPath: string;
+  force: boolean;
+}
+
+export interface SeedInventoryResponse {
+  upsertedItems: number;
+  upsertedUnits: number;
+  source: string;
+  skippedRows: number;
+}
+
 export interface SourceDocument {
   sourceDocumentId: string;
   sourceKind: string;

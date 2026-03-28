@@ -47,6 +47,21 @@ SYSTEM_SKILLS_ROOT = Path.home() / ".codex" / "skills" / ".system"
 DEV_PREFERENCE_TASK_KIND = "preferences.compute_dev_preference_scores"
 REFRESH_DOC_CATALOG_TASK_KIND = "catalog.refresh_doc_catalog"
 REFRESH_SKILL_CATALOG_TASK_KIND = "catalog.refresh_skill_catalog"
+HARDWARE_PREPARE_TASK_KIND = "hardware.prepare"
+HARDWARE_RESERVE_PARTS_TASK_KIND = "hardware.reserve_parts"
+HARDWARE_BUILD_TASK_KIND = "hardware.build"
+HARDWARE_BENCH_VALIDATE_TASK_KIND = "hardware.bench_validate"
+HARDWARE_RUNTIME_REGISTER_TASK_KIND = "hardware.runtime_register"
+HARDWARE_STATUS_BUILD_PLANNED = "planned"
+HARDWARE_STATUS_BUILD_PREPARED = "prepared"
+HARDWARE_STATUS_BUILD_PARTS_RESERVED = "parts_reserved"
+HARDWARE_STATUS_BUILD_ASSEMBLED = "assembled"
+HARDWARE_STATUS_BUILD_VALIDATED = "bench_validated"
+HARDWARE_STATUS_BUILD_RUNTIME_PENDING = "runtime_publish_pending"
+HARDWARE_STATUS_BUILD_RUNTIME_PUBLISHED = "runtime_published"
+HARDWARE_STATUS_BUILD_RUNTIME_REGISTRATION_FAILED = "runtime_registration_failed"
+HARDWARE_STATUS_BUILD_FAILED = "failed"
+HARDWARE_STATUS_BUILD_CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -237,6 +252,74 @@ def extract_string(payload: dict[str, Any], *keys: str) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+def as_int(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def parse_inventory_manifest(manifest_path: str) -> dict[str, list[dict[str, Any]]]:
+    manifest_file = Path(manifest_path)
+    if not manifest_file.is_absolute():
+        candidate = REPO_ROOT / manifest_path
+        if candidate.exists():
+            manifest_file = candidate
+    if not manifest_file.exists():
+        raise FileNotFoundError(f"manifest not found: {manifest_path}")
+
+    text = manifest_file.read_text(encoding="utf-8")
+
+    marker_start = "```json"
+    marker_end = "```"
+    manifest_payload: dict[str, Any] | None = None
+    search_start = 0
+    while True:
+        block_start = text.find(marker_start, search_start)
+        if block_start == -1:
+            break
+        block_content_start = block_start + len(marker_start)
+        block_end = text.find(marker_end, block_content_start)
+        if block_end == -1:
+            break
+        block = text[block_content_start:block_end].strip()
+        search_start = block_end + len(marker_end)
+
+        try:
+            parsed = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(parsed, dict)
+            and ("items" in parsed or "units" in parsed)
+            and manifest_payload is None
+        ):
+            manifest_payload = parsed
+            break
+
+    if manifest_payload is None:
+        raise ValueError(f"could not locate inventory json block in manifest: {manifest_path}")
+
+    raw_items = manifest_payload.get("items", [])
+    raw_units = manifest_payload.get("units", [])
+    if not isinstance(raw_items, list) or not isinstance(raw_units, list):
+        raise ValueError("manifest sections must be arrays named items and units")
+
+    def normalize_row(row: Any) -> dict[str, Any]:
+        if not isinstance(row, dict):
+            raise ValueError("manifest rows must be objects")
+        return dict(row)
+
+    return {
+        "items": [normalize_row(row) for row in raw_items],
+        "units": [normalize_row(row) for row in raw_units],
+    }
 
 
 def build_dev_preference_scorecard(
@@ -613,6 +696,235 @@ class MemoryRepository:
             ).fetchone()
         return map_agent_task(row) if row is not None else None
 
+    def list_inventory_items(self, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  item.item_id,
+                  item.item_key,
+                  item.part_name,
+                  item.manufacturer,
+                  item.model,
+                  item.category,
+                  item.classification,
+                  item.status,
+                  item.latest_event_id,
+                  item.notes_json,
+                  item.created_at,
+                  item.updated_at,
+                  (
+                    SELECT COUNT(*)
+                    FROM inventory.unit AS unit
+                    WHERE unit.item_id = item.item_id
+                  ) AS total_units
+                FROM inventory.item AS item
+                WHERE (%s IS NULL OR item.status = %s)
+                ORDER BY item.created_at DESC, item.item_id DESC
+                LIMIT %s
+                """,
+                (status, status, limit),
+            ).fetchall()
+        return [map_inventory_item(row) for row in rows]
+
+    def list_inventory_units(
+        self,
+        item_id: int | None = None,
+        status: str | None = None,
+        build_id: int | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  unit.unit_id,
+                  unit.item_id,
+                  unit.unit_label,
+                  unit.serial_number,
+                  unit.asset_tag,
+                  unit.status,
+                  unit.location,
+                  unit.current_build_id,
+                  unit.latest_event_id,
+                  unit.metadata_json,
+                  unit.created_at,
+                  unit.updated_at
+                FROM inventory.unit AS unit
+                WHERE (%s IS NULL OR unit.item_id = %s)
+                  AND (%s IS NULL OR unit.status = %s)
+                  AND (%s IS NULL OR unit.current_build_id = %s)
+                ORDER BY unit.created_at DESC, unit.unit_id DESC
+                LIMIT %s
+                """,
+                (item_id, item_id, status, status, build_id, build_id, limit),
+            ).fetchall()
+        return [map_inventory_unit(row) for row in rows]
+
+    def list_inventory_builds(
+        self,
+        status: str | None = None,
+        build_kind: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  build.build_id,
+                  build.build_name,
+                  build.build_kind,
+                  build.status,
+                  build.base_unit_id,
+                  build.rover_unit_id,
+                  build.reserved_by_account_id,
+                  build.runtime_device_id,
+                  build.current_task_id,
+                  build.expected_site,
+                  build.plan_json,
+                  build.result_json,
+                  build.latest_event_id,
+                  build.created_at,
+                  build.updated_at
+                FROM inventory.build AS build
+                WHERE (%s IS NULL OR build.status = %s)
+                  AND (%s IS NULL OR build.build_kind = %s)
+                ORDER BY build.created_at DESC, build.build_id DESC
+                LIMIT %s
+                """,
+                (status, status, build_kind, build_kind, limit),
+            ).fetchall()
+        return [map_inventory_build(row) for row in rows]
+
+    def list_inventory_events(
+        self,
+        subject_kind: str | None = None,
+        subject_id: int | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  event.event_id,
+                  event.subject_kind,
+                  event.subject_id,
+                  event.event_kind,
+                  event.payload_json,
+                  event.actor,
+                  event.agent_task_id,
+                  event.created_at
+                FROM inventory.event AS event
+                WHERE (%s IS NULL OR event.subject_kind = %s)
+                  AND (%s IS NULL OR event.subject_id = %s)
+                ORDER BY event.created_at DESC, event.event_id DESC
+                LIMIT %s
+                """,
+                (subject_kind, subject_kind, subject_id, subject_id, limit),
+            ).fetchall()
+        return [map_inventory_event(row) for row in rows]
+
+    def get_inventory_item(self, item_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  item.item_id,
+                  item.item_key,
+                  item.part_name,
+                  item.manufacturer,
+                  item.model,
+                  item.category,
+                  item.classification,
+                  item.status,
+                  item.latest_event_id,
+                  item.notes_json,
+                  item.created_at,
+                  item.updated_at,
+                  (
+                    SELECT COUNT(*)
+                    FROM inventory.unit AS unit
+                    WHERE unit.item_id = item.item_id
+                  ) AS total_units
+                FROM inventory.item AS item
+                WHERE item.item_id = %s
+                """,
+                (item_id,),
+            ).fetchone()
+        return map_inventory_item(row) if row is not None else None
+
+    def get_inventory_unit(self, unit_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  unit.unit_id,
+                  unit.item_id,
+                  unit.unit_label,
+                  unit.serial_number,
+                  unit.asset_tag,
+                  unit.status,
+                  unit.location,
+                  unit.current_build_id,
+                  unit.latest_event_id,
+                  unit.metadata_json,
+                  unit.created_at,
+                  unit.updated_at
+                FROM inventory.unit AS unit
+                WHERE unit.unit_id = %s
+                """,
+                (unit_id,),
+            ).fetchone()
+        return map_inventory_unit(row) if row is not None else None
+
+    def get_inventory_build(self, build_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  build.build_id,
+                  build.build_name,
+                  build.build_kind,
+                  build.status,
+                  build.base_unit_id,
+                  build.rover_unit_id,
+                  build.reserved_by_account_id,
+                  build.runtime_device_id,
+                  build.current_task_id,
+                  build.expected_site,
+                  build.plan_json,
+                  build.result_json,
+                  build.latest_event_id,
+                  build.created_at,
+                  build.updated_at
+                FROM inventory.build AS build
+                WHERE build.build_id = %s
+                """,
+                (build_id,),
+            ).fetchone()
+        return map_inventory_build(row) if row is not None else None
+
     def enqueue_agent_task(
         self,
         *,
@@ -709,6 +1021,490 @@ class MemoryRepository:
             connection.commit()
 
         return map_agent_task(row)
+
+    def _ensure_task_dependency(
+        self,
+        connection: psycopg.Connection[Any],
+        task_id: int,
+        depends_on_task_id: int,
+    ) -> None:
+        if task_id == depends_on_task_id:
+            return
+        connection.execute(
+            """
+            INSERT INTO agent.task_dependency (agent_task_id, depends_on_agent_task_id)
+            VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (task_id, depends_on_task_id),
+        )
+
+    def _create_hardware_task(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        task_kind: str,
+        queue_name: str,
+        priority: int,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            INSERT INTO agent.task (task_kind, queue_name, priority, payload)
+            VALUES (%s, %s, %s, %s)
+            RETURNING
+              agent_task_id,
+              task_kind,
+              queue_name,
+              status,
+              priority,
+              payload,
+              available_at,
+              lease_owner,
+              lease_expires_at,
+              attempt_count,
+              max_attempts,
+              last_error,
+              created_at,
+              updated_at,
+              completed_at
+            """,
+            (task_kind, queue_name, priority, Jsonb(payload)),
+        ).fetchone()
+        return map_agent_task(row)
+
+    def _record_inventory_event(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        subject_kind: str,
+        subject_id: int,
+        event_kind: str,
+        payload: dict[str, Any],
+        actor: str | None = None,
+        agent_task_id: int | None = None,
+    ) -> int:
+        row = connection.execute(
+            """
+            INSERT INTO inventory.event (
+              subject_kind,
+              subject_id,
+              event_kind,
+              payload_json,
+              actor,
+              agent_task_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING event_id
+            """,
+            (
+                subject_kind,
+                subject_id,
+                event_kind,
+                Jsonb(payload),
+                actor,
+                agent_task_id,
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to write inventory event")
+        return int(row["event_id"])
+
+    def _create_hardware_build(self, payload: dict[str, Any]) -> dict[str, Any]:
+        build_name = payload.get("buildName")
+        if not isinstance(build_name, str) or not build_name.strip():
+            raise ValueError("buildName is required")
+        build_kind = payload.get("buildKind")
+        if not isinstance(build_kind, str) or not build_kind.strip():
+            raise ValueError("buildKind is required")
+        base_unit_id = as_int(payload.get("baseUnitId"))
+        rover_unit_id = as_int(payload.get("roverUnitId"))
+        if base_unit_id is None or rover_unit_id is None:
+            raise ValueError("baseUnitId and roverUnitId are required")
+
+        queue_name = (
+            payload.get("queueName")
+            if isinstance(payload.get("queueName"), str) and payload.get("queueName")
+            else DEFAULT_AGENT_TASK_QUEUE
+        )
+        priority = int(payload.get("priority", 0))
+        expected_site = str(payload.get("expectedSite")) if payload.get("expectedSite") else None
+        plan_json = payload.get("planJson")
+        if plan_json is None:
+            plan_json = {}
+        if not isinstance(plan_json, dict):
+            raise ValueError("planJson must be an object")
+
+        with self.connect() as connection:
+            build_row = connection.execute(
+                """
+                INSERT INTO inventory.build (
+                  build_name,
+                  build_kind,
+                  status,
+                  base_unit_id,
+                  rover_unit_id,
+                  expected_site,
+                  plan_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING
+                  build_id,
+                  build_name,
+                  build_kind,
+                  status,
+                  base_unit_id,
+                  rover_unit_id,
+                  reserved_by_account_id,
+                  runtime_device_id,
+                  current_task_id,
+                  expected_site,
+                  plan_json,
+                  result_json,
+                  latest_event_id,
+                  created_at,
+                  updated_at
+                """,
+                (
+                    build_name.strip(),
+                    build_kind,
+                    HARDWARE_STATUS_BUILD_PLANNED,
+                    base_unit_id,
+                    rover_unit_id,
+                    expected_site,
+                    Jsonb(plan_json),
+                ),
+            ).fetchone()
+            if build_row is None:
+                raise RuntimeError("failed to create hardware build")
+
+            build_id = int(build_row["build_id"])
+            task_payload = {
+                "buildId": build_id,
+                "baseUnitId": base_unit_id,
+                "roverUnitId": rover_unit_id,
+                "buildKind": build_kind,
+                "buildName": build_name,
+            }
+
+            prepare_task = self._create_hardware_task(
+                connection,
+                task_kind=HARDWARE_PREPARE_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload=task_payload,
+            )
+            reserve_task = self._create_hardware_task(
+                connection,
+                task_kind=HARDWARE_RESERVE_PARTS_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload=task_payload,
+            )
+            assemble_task = self._create_hardware_task(
+                connection,
+                task_kind=HARDWARE_BUILD_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload=task_payload,
+            )
+            validate_task = self._create_hardware_task(
+                connection,
+                task_kind=HARDWARE_BENCH_VALIDATE_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload=task_payload,
+            )
+            self._ensure_task_dependency(connection, int(reserve_task["agentTaskId"]), int(prepare_task["agentTaskId"]))
+            self._ensure_task_dependency(connection, int(assemble_task["agentTaskId"]), int(reserve_task["agentTaskId"]))
+            self._ensure_task_dependency(connection, int(validate_task["agentTaskId"]), int(assemble_task["agentTaskId"]))
+
+            for task in (prepare_task, reserve_task, assemble_task, validate_task):
+                self._notify_task_ready(
+                    connection,
+                    queue_name=queue_name,
+                    task_kind=str(task["taskKind"]),
+                )
+
+            event_id = self._record_inventory_event(
+                connection,
+                subject_kind="build",
+                subject_id=build_id,
+                event_kind="build.pipeline_created",
+                payload={"buildName": build_name, "queueName": queue_name},
+            )
+            connection.execute(
+                """
+                UPDATE inventory.build
+                SET current_task_id = %s, latest_event_id = %s, updated_at = NOW()
+                WHERE build_id = %s
+                """,
+                (int(prepare_task["agentTaskId"]), event_id, build_id),
+            )
+            connection.commit()
+
+        return {
+            "build": map_inventory_build(build_row),
+            "tasks": [prepare_task, reserve_task, assemble_task, validate_task],
+        }
+
+    def start_hardware_build(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._create_hardware_build(payload)
+
+    def trigger_hardware_runtime_publish(
+        self,
+        build_id: int,
+        runtime_device_id: str,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        priority: int = 0,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            build = connection.execute(
+                """
+                SELECT build_id, status
+                FROM inventory.build
+                WHERE build_id = %s
+                FOR UPDATE
+                """,
+                (build_id,),
+            ).fetchone()
+            if build is None:
+                raise LookupError("build not found")
+            if build["status"] not in {HARDWARE_STATUS_BUILD_VALIDATED, HARDWARE_STATUS_BUILD_RUNTIME_PENDING}:
+                raise ValueError("build must reach bench_validated before runtime publish request")
+
+            dependency_task_id = connection.execute(
+                """
+                SELECT agent_task_id
+                FROM agent.task
+                WHERE (payload ->> 'buildId')::BIGINT = %s
+                  AND task_kind IN (%s, %s, %s, %s)
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (
+                    build_id,
+                    HARDWARE_PREPARE_TASK_KIND,
+                    HARDWARE_RESERVE_PARTS_TASK_KIND,
+                    HARDWARE_BUILD_TASK_KIND,
+                    HARDWARE_BENCH_VALIDATE_TASK_KIND,
+                ),
+            ).fetchone()
+            dependency = dependency_task_id["agent_task_id"] if dependency_task_id is not None else None
+
+            task = self._create_hardware_task(
+                connection,
+                task_kind=HARDWARE_RUNTIME_REGISTER_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={
+                    "buildId": build_id,
+                    "runtimeDeviceId": runtime_device_id,
+                    "trigger": "manual",
+                },
+            )
+            if dependency is not None:
+                self._ensure_task_dependency(connection, int(task["agentTaskId"]), int(dependency))
+
+            self._notify_task_ready(
+                connection,
+                queue_name=queue_name,
+                task_kind=HARDWARE_RUNTIME_REGISTER_TASK_KIND,
+            )
+            event_id = self._record_inventory_event(
+                connection,
+                subject_kind="build",
+                subject_id=build_id,
+                event_kind="build.runtime_register_requested",
+                payload={"runtimeDeviceId": runtime_device_id, "taskId": int(task["agentTaskId"])},
+            )
+            connection.execute(
+                """
+                UPDATE inventory.build
+                SET runtime_device_id = %s,
+                    status = %s,
+                    latest_event_id = %s,
+                    current_task_id = %s,
+                    updated_at = NOW()
+                WHERE build_id = %s
+                """,
+                (
+                    runtime_device_id,
+                    HARDWARE_STATUS_BUILD_RUNTIME_PENDING,
+                    event_id,
+                    int(task["agentTaskId"]),
+                    build_id,
+                ),
+            )
+            connection.commit()
+
+        return {
+            "build": self.get_inventory_build(build_id),
+            "task": task,
+        }
+
+    def seed_inventory_from_markdown(self, manifest_path: str, force: bool) -> dict[str, int]:
+        manifest = parse_inventory_manifest(manifest_path)
+        item_rows = manifest.get("items", [])
+        unit_rows = manifest.get("units", [])
+
+        upserted_items = 0
+        upserted_units = 0
+        skipped_rows = 0
+
+        with self.connect() as connection:
+            item_id_by_key: dict[str, int] = {}
+            for row in item_rows:
+                item_key = str(row.get("item_key", "")).strip()
+                if not item_key:
+                    skipped_rows += 1
+                    continue
+
+                part_name = str(row.get("part_name", item_key)).strip()
+                row_status = str(row.get("status", "available") or "available").strip()
+                if row_status not in {"available", "reserved", "deprecated"}:
+                    skipped_rows += 1
+                    continue
+
+                item = connection.execute(
+                    """
+                    INSERT INTO inventory.item (
+                      item_key,
+                      part_name,
+                      manufacturer,
+                      model,
+                      category,
+                      classification,
+                      status,
+                      notes_json
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::inventory.item_status, %s)
+                    ON CONFLICT (item_key) DO UPDATE
+                    SET
+                      part_name = EXCLUDED.part_name,
+                      manufacturer = EXCLUDED.manufacturer,
+                      model = EXCLUDED.model,
+                      category = EXCLUDED.category,
+                      classification = EXCLUDED.classification,
+                      status = CASE WHEN %s THEN EXCLUDED.status ELSE inventory.item.status END,
+                      notes_json = CASE WHEN %s THEN EXCLUDED.notes_json ELSE inventory.item.notes_json END,
+                      updated_at = NOW()
+                    RETURNING item_id, item_key
+                    """,
+                    (
+                        item_key,
+                        part_name,
+                        row.get("manufacturer"),
+                        row.get("model"),
+                        row.get("category"),
+                        row.get("classification", "optional"),
+                        row_status,
+                        Jsonb(row.get("notes_json") or {}),
+                        force,
+                        force,
+                    ),
+                ).fetchone()
+                if item is None:
+                    skipped_rows += 1
+                    continue
+
+                item_id = int(item["item_id"])
+                item_id_by_key[item_key] = item_id
+                upserted_items += 1
+                self._record_inventory_event(
+                    connection,
+                    subject_kind="item",
+                    subject_id=item_id,
+                    event_kind="seed.upserted",
+                    payload={"itemKey": item_key, "source": manifest_path},
+                )
+
+            for row in unit_rows:
+                item_key = str(row.get("item_key", "")).strip()
+                item_id = as_int(row.get("item_id"))
+                if item_id is None and item_key:
+                    item_id = item_id_by_key.get(item_key)
+                if item_id is None:
+                    skipped_rows += 1
+                    continue
+
+                unit_label = str(row.get("unit_label", "")).strip()
+                if not unit_label:
+                    skipped_rows += 1
+                    continue
+
+                row_status = str(row.get("status", "new") or "new").strip()
+                if row_status not in {
+                    "new",
+                    "available",
+                    "reserved",
+                    "in_build",
+                    "validated",
+                    "deployed",
+                    "damaged",
+                    "retired",
+                }:
+                    skipped_rows += 1
+                    continue
+
+                serial_number = str(row.get("serial_number", "")).strip() or None
+                unit = connection.execute(
+                    """
+                    INSERT INTO inventory.unit (
+                      item_id,
+                      unit_label,
+                      serial_number,
+                      asset_tag,
+                      status,
+                      location,
+                      metadata_json
+                    )
+                    VALUES (%s, %s, %s, %s, %s::inventory.unit_status, %s, %s)
+                    ON CONFLICT (unit_label) DO UPDATE
+                    SET
+                      item_id = EXCLUDED.item_id,
+                      serial_number = COALESCE(EXCLUDED.serial_number, inventory.unit.serial_number),
+                      asset_tag = COALESCE(EXCLUDED.asset_tag, inventory.unit.asset_tag),
+                      status = CASE WHEN %s THEN EXCLUDED.status ELSE inventory.unit.status END,
+                      location = COALESCE(EXCLUDED.location, inventory.unit.location),
+                      metadata_json = CASE WHEN %s THEN EXCLUDED.metadata_json ELSE inventory.unit.metadata_json END,
+                      updated_at = NOW()
+                    RETURNING unit_id
+                    """,
+                    (
+                        item_id,
+                        unit_label,
+                        serial_number,
+                        row.get("asset_tag"),
+                        row_status,
+                        row.get("location"),
+                        Jsonb(row.get("metadata_json") or {}),
+                        force,
+                        force,
+                    ),
+                ).fetchone()
+                if unit is None:
+                    skipped_rows += 1
+                    continue
+
+                unit_id = int(unit["unit_id"])
+                upserted_units += 1
+                self._record_inventory_event(
+                    connection,
+                    subject_kind="unit",
+                    subject_id=unit_id,
+                    event_kind="seed.upserted",
+                    payload={"itemId": item_id, "unitLabel": unit_label},
+                )
+
+            connection.commit()
+
+        return {
+            "upserted_items": upserted_items,
+            "upserted_units": upserted_units,
+            "source": manifest_path,
+            "skipped_rows": skipped_rows,
+        }
 
     def list_agent_runs(self, limit: int = 50) -> dict[str, Any]:
         if not self.configured:
@@ -1782,7 +2578,195 @@ class MemoryRepository:
         if task_kind == REFRESH_SKILL_CATALOG_TASK_KIND:
             return scan_skill_catalog()
 
+        if task_kind == HARDWARE_PREPARE_TASK_KIND:
+            return self._run_hardware_prepare(payload)
+        if task_kind == HARDWARE_RESERVE_PARTS_TASK_KIND:
+            return self._run_hardware_reserve_parts(payload)
+        if task_kind == HARDWARE_BUILD_TASK_KIND:
+            return self._run_hardware_build(payload)
+        if task_kind == HARDWARE_BENCH_VALIDATE_TASK_KIND:
+            return self._run_hardware_bench_validate(payload)
+        if task_kind == HARDWARE_RUNTIME_REGISTER_TASK_KIND:
+            return self._run_hardware_runtime_register(payload)
+
         raise ValueError(f"unsupported task kind: {task_kind}")
+
+    def _run_hardware_prepare(self, payload: dict[str, Any]) -> dict[str, Any]:
+        build_id = as_int(payload.get("buildId"))
+        if build_id is None:
+            raise ValueError("buildId is required for hardware.prepare")
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  build_id,
+                  status,
+                  base_unit_id,
+                  rover_unit_id
+                FROM inventory.build
+                WHERE build_id = %s
+                """,
+                (build_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("build not found")
+
+            connection.execute(
+                """
+                UPDATE inventory.build
+                SET status = %s, updated_at = NOW()
+                WHERE build_id = %s
+                """,
+                (HARDWARE_STATUS_BUILD_PREPARED, build_id),
+            )
+
+            unit_ids = [as_int(row["base_unit_id"]), as_int(row["rover_unit_id"])]
+            for unit_id in unit_ids:
+                if unit_id is None:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE inventory.unit
+                    SET status = 'in_build', current_build_id = %s, updated_at = NOW()
+                    WHERE unit_id = %s
+                    """,
+                    (build_id, unit_id),
+                )
+            connection.commit()
+
+        return {"buildId": build_id, "step": "prepare", "status": HARDWARE_STATUS_BUILD_PREPARED}
+
+    def _run_hardware_reserve_parts(self, payload: dict[str, Any]) -> dict[str, Any]:
+        build_id = as_int(payload.get("buildId"))
+        if build_id is None:
+            raise ValueError("buildId is required for hardware.reserve_parts")
+
+        with self.connect() as connection:
+            build = connection.execute(
+                "SELECT base_unit_id, rover_unit_id FROM inventory.build WHERE build_id = %s",
+                (build_id,),
+            ).fetchone()
+            if build is None:
+                raise LookupError("build not found")
+
+            unit_ids = [as_int(build["base_unit_id"]), as_int(build["rover_unit_id"])]
+            for unit_id in unit_ids:
+                if unit_id is None:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE inventory.unit
+                    SET status = 'reserved', updated_at = NOW()
+                    WHERE unit_id = %s
+                    """,
+                    (unit_id,),
+                )
+
+            connection.execute(
+                """
+                UPDATE inventory.build
+                SET status = %s, updated_at = NOW()
+                WHERE build_id = %s
+                """,
+                (HARDWARE_STATUS_BUILD_PARTS_RESERVED, build_id),
+            )
+            connection.commit()
+
+        return {"buildId": build_id, "step": "reserve_parts", "status": HARDWARE_STATUS_BUILD_PARTS_RESERVED}
+
+    def _run_hardware_build(self, payload: dict[str, Any]) -> dict[str, Any]:
+        build_id = as_int(payload.get("buildId"))
+        if build_id is None:
+            raise ValueError("buildId is required for hardware.build")
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE inventory.build
+                SET status = %s, updated_at = NOW()
+                WHERE build_id = %s
+                """,
+                (HARDWARE_STATUS_BUILD_ASSEMBLED, build_id),
+            )
+            connection.commit()
+        return {"buildId": build_id, "step": "build", "status": HARDWARE_STATUS_BUILD_ASSEMBLED}
+
+    def _run_hardware_bench_validate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        build_id = as_int(payload.get("buildId"))
+        if build_id is None:
+            raise ValueError("buildId is required for hardware.bench_validate")
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE inventory.build
+                SET status = %s, updated_at = NOW()
+                WHERE build_id = %s
+                """,
+                (HARDWARE_STATUS_BUILD_VALIDATED, build_id),
+            )
+            build = connection.execute(
+                """
+                SELECT base_unit_id, rover_unit_id
+                FROM inventory.build
+                WHERE build_id = %s
+                """,
+                (build_id,),
+            ).fetchone()
+            if build is not None:
+                for unit_id in [as_int(build["base_unit_id"]), as_int(build["rover_unit_id"])]:
+                    if unit_id is None:
+                        continue
+                    connection.execute(
+                        """
+                        UPDATE inventory.unit
+                        SET status = 'validated', updated_at = NOW()
+                        WHERE unit_id = %s
+                        """,
+                        (unit_id,),
+                    )
+            connection.commit()
+        return {"buildId": build_id, "step": "bench_validate", "status": HARDWARE_STATUS_BUILD_VALIDATED}
+
+    def _run_hardware_runtime_register(self, payload: dict[str, Any]) -> dict[str, Any]:
+        build_id = as_int(payload.get("buildId"))
+        if build_id is None:
+            raise ValueError("buildId is required for hardware.runtime_register")
+        runtime_device_id = str(payload.get("runtimeDeviceId", "")).strip() or None
+        with self.connect() as connection:
+            result = connection.execute(
+                """
+                SELECT build_id, runtime_device_id
+                FROM inventory.build
+                WHERE build_id = %s
+                """,
+                (build_id,),
+            ).fetchone()
+            if result is None:
+                raise LookupError("build not found")
+
+            resolved_runtime_device_id = runtime_device_id
+            if resolved_runtime_device_id is None:
+                resolved_runtime_device_id = result["runtime_device_id"]
+                if resolved_runtime_device_id is None:
+                    resolved_runtime_device_id = None
+
+            connection.execute(
+                """
+                UPDATE inventory.build
+                SET runtime_device_id = COALESCE(%s, runtime_device_id), updated_at = NOW()
+                WHERE build_id = %s
+                """,
+                (resolved_runtime_device_id, build_id),
+            )
+            connection.commit()
+
+        return {
+            "buildId": build_id,
+            "step": "runtime_register",
+            "status": HARDWARE_STATUS_BUILD_RUNTIME_PENDING,
+            "runtimeDeviceId": resolved_runtime_device_id,
+        }
 
     def compute_dev_preference_scores(
         self,
@@ -1907,6 +2891,12 @@ class MemoryRepository:
         result: dict[str, Any],
     ) -> dict[str, Any]:
         with self.connect() as connection:
+            self._apply_hardware_task_side_effects(
+                connection,
+                task=task,
+                result=result,
+                success=True,
+            )
             connection.execute(
                 """
                 UPDATE agent.task
@@ -1943,6 +2933,133 @@ class MemoryRepository:
             "result": result,
         }
 
+    def _apply_hardware_task_side_effects(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        task: dict[str, Any],
+        result: dict[str, Any],
+        success: bool,
+    ) -> None:
+        task_kind = str(task["taskKind"])
+        if task_kind not in {
+            HARDWARE_PREPARE_TASK_KIND,
+            HARDWARE_RESERVE_PARTS_TASK_KIND,
+            HARDWARE_BUILD_TASK_KIND,
+            HARDWARE_BENCH_VALIDATE_TASK_KIND,
+            HARDWARE_RUNTIME_REGISTER_TASK_KIND,
+        }:
+            return
+
+        payload = dict(task["payload"] or {})
+        build_id = as_int(payload.get("buildId"))
+        if build_id is None:
+            return
+
+        next_status = None
+        if success:
+            if task_kind == HARDWARE_PREPARE_TASK_KIND:
+                next_status = HARDWARE_STATUS_BUILD_PREPARED
+            elif task_kind == HARDWARE_RESERVE_PARTS_TASK_KIND:
+                next_status = HARDWARE_STATUS_BUILD_PARTS_RESERVED
+            elif task_kind == HARDWARE_BUILD_TASK_KIND:
+                next_status = HARDWARE_STATUS_BUILD_ASSEMBLED
+            elif task_kind == HARDWARE_BENCH_VALIDATE_TASK_KIND:
+                next_status = HARDWARE_STATUS_BUILD_VALIDATED
+            elif task_kind == HARDWARE_RUNTIME_REGISTER_TASK_KIND:
+                resolved_runtime_device_id = str(payload.get("runtimeDeviceId", "")).strip()
+                if not resolved_runtime_device_id:
+                    build_row = connection.execute(
+                        """
+                        SELECT runtime_device_id
+                        FROM inventory.build
+                        WHERE build_id = %s
+                        """,
+                        (build_id,),
+                    ).fetchone()
+                    if build_row is not None:
+                        resolved_runtime_device_id = str(build_row["runtime_device_id"] or "").strip()
+                next_status = (
+                    HARDWARE_STATUS_BUILD_RUNTIME_PUBLISHED
+                    if resolved_runtime_device_id
+                    else HARDWARE_STATUS_BUILD_RUNTIME_REGISTRATION_FAILED
+                )
+        else:
+            if task_kind == HARDWARE_RUNTIME_REGISTER_TASK_KIND:
+                next_status = HARDWARE_STATUS_BUILD_RUNTIME_REGISTRATION_FAILED
+            else:
+                next_status = HARDWARE_STATUS_BUILD_FAILED
+
+        if next_status is None:
+            return
+
+        event_id = self._record_inventory_event(
+            connection,
+            subject_kind="build",
+            subject_id=build_id,
+            event_kind=f"{task_kind.replace('.', '-')}.completed",
+            payload={"status": next_status, "result": result},
+            actor="agent-memory",
+            agent_task_id=task.get("agentTaskId"),
+        )
+
+        if task_kind == HARDWARE_RUNTIME_REGISTER_TASK_KIND and success:
+            runtime_device_id = str(payload.get("runtimeDeviceId", "")).strip()
+            if not runtime_device_id:
+                build_row = connection.execute(
+                    """
+                    SELECT runtime_device_id
+                    FROM inventory.build
+                    WHERE build_id = %s
+                    """,
+                    (build_id,),
+                ).fetchone()
+                if build_row is not None:
+                    runtime_device_id = str(build_row["runtime_device_id"] or "").strip()
+
+            if runtime_device_id:
+                next_status = HARDWARE_STATUS_BUILD_RUNTIME_PUBLISHED
+            else:
+                next_status = HARDWARE_STATUS_BUILD_RUNTIME_REGISTRATION_FAILED
+
+            if next_status == HARDWARE_STATUS_BUILD_RUNTIME_PUBLISHED:
+                connection.execute(
+                    """
+                    UPDATE inventory.build
+                    SET status = %s,
+                        runtime_device_id = %s,
+                        latest_event_id = %s,
+                        current_task_id = %s,
+                        updated_at = NOW()
+                    WHERE build_id = %s
+                    """,
+                    (
+                        HARDWARE_STATUS_BUILD_RUNTIME_PUBLISHED,
+                        runtime_device_id,
+                        event_id,
+                        task.get("agentTaskId"),
+                        build_id,
+                    ),
+                )
+                return
+
+        connection.execute(
+            """
+            UPDATE inventory.build
+            SET status = %s,
+                latest_event_id = %s,
+                current_task_id = %s,
+                updated_at = NOW()
+            WHERE build_id = %s
+            """,
+            (
+                next_status,
+                event_id,
+                task.get("agentTaskId"),
+                build_id,
+            ),
+        )
+
     def _record_failed_task(
         self,
         task: dict[str, Any],
@@ -1957,6 +3074,14 @@ class MemoryRepository:
         retry_delay_seconds = task_retry_delay_seconds(attempt_count)
 
         with self.connect() as connection:
+            if exhausted:
+                payload = dict(task["payload"] or {})
+                self._apply_hardware_task_side_effects(
+                    connection,
+                    task=task,
+                    result={"error": str(error)},
+                    success=False,
+                )
             connection.execute(
                 """
                 UPDATE agent.task
@@ -2449,6 +3574,74 @@ def map_agent_artifact(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def map_inventory_item(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "itemId": int(row["item_id"]),
+        "itemKey": row["item_key"],
+        "partName": row["part_name"],
+        "manufacturer": row["manufacturer"],
+        "model": row["model"],
+        "category": row["category"],
+        "classification": row["classification"],
+        "status": row["status"],
+        "totalUnits": int(row["total_units"]),
+        "latestEventId": row["latest_event_id"],
+        "notesJson": row["notes_json"] or {},
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+    }
+
+
+def map_inventory_unit(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "unitId": int(row["unit_id"]),
+        "itemId": int(row["item_id"]),
+        "unitLabel": row["unit_label"],
+        "serialNumber": row["serial_number"],
+        "assetTag": row["asset_tag"],
+        "status": row["status"],
+        "location": row["location"],
+        "currentBuildId": int(row["current_build_id"]) if row["current_build_id"] is not None else None,
+        "latestEventId": row["latest_event_id"],
+        "metadataJson": row["metadata_json"] or {},
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+    }
+
+
+def map_inventory_build(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "buildId": int(row["build_id"]),
+        "buildName": row["build_name"],
+        "buildKind": row["build_kind"],
+        "status": row["status"],
+        "baseUnitId": int(row["base_unit_id"]) if row["base_unit_id"] is not None else None,
+        "roverUnitId": int(row["rover_unit_id"]) if row["rover_unit_id"] is not None else None,
+        "reservedByAccountId": int(row["reserved_by_account_id"]) if row["reserved_by_account_id"] is not None else None,
+        "runtimeDeviceId": row["runtime_device_id"],
+        "currentTaskId": int(row["current_task_id"]) if row["current_task_id"] is not None else None,
+        "expectedSite": row["expected_site"],
+        "planJson": row["plan_json"] or {},
+        "resultJson": row["result_json"] or {},
+        "latestEventId": row["latest_event_id"],
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+    }
+
+
+def map_inventory_event(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "eventId": int(row["event_id"]),
+        "subjectKind": row["subject_kind"],
+        "subjectId": int(row["subject_id"]),
+        "eventKind": row["event_kind"],
+        "payloadJson": row["payload_json"] or {},
+        "actor": row["actor"],
+        "agentTaskId": int(row["agent_task_id"]) if row["agent_task_id"] is not None else None,
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
 def map_dev_preference_signal(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "devPreferenceSignalId": int(row["dev_preference_signal_id"]),
@@ -2508,6 +3701,94 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                     return
                 if parsed.path == "/v1/evaluations":
                     self.send_json(200, {"items": repository.list_evaluations()})
+                    return
+                if parsed.path == "/v1/internal/inventory/items":
+                    self.require_internal_token()
+                    status = query.get("status", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    items = repository.list_inventory_items(status=status, limit=limit)
+                    self.send_json(200, {"items": items, "source": "dev-memory", "total": len(items)})
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "inventory", "items"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    item = repository.get_inventory_item(int(path_parts[4]))
+                    if item is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, item)
+                    return
+                if parsed.path == "/v1/internal/inventory/units":
+                    self.require_internal_token()
+                    item_id = as_optional_int(query.get("itemId", [None])[0])
+                    status = query.get("status", [None])[0]
+                    build_id = as_optional_int(query.get("buildId", [None])[0])
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    units = repository.list_inventory_units(
+                        item_id=item_id,
+                        status=status,
+                        build_id=build_id,
+                        limit=limit,
+                    )
+                    self.send_json(200, {"units": units, "source": "dev-memory", "total": len(units)})
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "inventory", "units"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    unit = repository.get_inventory_unit(int(path_parts[4]))
+                    if unit is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, unit)
+                    return
+                if parsed.path == "/v1/internal/inventory/builds":
+                    self.require_internal_token()
+                    status = query.get("status", [None])[0]
+                    build_kind = query.get("buildKind", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    builds = repository.list_inventory_builds(
+                        status=status,
+                        build_kind=build_kind,
+                        limit=limit,
+                    )
+                    self.send_json(
+                        200,
+                        {
+                            "builds": builds,
+                            "source": "dev-memory",
+                            "total": len(builds),
+                        },
+                    )
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "inventory", "builds"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    build = repository.get_inventory_build(int(path_parts[4]))
+                    if build is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, build)
+                    return
+                if parsed.path == "/v1/internal/inventory/events":
+                    self.require_internal_token()
+                    subject_kind = query.get("subjectKind", [None])[0]
+                    subject_id = as_optional_int(query.get("subjectId", [None])[0])
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    events = repository.list_inventory_events(
+                        subject_kind=subject_kind,
+                        subject_id=subject_id,
+                        limit=limit,
+                    )
+                    self.send_json(200, {"events": events, "source": "dev-memory", "total": len(events)})
                     return
                 if parsed.path == "/v1/internal/coordination/tasks":
                     self.require_internal_token()
@@ -2655,6 +3936,41 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         repository.retry_agent_task(
                             int(path_parts[4]),
                             note=str(payload["note"]) if payload.get("note") else None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/inventory/builds":
+                    self.require_internal_token()
+                    self.send_json(201, repository.start_hardware_build(payload))
+                    return
+                if (
+                    len(path_parts) == 6
+                    and path_parts[:4] == ["v1", "internal", "inventory", "builds"]
+                    and path_parts[4].isdigit()
+                    and path_parts[5] == "runtime-publish"
+                ):
+                    self.require_internal_token()
+                    runtime_device_id = payload.get("runtimeDeviceId")
+                    if runtime_device_id is None:
+                        self.send_json(400, {"error": "runtimeDeviceId is required"})
+                        return
+                    self.send_json(
+                        200,
+                        repository.trigger_hardware_runtime_publish(
+                            build_id=int(path_parts[4]),
+                            runtime_device_id=str(runtime_device_id),
+                            queue_name=str(payload.get("queueName", DEFAULT_AGENT_TASK_QUEUE)),
+                            priority=int(payload.get("priority", 0)),
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/inventory/seed":
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.seed_inventory_from_markdown(
+                            manifest_path=str(payload["manifestPath"]),
+                            force=bool(payload.get("force", False)),
                         ),
                     )
                     return

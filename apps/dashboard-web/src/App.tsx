@@ -23,8 +23,15 @@ import { createDefaultProfileDefaults } from "@clartk/domain";
 import { tokens } from "@clartk/design-tokens";
 import { ScreenTitle } from "@clartk/ui-web";
 
+function browserBaseUrl(defaultPort: number): string {
+  if (typeof window === "undefined") {
+    return `http://localhost:${defaultPort}`;
+  }
+  return `${window.location.protocol}//${window.location.hostname}:${defaultPort}`;
+}
+
 const api = new ApiClient({
-  baseUrl: import.meta.env.VITE_CLARTK_API_BASE_URL ?? "http://localhost:3000"
+  baseUrl: import.meta.env.VITE_CLARTK_API_BASE_URL ?? browserBaseUrl(3000)
 });
 
 interface DashboardState {

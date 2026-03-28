@@ -12,6 +12,16 @@ import type {
   DevPreferenceProfile,
   DevPreferenceSignal,
   DocsCatalogResponse,
+  InventoryBuild,
+  InventoryBuildCollection,
+  InventoryBuildStartResponse,
+  InventoryEventCollection,
+  InventoryItem,
+  InventoryItemCollection,
+  InventoryRuntimePublishResponse,
+  InventoryUnit,
+  InventoryUnitCollection,
+  SeedInventoryResponse,
   EffectiveOperatorProfile,
   EvaluationResultRecord,
   JsonObject,
@@ -25,6 +35,7 @@ import type {
   RuntimeDevice,
   RuntimePositionEvent,
   RuntimeRtkSolution,
+  RuntimeSessionState,
   RuntimeSavedView,
   SkillCatalogResponse,
   SourceDocumentRecord,
@@ -43,7 +54,11 @@ class JsonClient {
   private readonly fetchFn: typeof fetch;
 
   constructor(private readonly options: ApiClientOptions) {
-    this.fetchFn = options.fetchFn ?? fetch;
+    this.fetchFn =
+      options.fetchFn ??
+      ((input, init) => {
+        return globalThis.fetch(input, init);
+      });
   }
 
   url(path: string): string {
@@ -178,6 +193,10 @@ export class ApiClient extends JsonClient {
     await this.sendJson<void>("/v1/auth/logout", {
       method: "POST"
     });
+  }
+
+  async getSessionState(): Promise<RuntimeSessionState> {
+    return this.getJson<RuntimeSessionState>("/v1/auth/session");
   }
 
   async getMe(): Promise<AuthenticatedMe> {
@@ -363,6 +382,131 @@ export class DevConsoleClient extends JsonClient {
 
   async getDevProfile(): Promise<DevPreferenceProfile> {
     return this.getJson<DevPreferenceProfile>("/v1/preferences/dev-profile");
+  }
+
+  async listInventoryItems(): Promise<InventoryItemCollection> {
+    return this.getJson<InventoryItemCollection>("/v1/inventory/items");
+  }
+
+  async getInventoryItem(itemId: number): Promise<InventoryItem> {
+    return this.getJson<InventoryItem>(`/v1/inventory/items/${itemId}`);
+  }
+
+  async listInventoryUnits(query: {
+    itemId?: number;
+    status?: string;
+    buildId?: number;
+    limit?: number;
+  } = {}): Promise<InventoryUnitCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.itemId === "number") {
+      params.set("itemId", String(query.itemId));
+    }
+    if (typeof query.status === "string" && query.status) {
+      params.set("status", query.status);
+    }
+    if (typeof query.buildId === "number") {
+      params.set("buildId", String(query.buildId));
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const querySuffix = params.toString();
+    const path = querySuffix ? `/v1/inventory/units?${querySuffix}` : "/v1/inventory/units";
+    return this.getJson<InventoryUnitCollection>(path);
+  }
+
+  async getInventoryUnit(unitId: number): Promise<InventoryUnit> {
+    return this.getJson<InventoryUnit>(`/v1/inventory/units/${unitId}`);
+  }
+
+  async listInventoryBuilds(query: {
+    status?: string;
+    buildKind?: string;
+    limit?: number;
+  } = {}): Promise<InventoryBuildCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.status === "string" && query.status) {
+      params.set("status", query.status);
+    }
+    if (typeof query.buildKind === "string" && query.buildKind) {
+      params.set("buildKind", query.buildKind);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const querySuffix = params.toString();
+    const path = querySuffix ? `/v1/inventory/builds?${querySuffix}` : "/v1/inventory/builds";
+    return this.getJson<InventoryBuildCollection>(path);
+  }
+
+  async getInventoryBuild(buildId: number): Promise<InventoryBuild> {
+    return this.getJson<InventoryBuild>(`/v1/inventory/builds/${buildId}`);
+  }
+
+  async listInventoryEvents(query: {
+    subjectKind?: string;
+    subjectId?: number;
+    limit?: number;
+  } = {}): Promise<InventoryEventCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.subjectKind === "string" && query.subjectKind) {
+      params.set("subjectKind", query.subjectKind);
+    }
+    if (typeof query.subjectId === "number") {
+      params.set("subjectId", String(query.subjectId));
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const querySuffix = params.toString();
+    const path = querySuffix ? `/v1/inventory/events?${querySuffix}` : "/v1/inventory/events";
+    return this.getJson<InventoryEventCollection>(path);
+  }
+
+  async startInventoryBuild(payload: {
+    buildName: string;
+    buildKind: string;
+    baseUnitId: number;
+    roverUnitId: number;
+    queueName?: string;
+    priority?: number;
+    expectedSite?: string;
+    planJson?: JsonObject;
+  }): Promise<InventoryBuildStartResponse> {
+    return this.sendJson<InventoryBuildStartResponse>("/v1/inventory/builds", {
+      method: "POST",
+      body: payload
+    });
+  }
+
+  async triggerInventoryRuntimePublish(payload: {
+    buildId: number;
+    runtimeDeviceId: string;
+    queueName?: string;
+    priority?: number;
+  }): Promise<InventoryRuntimePublishResponse> {
+    return this.sendJson<InventoryRuntimePublishResponse>(
+      `/v1/inventory/builds/${payload.buildId}/runtime-publish`,
+      {
+        method: "POST",
+        body: {
+          runtimeDeviceId: payload.runtimeDeviceId,
+          queueName: payload.queueName,
+          priority: payload.priority
+        }
+      }
+    );
+  }
+
+  async seedInventory(manifestPath: string, force = false): Promise<SeedInventoryResponse> {
+    return this.sendJson<SeedInventoryResponse>("/v1/inventory/seed", {
+      method: "POST",
+      body: {
+        manifestPath,
+        force
+      }
+    });
   }
 
   async createDevPreferenceSignal(payload: {

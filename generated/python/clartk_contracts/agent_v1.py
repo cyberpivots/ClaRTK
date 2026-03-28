@@ -201,6 +201,125 @@ class DevPreferenceDecisionCreateRequest:
     payload_json: str
 
 @dataclass(slots=True, kw_only=True)
+class InventoryItem:
+    item_id: int
+    item_key: str
+    part_name: str
+    manufacturer: str
+    model: str
+    category: str
+    classification: str
+    status: str
+    total_units: int
+    latest_event_id: str
+    notes_json: str
+    created_at: str
+    updated_at: str
+
+@dataclass(slots=True, kw_only=True)
+class InventoryItemCollection:
+    items: List[InventoryItem] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class InventoryUnit:
+    unit_id: int
+    item_id: int
+    unit_label: str
+    serial_number: str
+    asset_tag: str
+    status: str
+    location: str
+    current_build_id: int
+    latest_event_id: str
+    metadata_json: str
+    created_at: str
+    updated_at: str
+
+@dataclass(slots=True, kw_only=True)
+class InventoryUnitCollection:
+    units: List[InventoryUnit] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class InventoryBuild:
+    build_id: int
+    build_name: str
+    build_kind: str
+    status: str
+    base_unit_id: int
+    rover_unit_id: int
+    reserved_by_account_id: int
+    runtime_device_id: str
+    current_task_id: int
+    expected_site: str
+    plan_json: str
+    result_json: str
+    latest_event_id: str
+    created_at: str
+    updated_at: str
+
+@dataclass(slots=True, kw_only=True)
+class InventoryBuildCollection:
+    builds: List[InventoryBuild] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class InventoryEvent:
+    event_id: int
+    subject_kind: str
+    subject_id: int
+    event_kind: str
+    payload_json: str
+    actor: str
+    agent_task_id: int
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class InventoryEventCollection:
+    events: List[InventoryEvent] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class StartHardwareBuildRequest:
+    build_name: str
+    build_kind: str
+    base_unit_id: int
+    rover_unit_id: int
+    queue_name: str
+    priority: int
+    expected_site: str
+    plan_json: str
+
+@dataclass(slots=True, kw_only=True)
+class StartHardwareBuildResponse:
+    build: InventoryBuild
+    tasks: List[AgentTask] = field(default_factory=list)
+
+@dataclass(slots=True, kw_only=True)
+class TriggerHardwareRuntimePublishRequest:
+    build_id: int
+    runtime_device_id: str
+    queue_name: str
+    priority: int
+
+@dataclass(slots=True, kw_only=True)
+class SeedInventoryRequest:
+    manifest_path: str
+    force: bool
+
+@dataclass(slots=True, kw_only=True)
+class SeedInventoryResponse:
+    upserted_items: int
+    upserted_units: int
+    source: str
+    skipped_rows: int
+
+@dataclass(slots=True, kw_only=True)
 class SourceDocument:
     source_document_id: str
     source_kind: str

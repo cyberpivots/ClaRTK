@@ -181,6 +181,107 @@ export interface AgentRunCollection {
   source: "dev-memory" | "unconfigured";
 }
 
+export interface InventoryItem {
+  itemId: number;
+  itemKey: string;
+  partName: string;
+  manufacturer: string | null;
+  model: string | null;
+  category: string | null;
+  classification: string;
+  status: string;
+  totalUnits: number;
+  latestEventId: number | null;
+  notesJson: JsonObject;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+}
+
+export interface InventoryItemCollection {
+  items: InventoryItem[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface InventoryUnit {
+  unitId: number;
+  itemId: number;
+  unitLabel: string;
+  serialNumber: string | null;
+  assetTag: string | null;
+  status: string;
+  location: string | null;
+  currentBuildId: number | null;
+  latestEventId: number | null;
+  metadataJson: JsonObject;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+}
+
+export interface InventoryUnitCollection {
+  units: InventoryUnit[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface InventoryBuild {
+  buildId: number;
+  buildName: string;
+  buildKind: string;
+  status: string;
+  baseUnitId: number | null;
+  roverUnitId: number | null;
+  reservedByAccountId: number | null;
+  runtimeDeviceId: string | null;
+  currentTaskId: number | null;
+  expectedSite: string | null;
+  planJson: JsonObject;
+  resultJson: JsonObject;
+  latestEventId: number | null;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+}
+
+export interface InventoryBuildCollection {
+  builds: InventoryBuild[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface InventoryEvent {
+  eventId: number;
+  subjectKind: string;
+  subjectId: number;
+  eventKind: string;
+  payloadJson: JsonObject;
+  actor: string | null;
+  agentTaskId: number | null;
+  createdAt: TimestampIsoString;
+}
+
+export interface InventoryEventCollection {
+  events: InventoryEvent[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface InventoryBuildStartResponse {
+  build: InventoryBuild;
+  tasks: AgentTaskRecord[];
+}
+
+export interface InventoryRuntimePublishResponse {
+  build: InventoryBuild;
+  task: AgentTaskRecord;
+}
+
+export interface SeedInventoryResponse {
+  upsertedItems: number;
+  upsertedUnits: number;
+  source: string;
+  skippedRows: number;
+}
+
 export interface AgentEventRecord {
   agentEventId: number;
   agentRunId: number;
@@ -394,6 +495,11 @@ export interface AuthenticatedMe {
   session: Session | null;
   apiTokens: ApiToken[];
   profile: OperatorProfile;
+}
+
+export interface RuntimeSessionState {
+  authenticated: boolean;
+  me: AuthenticatedMe | null;
 }
 
 export interface AuthSessionResult {

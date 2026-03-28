@@ -225,6 +225,138 @@ pub struct DevPreferenceDecisionCreateRequest {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct InventoryItem {
+    pub item_id: i64,
+    pub item_key: String,
+    pub part_name: String,
+    pub manufacturer: String,
+    pub model: String,
+    pub category: String,
+    pub classification: String,
+    pub status: String,
+    pub total_units: i32,
+    pub latest_event_id: String,
+    pub notes_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventoryItemCollection {
+    pub items: Vec<InventoryItem>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventoryUnit {
+    pub unit_id: i64,
+    pub item_id: i64,
+    pub unit_label: String,
+    pub serial_number: String,
+    pub asset_tag: String,
+    pub status: String,
+    pub location: String,
+    pub current_build_id: i64,
+    pub latest_event_id: String,
+    pub metadata_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventoryUnitCollection {
+    pub units: Vec<InventoryUnit>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventoryBuild {
+    pub build_id: i64,
+    pub build_name: String,
+    pub build_kind: String,
+    pub status: String,
+    pub base_unit_id: i64,
+    pub rover_unit_id: i64,
+    pub reserved_by_account_id: i64,
+    pub runtime_device_id: String,
+    pub current_task_id: i64,
+    pub expected_site: String,
+    pub plan_json: String,
+    pub result_json: String,
+    pub latest_event_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventoryBuildCollection {
+    pub builds: Vec<InventoryBuild>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventoryEvent {
+    pub event_id: i64,
+    pub subject_kind: String,
+    pub subject_id: i64,
+    pub event_kind: String,
+    pub payload_json: String,
+    pub actor: String,
+    pub agent_task_id: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventoryEventCollection {
+    pub events: Vec<InventoryEvent>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartHardwareBuildRequest {
+    pub build_name: String,
+    pub build_kind: String,
+    pub base_unit_id: i64,
+    pub rover_unit_id: i64,
+    pub queue_name: String,
+    pub priority: i32,
+    pub expected_site: String,
+    pub plan_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartHardwareBuildResponse {
+    pub build: InventoryBuild,
+    pub tasks: Vec<AgentTask>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriggerHardwareRuntimePublishRequest {
+    pub build_id: i64,
+    pub runtime_device_id: String,
+    pub queue_name: String,
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedInventoryRequest {
+    pub manifest_path: String,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedInventoryResponse {
+    pub upserted_items: i32,
+    pub upserted_units: i32,
+    pub source: String,
+    pub skipped_rows: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SourceDocument {
     pub source_document_id: String,
     pub source_kind: String,

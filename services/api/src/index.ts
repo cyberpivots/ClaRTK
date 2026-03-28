@@ -20,6 +20,7 @@ import type {
   PublishedProfileChange,
   ResourceCollection,
   RuntimeApiHealth,
+  RuntimeSessionState,
   RuntimeDevice,
   RuntimePositionEvent,
   RuntimeRtkSolution,
@@ -63,7 +64,10 @@ const config = {
   sessionTtlHours: Number(process.env.CLARTK_SESSION_TTL_HOURS ?? "168"),
   secureCookies: process.env.CLARTK_SESSION_COOKIE_SECURE === "1"
 };
-const allowedBrowserOrigins = new Set([config.dashboardOrigin, config.devConsoleOrigin]);
+const allowedBrowserOrigins = new Set([
+  ...expandLoopbackOrigins(config.dashboardOrigin),
+  ...expandLoopbackOrigins(config.devConsoleOrigin)
+]);
 
 const pool = config.runtimeDatabaseUrl
   ? new Pool({
@@ -124,10 +128,7 @@ app.addHook("onRequest", async (request, reply) => {
   }
 });
 
-app.options("/health", async (_request, reply) => {
-  reply.code(204).send();
-});
-app.options("/v1/:rest*", async (_request, reply) => {
+app.options("*", async (_request, reply) => {
   reply.code(204).send();
 });
 
@@ -234,6 +235,24 @@ app.post("/v1/auth/logout", async (request, reply) => {
   clearSessionCookie(reply);
   reply.code(204);
   return reply.send();
+});
+
+app.get("/v1/auth/session", async (request): Promise<RuntimeSessionState> => {
+  try {
+    const auth = await requireAuth(request);
+    return {
+      authenticated: true,
+      me: await loadAuthenticatedMe(auth.account.accountId, auth.session)
+    };
+  } catch (error) {
+    if (error instanceof ApiError && error.statusCode === 401) {
+      return {
+        authenticated: false,
+        me: null
+      };
+    }
+    throw error;
+  }
 });
 
 app.get("/v1/me", async (request) => {
@@ -1498,6 +1517,22 @@ function parseOpaqueCredential(value: string): { id: string; secret: string } | 
     id: value.slice(0, separator),
     secret: value.slice(separator + 1)
   };
+}
+
+function expandLoopbackOrigins(origin: string): string[] {
+  try {
+    const parsed = new URL(origin);
+    const origins = new Set([parsed.origin]);
+    if (parsed.hostname === "localhost") {
+      origins.add(new URL(`${parsed.protocol}//127.0.0.1${parsed.port ? `:${parsed.port}` : ""}`).origin);
+    }
+    if (parsed.hostname === "127.0.0.1") {
+      origins.add(new URL(`${parsed.protocol}//localhost${parsed.port ? `:${parsed.port}` : ""}`).origin);
+    }
+    return [...origins];
+  } catch {
+    return [origin];
+  }
 }
 
 function createOpaqueId(prefix: string): string {

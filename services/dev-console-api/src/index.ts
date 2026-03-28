@@ -13,6 +13,16 @@ import type {
   DevConsoleApiHealth,
   DevPreferenceProfile,
   DevPreferenceSignal,
+  InventoryBuild,
+  InventoryBuildCollection,
+  InventoryBuildStartResponse,
+  InventoryRuntimePublishResponse,
+  InventoryEventCollection,
+  InventoryItem,
+  InventoryItemCollection,
+  InventoryUnit,
+  InventoryUnitCollection,
+  SeedInventoryResponse,
   DocsCatalogItem,
   DocsCatalogResponse,
   EvaluationResultRecord,
@@ -42,13 +52,19 @@ const config = {
   backupDir: path.resolve(repoRoot, process.env.CLARTK_DB_BACKUP_DIR ?? ".clartk/dev/backups"),
   resolvedEnvPath: path.resolve(repoRoot, ".clartk/dev/resolved.env")
 };
+const allowedBrowserOrigins = new Set(expandLoopbackOrigins(config.devConsoleOrigin));
 
 const allowedTaskKinds = new Set([
   "memory.run_embeddings",
   "memory.run_evaluations",
   "preferences.compute_dev_preference_scores",
   "catalog.refresh_doc_catalog",
-  "catalog.refresh_skill_catalog"
+  "catalog.refresh_skill_catalog",
+  "hardware.prepare",
+  "hardware.reserve_parts",
+  "hardware.build",
+  "hardware.bench_validate",
+  "hardware.runtime_register"
 ]);
 
 const app = Fastify({ logger: true });
@@ -64,7 +80,7 @@ class ApiError extends Error {
 
 app.addHook("onRequest", async (request, reply) => {
   const origin = request.headers.origin;
-  if (origin && origin === config.devConsoleOrigin) {
+  if (origin && allowedBrowserOrigins.has(origin)) {
     reply.header("Access-Control-Allow-Origin", origin);
     reply.header("Access-Control-Allow-Credentials", "true");
     reply.header("Access-Control-Allow-Headers", "authorization, content-type");
@@ -73,11 +89,7 @@ app.addHook("onRequest", async (request, reply) => {
   }
 });
 
-app.options("/health", async (_request, reply) => {
-  reply.code(204).send();
-});
-
-app.options("/v1/:rest*", async (_request, reply) => {
+app.options("*", async (_request, reply) => {
   reply.code(204).send();
 });
 
@@ -157,6 +169,110 @@ app.get("/v1/coordination/runs/:runId", async (request): Promise<AgentRunDetail>
   await requireAdmin(request.headers);
   const runId = requireInteger((request.params as Record<string, unknown>).runId, "runId");
   return agentMemoryInternalRequest<AgentRunDetail>(`/v1/internal/coordination/runs/${runId}`);
+});
+
+app.get("/v1/inventory/items", async (request): Promise<InventoryItemCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const path = suffix ? `/v1/internal/inventory/items?${suffix}` : "/v1/internal/inventory/items";
+  return agentMemoryInternalRequest<InventoryItemCollection>(path);
+});
+
+app.get("/v1/inventory/items/:itemId", async (request): Promise<InventoryItem> => {
+  await requireAdmin(request.headers);
+  const itemId = requireInteger((request.params as Record<string, unknown>).itemId, "itemId");
+  return agentMemoryInternalRequest<InventoryItem>(`/v1/internal/inventory/items/${itemId}`);
+});
+
+app.get("/v1/inventory/units", async (request): Promise<InventoryUnitCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const path = suffix ? `/v1/internal/inventory/units?${suffix}` : "/v1/internal/inventory/units";
+  return agentMemoryInternalRequest<InventoryUnitCollection>(path);
+});
+
+app.get("/v1/inventory/units/:unitId", async (request): Promise<InventoryUnit> => {
+  await requireAdmin(request.headers);
+  const unitId = requireInteger((request.params as Record<string, unknown>).unitId, "unitId");
+  return agentMemoryInternalRequest<InventoryUnit>(`/v1/internal/inventory/units/${unitId}`);
+});
+
+app.get("/v1/inventory/builds", async (request): Promise<InventoryBuildCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const path = suffix ? `/v1/internal/inventory/builds?${suffix}` : "/v1/internal/inventory/builds";
+  return agentMemoryInternalRequest<InventoryBuildCollection>(path);
+});
+
+app.get("/v1/inventory/builds/:buildId", async (request): Promise<InventoryBuild> => {
+  await requireAdmin(request.headers);
+  const buildId = requireInteger((request.params as Record<string, unknown>).buildId, "buildId");
+  return agentMemoryInternalRequest<InventoryBuild>(`/v1/internal/inventory/builds/${buildId}`);
+});
+
+app.get("/v1/inventory/events", async (request): Promise<InventoryEventCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const path = suffix ? `/v1/internal/inventory/events?${suffix}` : "/v1/internal/inventory/events";
+  return agentMemoryInternalRequest<InventoryEventCollection>(path);
+});
+
+app.post("/v1/inventory/builds", async (request): Promise<InventoryBuildStartResponse> => {
+  await requireAdmin(request.headers);
+  const body = asBody(request.body);
+  return agentMemoryInternalRequest<InventoryBuildStartResponse>("/v1/internal/inventory/builds", {
+    method: "POST",
+    body: {
+      buildName: requireString(body.buildName, "buildName"),
+      buildKind: requireString(body.buildKind, "buildKind"),
+      baseUnitId: requireInteger(body.baseUnitId, "baseUnitId"),
+      roverUnitId: requireInteger(body.roverUnitId, "roverUnitId"),
+      queueName: typeof body.queueName === "string" ? body.queueName : undefined,
+      priority: typeof body.priority === "number" ? body.priority : 0,
+      expectedSite: typeof body.expectedSite === "string" ? body.expectedSite : undefined,
+      planJson: ensureJsonObject(body.planJson)
+    }
+  });
+});
+
+app.post(
+  "/v1/inventory/builds/:buildId/runtime-publish",
+  async (request): Promise<InventoryRuntimePublishResponse> => {
+  await requireAdmin(request.headers);
+  const buildId = requireInteger((request.params as Record<string, unknown>).buildId, "buildId");
+  const body = asBody(request.body);
+  const runtimeDeviceId = requireString(body.runtimeDeviceId, "runtimeDeviceId");
+  return agentMemoryInternalRequest<InventoryRuntimePublishResponse>(
+    `/v1/internal/inventory/builds/${buildId}/runtime-publish`,
+    {
+      method: "POST",
+      body: {
+        runtimeDeviceId,
+        queueName: typeof body.queueName === "string" ? body.queueName : undefined,
+        priority: typeof body.priority === "number" ? body.priority : 0
+      }
+    }
+  );
+  }
+);
+
+app.post("/v1/inventory/seed", async (request): Promise<SeedInventoryResponse> => {
+  await requireAdmin(request.headers);
+  const body = asBody(request.body);
+  return agentMemoryInternalRequest<SeedInventoryResponse>(
+    "/v1/internal/inventory/seed",
+    {
+      method: "POST",
+      body: {
+        manifestPath: requireString(body.manifestPath, "manifestPath"),
+        force: body.force === true
+      }
+    }
+  );
 });
 
 app.get(
@@ -326,6 +442,32 @@ async function requestJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+function buildQueryString(query: Record<string, string | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === "string") {
+      params.set(key, value);
+    }
+  }
+  return params.toString();
+}
+
+function expandLoopbackOrigins(origin: string): string[] {
+  try {
+    const parsed = new URL(origin);
+    const origins = new Set([parsed.origin]);
+    if (parsed.hostname === "localhost") {
+      origins.add(new URL(`${parsed.protocol}//127.0.0.1${parsed.port ? `:${parsed.port}` : ""}`).origin);
+    }
+    if (parsed.hostname === "127.0.0.1") {
+      origins.add(new URL(`${parsed.protocol}//localhost${parsed.port ? `:${parsed.port}` : ""}`).origin);
+    }
+    return [...origins];
+  } catch {
+    return [origin];
+  }
 }
 
 async function safeErrorDetail(response: Response): Promise<string> {
@@ -592,6 +734,9 @@ function classifyDoc(relativePath: string): string {
   if (relativePath.startsWith("docs/operations/")) {
     return "operations";
   }
+  if (relativePath.startsWith("docs/presentations/")) {
+    return "presentation";
+  }
   if (relativePath.startsWith("docs/research/")) {
     return "research";
   }
@@ -602,7 +747,15 @@ function classifyDoc(relativePath: string): string {
 }
 
 function buildDocTags(relativePath: string): string[] {
-  return [classifyDoc(relativePath)];
+  const kind = classifyDoc(relativePath);
+  const tags = [kind];
+  if (kind === "presentation") {
+    tags.push("slides");
+    if (relativePath.endsWith("-canva-brief.md")) {
+      tags.push("canva");
+    }
+  }
+  return tags;
 }
 
 function extractFrontmatterValue(markdown: string, key: string): string | null {
