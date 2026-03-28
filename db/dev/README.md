@@ -2,7 +2,7 @@
 
 Logical database name: `clartk_dev`
 
-Local development default: one PostgreSQL server on `5432`, with `clartk_runtime`
+Local development default: one PostgreSQL server on `55432`, with `clartk_runtime`
 and `clartk_dev` kept as separate logical databases.
 
 Primary table families:

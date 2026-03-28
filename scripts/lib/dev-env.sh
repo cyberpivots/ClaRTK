@@ -93,7 +93,7 @@ clartk_resolved_postgres_host() {
 }
 
 clartk_resolved_postgres_port() {
-  printf '%s\n' "${CLARTK_RESOLVED_POSTGRES_PORT:-${CLARTK_POSTGRES_PORT:-5432}}"
+  printf '%s\n' "${CLARTK_RESOLVED_POSTGRES_PORT:-${CLARTK_POSTGRES_PORT:-55432}}"
 }
 
 clartk_resolved_postgres_source() {

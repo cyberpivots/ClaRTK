@@ -19,3 +19,4 @@ clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0006_dev_console_prefere
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0007_hardware_inventory.sql"
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0008_ui_review.sql"
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0009_preview_lane.sql"
+clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0010_hardware_deployment.sql"

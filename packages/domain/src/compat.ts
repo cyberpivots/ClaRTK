@@ -8,7 +8,7 @@ export const CLARTK_DEFAULT_GATEWAY_DIAGNOSTICS_PORT = 3200 as const;
 export const CLARTK_DEFAULT_DEV_CONSOLE_API_PORT = 3300 as const;
 export const CLARTK_DEFAULT_DASHBOARD_PORT = 5173 as const;
 export const CLARTK_DEFAULT_DEV_CONSOLE_PORT = 5180 as const;
-export const CLARTK_DEFAULT_POSTGRES_PORT = 5432 as const;
+export const CLARTK_DEFAULT_POSTGRES_PORT = 55432 as const;
 export const CLARTK_DEFAULT_METRO_PORT = 8081 as const;
 
 export type DeviceId = string;
@@ -247,6 +247,9 @@ export interface InventoryItem {
   notesJson: JsonObject;
   createdAt: TimestampIsoString;
   updatedAt: TimestampIsoString;
+  sourceKind: string;
+  deployable: boolean;
+  deployableUnits: number;
 }
 
 export interface InventoryItemCollection {
@@ -268,6 +271,8 @@ export interface InventoryUnit {
   metadataJson: JsonObject;
   createdAt: TimestampIsoString;
   updatedAt: TimestampIsoString;
+  sourceKind: string;
+  deployable: boolean;
 }
 
 export interface InventoryUnitCollection {
@@ -292,6 +297,8 @@ export interface InventoryBuild {
   latestEventId: number | null;
   createdAt: TimestampIsoString;
   updatedAt: TimestampIsoString;
+  latestDeploymentRunId: number | null;
+  deploymentSummaryJson: JsonObject;
 }
 
 export interface InventoryBuildCollection {
@@ -315,6 +322,72 @@ export interface InventoryEventCollection {
   events: InventoryEvent[];
   source: "dev-memory";
   total: number;
+}
+
+export interface HardwareDeploymentRun {
+  deploymentRunId: number;
+  buildId: number;
+  deploymentKind: string;
+  hardwareFamily: string;
+  targetUnitId: number | null;
+  benchHost: string | null;
+  status: string;
+  requestedByAccountId: string | null;
+  summaryJson: JsonObject;
+  latestEventId: number | null;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+  completedAt: TimestampIsoString | null;
+}
+
+export interface HardwareDeploymentStep {
+  deploymentStepId: number;
+  deploymentRunId: number;
+  sequenceIndex: number;
+  stepKind: string;
+  displayLabel: string;
+  executionMode: string;
+  status: string;
+  required: boolean;
+  taskKind: string | null;
+  agentTaskId: number | null;
+  payloadJson: JsonObject;
+  resultJson: JsonObject;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+  completedAt: TimestampIsoString | null;
+}
+
+export interface HardwarePortProbe {
+  hostProbeId: number;
+  deploymentRunId: number;
+  probeKind: string;
+  status: string;
+  detailJson: JsonObject;
+  createdAt: TimestampIsoString;
+}
+
+export interface HardwareToolStatus {
+  hardwareToolStatusId: number;
+  deploymentRunId: number;
+  toolName: string;
+  status: string;
+  version: string | null;
+  detailJson: JsonObject;
+  createdAt: TimestampIsoString;
+}
+
+export interface HardwareDeploymentRunCollection {
+  runs: HardwareDeploymentRun[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface HardwareDeploymentRunDetail {
+  run: HardwareDeploymentRun;
+  steps: HardwareDeploymentStep[];
+  probes: HardwarePortProbe[];
+  toolStatuses: HardwareToolStatus[];
 }
 
 export interface PresentationDeckSource {
@@ -458,6 +531,11 @@ export interface InventoryBuildStartResponse {
 export interface InventoryRuntimePublishResponse {
   build: InventoryBuild;
   task: AgentTaskRecord;
+}
+
+export interface HardwareDeploymentMutationResponse {
+  deployment: HardwareDeploymentRunDetail;
+  task: AgentTaskRecord | null;
 }
 
 export interface SeedInventoryResponse {

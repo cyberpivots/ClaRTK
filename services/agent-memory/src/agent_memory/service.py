@@ -64,6 +64,12 @@ HARDWARE_RESERVE_PARTS_TASK_KIND = "hardware.reserve_parts"
 HARDWARE_BUILD_TASK_KIND = "hardware.build"
 HARDWARE_BENCH_VALIDATE_TASK_KIND = "hardware.bench_validate"
 HARDWARE_RUNTIME_REGISTER_TASK_KIND = "hardware.runtime_register"
+HARDWARE_PROBE_HOST_TASK_KIND = "hardware.probe_host"
+HARDWARE_PROGRAM_RECEIVER_TASK_KIND = "hardware.program_receiver"
+HARDWARE_CONFIGURE_RECEIVER_TASK_KIND = "hardware.configure_receiver"
+HARDWARE_CAPTURE_ARTIFACTS_TASK_KIND = "hardware.capture_artifacts"
+HARDWARE_PROGRAM_RADIO_TASK_KIND = "hardware.program_radio"
+HARDWARE_IMAGE_HOST_TASK_KIND = "hardware.image_host"
 HARDWARE_STATUS_BUILD_PLANNED = "planned"
 HARDWARE_STATUS_BUILD_PREPARED = "prepared"
 HARDWARE_STATUS_BUILD_PARTS_RESERVED = "parts_reserved"
@@ -74,6 +80,21 @@ HARDWARE_STATUS_BUILD_RUNTIME_PUBLISHED = "runtime_published"
 HARDWARE_STATUS_BUILD_RUNTIME_REGISTRATION_FAILED = "runtime_registration_failed"
 HARDWARE_STATUS_BUILD_FAILED = "failed"
 HARDWARE_STATUS_BUILD_CANCELLED = "cancelled"
+HARDWARE_DEPLOYMENT_STATUS_PLANNED = "planned"
+HARDWARE_DEPLOYMENT_STATUS_RUNNING = "running"
+HARDWARE_DEPLOYMENT_STATUS_AWAITING_INPUT = "awaiting_input"
+HARDWARE_DEPLOYMENT_STATUS_COMPLETED = "completed"
+HARDWARE_DEPLOYMENT_STATUS_FAILED = "failed"
+HARDWARE_DEPLOYMENT_STATUS_CANCELLED = "cancelled"
+HARDWARE_DEPLOYMENT_STEP_STATUS_PENDING = "pending"
+HARDWARE_DEPLOYMENT_STEP_STATUS_QUEUED = "queued"
+HARDWARE_DEPLOYMENT_STEP_STATUS_RUNNING = "running"
+HARDWARE_DEPLOYMENT_STEP_STATUS_AWAITING_CONFIRMATION = "awaiting_confirmation"
+HARDWARE_DEPLOYMENT_STEP_STATUS_COMPLETED = "completed"
+HARDWARE_DEPLOYMENT_STEP_STATUS_BLOCKED = "blocked"
+HARDWARE_DEPLOYMENT_STEP_STATUS_FAILED = "failed"
+HARDWARE_DEPLOYMENT_STEP_STATUS_CANCELLED = "cancelled"
+HARDWARE_DEPLOYMENT_ARTIFACT_DIR = REPO_ROOT / ".clartk" / "dev" / "hardware-deployments"
 UI_REVIEW_CAPTURE_TASK_KIND = "ui.review.capture"
 UI_REVIEW_ANALYZE_TASK_KIND = "ui.review.analyze"
 UI_REVIEW_FIX_DRAFT_TASK_KIND = "ui.review.fix_draft"
@@ -134,6 +155,12 @@ TASK_KIND_DEFAULT_QUEUES = {
     HARDWARE_BUILD_TASK_KIND: HARDWARE_TASK_QUEUE,
     HARDWARE_BENCH_VALIDATE_TASK_KIND: HARDWARE_TASK_QUEUE,
     HARDWARE_RUNTIME_REGISTER_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_PROBE_HOST_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_PROGRAM_RECEIVER_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_CONFIGURE_RECEIVER_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_CAPTURE_ARTIFACTS_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_PROGRAM_RADIO_TASK_KIND: HARDWARE_TASK_QUEUE,
+    HARDWARE_IMAGE_HOST_TASK_KIND: HARDWARE_TASK_QUEUE,
 }
 DEFAULT_AGENT_WORKER_QUEUE_NAMES = [
     DEFAULT_AGENT_TASK_QUEUE,
@@ -1222,7 +1249,13 @@ class MemoryRepository:
             ).fetchone()
         return map_agent_task(row) if row is not None else None
 
-    def list_inventory_items(self, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def list_inventory_items(
+        self,
+        status: str | None = None,
+        source_kind: str | None = None,
+        only_deployable: bool = False,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
         if not self.configured:
             return []
 
@@ -1242,17 +1275,27 @@ class MemoryRepository:
                   item.notes_json,
                   item.created_at,
                   item.updated_at,
+                  item.source_kind,
+                  item.deployable,
                   (
                     SELECT COUNT(*)
                     FROM inventory.unit AS unit
                     WHERE unit.item_id = item.item_id
-                  ) AS total_units
+                  ) AS total_units,
+                  (
+                    SELECT COUNT(*)
+                    FROM inventory.unit AS unit
+                    WHERE unit.item_id = item.item_id
+                      AND unit.deployable = TRUE
+                  ) AS deployable_units
                 FROM inventory.item AS item
-                WHERE (%s IS NULL OR item.status = %s)
+                WHERE (%s::inventory.item_status IS NULL OR item.status = %s::inventory.item_status)
+                  AND (%s::TEXT IS NULL OR item.source_kind = %s::TEXT)
+                  AND (%s = FALSE OR item.deployable = TRUE)
                 ORDER BY item.created_at DESC, item.item_id DESC
                 LIMIT %s
                 """,
-                (status, status, limit),
+                (status, status, source_kind, source_kind, only_deployable, limit),
             ).fetchall()
         return [map_inventory_item(row) for row in rows]
 
@@ -1261,6 +1304,8 @@ class MemoryRepository:
         item_id: int | None = None,
         status: str | None = None,
         build_id: int | None = None,
+        source_kind: str | None = None,
+        only_deployable: bool = False,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         if not self.configured:
@@ -1281,15 +1326,30 @@ class MemoryRepository:
                   unit.latest_event_id,
                   unit.metadata_json,
                   unit.created_at,
-                  unit.updated_at
+                  unit.updated_at,
+                  unit.source_kind,
+                  unit.deployable
                 FROM inventory.unit AS unit
-                WHERE (%s IS NULL OR unit.item_id = %s)
-                  AND (%s IS NULL OR unit.status = %s)
-                  AND (%s IS NULL OR unit.current_build_id = %s)
+                WHERE (%s::BIGINT IS NULL OR unit.item_id = %s::BIGINT)
+                  AND (%s::inventory.unit_status IS NULL OR unit.status = %s::inventory.unit_status)
+                  AND (%s::BIGINT IS NULL OR unit.current_build_id = %s::BIGINT)
+                  AND (%s::TEXT IS NULL OR unit.source_kind = %s::TEXT)
+                  AND (%s = FALSE OR unit.deployable = TRUE)
                 ORDER BY unit.created_at DESC, unit.unit_id DESC
                 LIMIT %s
                 """,
-                (item_id, item_id, status, status, build_id, build_id, limit),
+                (
+                    item_id,
+                    item_id,
+                    status,
+                    status,
+                    build_id,
+                    build_id,
+                    source_kind,
+                    source_kind,
+                    only_deployable,
+                    limit,
+                ),
             ).fetchall()
         return [map_inventory_unit(row) for row in rows]
 
@@ -1320,10 +1380,24 @@ class MemoryRepository:
                   build.result_json,
                   build.latest_event_id,
                   build.created_at,
-                  build.updated_at
+                  build.updated_at,
+                  (
+                    SELECT deployment_run_id
+                    FROM inventory.deployment_run
+                    WHERE build_id = build.build_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                  ) AS latest_deployment_run_id,
+                  (
+                    SELECT summary_json
+                    FROM inventory.deployment_run
+                    WHERE build_id = build.build_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                  ) AS deployment_summary_json
                 FROM inventory.build AS build
-                WHERE (%s IS NULL OR build.status = %s)
-                  AND (%s IS NULL OR build.build_kind = %s)
+                WHERE (%s::inventory.build_status IS NULL OR build.status = %s::inventory.build_status)
+                  AND (%s::TEXT IS NULL OR build.build_kind = %s::TEXT)
                 ORDER BY build.created_at DESC, build.build_id DESC
                 LIMIT %s
                 """,
@@ -1353,8 +1427,8 @@ class MemoryRepository:
                   event.agent_task_id,
                   event.created_at
                 FROM inventory.event AS event
-                WHERE (%s IS NULL OR event.subject_kind = %s)
-                  AND (%s IS NULL OR event.subject_id = %s)
+                WHERE (%s::TEXT IS NULL OR event.subject_kind = %s::TEXT)
+                  AND (%s::BIGINT IS NULL OR event.subject_id = %s::BIGINT)
                 ORDER BY event.created_at DESC, event.event_id DESC
                 LIMIT %s
                 """,
@@ -1382,11 +1456,19 @@ class MemoryRepository:
                   item.notes_json,
                   item.created_at,
                   item.updated_at,
+                  item.source_kind,
+                  item.deployable,
                   (
                     SELECT COUNT(*)
                     FROM inventory.unit AS unit
                     WHERE unit.item_id = item.item_id
-                  ) AS total_units
+                  ) AS total_units,
+                  (
+                    SELECT COUNT(*)
+                    FROM inventory.unit AS unit
+                    WHERE unit.item_id = item.item_id
+                      AND unit.deployable = TRUE
+                  ) AS deployable_units
                 FROM inventory.item AS item
                 WHERE item.item_id = %s
                 """,
@@ -1413,7 +1495,9 @@ class MemoryRepository:
                   unit.latest_event_id,
                   unit.metadata_json,
                   unit.created_at,
-                  unit.updated_at
+                  unit.updated_at,
+                  unit.source_kind,
+                  unit.deployable
                 FROM inventory.unit AS unit
                 WHERE unit.unit_id = %s
                 """,
@@ -1443,13 +1527,209 @@ class MemoryRepository:
                   build.result_json,
                   build.latest_event_id,
                   build.created_at,
-                  build.updated_at
+                  build.updated_at,
+                  (
+                    SELECT deployment_run_id
+                    FROM inventory.deployment_run
+                    WHERE build_id = build.build_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                  ) AS latest_deployment_run_id,
+                  (
+                    SELECT summary_json
+                    FROM inventory.deployment_run
+                    WHERE build_id = build.build_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                  ) AS deployment_summary_json
                 FROM inventory.build AS build
                 WHERE build.build_id = %s
                 """,
                 (build_id,),
             ).fetchone()
         return map_inventory_build(row) if row is not None else None
+
+    def _build_requires_completed_deployment(
+        self,
+        connection: psycopg.Connection[Any],
+        build_id: int,
+    ) -> bool:
+        row = connection.execute(
+            """
+            SELECT BOOL_OR(unit.deployable OR unit.source_kind = 'physical') AS requires_deployment
+            FROM inventory.build AS build
+            LEFT JOIN inventory.unit AS unit
+              ON unit.unit_id IN (build.base_unit_id, build.rover_unit_id)
+            WHERE build.build_id = %s
+            """,
+            (build_id,),
+        ).fetchone()
+        return bool(row["requires_deployment"]) if row is not None else False
+
+    def _default_hardware_deployment_steps(self, deployment_kind: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "sequenceIndex": 1,
+                "stepKind": "probe_host",
+                "displayLabel": "Bench host readiness",
+                "executionMode": "automatic",
+                "required": True,
+                "taskKind": HARDWARE_PROBE_HOST_TASK_KIND,
+                "payloadJson": {"deploymentKind": deployment_kind},
+            },
+            {
+                "sequenceIndex": 2,
+                "stepKind": "image_host",
+                "displayLabel": "Raspberry Pi imaging and bootstrap",
+                "executionMode": "manual",
+                "required": True,
+                "taskKind": None,
+                "payloadJson": {
+                    "manualGate": True,
+                    "instructions": [
+                        "Prepare Raspberry Pi OS imaging and capture the image/tool version used.",
+                        "Record SD-card target, image source, and bench host used for imaging.",
+                    ],
+                },
+            },
+            {
+                "sequenceIndex": 3,
+                "stepKind": "program_receiver",
+                "displayLabel": "PX1122R supervised receiver update",
+                "executionMode": "manual",
+                "required": True,
+                "taskKind": None,
+                "payloadJson": {
+                    "manualGate": True,
+                    "instructions": [
+                        "Use the verified vendor receiver-update path and record firmware identifier or package hash.",
+                        "Do not claim automation if the update was performed through a GUI-only vendor tool.",
+                    ],
+                },
+            },
+            {
+                "sequenceIndex": 4,
+                "stepKind": "configure_receiver",
+                "displayLabel": "Receiver configuration capture",
+                "executionMode": "manual",
+                "required": True,
+                "taskKind": None,
+                "payloadJson": {
+                    "manualGate": True,
+                    "instructions": [
+                        "Record the receiver configuration outcome and any command/config export used.",
+                        "Use RTKLIB-backed SkyTraq commands only when bench evidence proves the path.",
+                    ],
+                },
+            },
+            {
+                "sequenceIndex": 5,
+                "stepKind": "capture_artifacts",
+                "displayLabel": "Deployment artifact review",
+                "executionMode": "manual",
+                "required": True,
+                "taskKind": None,
+                "payloadJson": {
+                    "manualGate": True,
+                    "instructions": [
+                        "Attach screenshots, notes, file hashes, and export locations needed for runtime handoff.",
+                    ],
+                },
+            },
+        ]
+
+    def _advance_hardware_deployment(
+        self,
+        connection: psycopg.Connection[Any],
+        deployment_run_id: int,
+        *,
+        latest_event_id: int | None = None,
+    ) -> None:
+        next_step = connection.execute(
+            """
+            SELECT deployment_step_id, execution_mode, task_kind
+            FROM inventory.deployment_step
+            WHERE deployment_run_id = %s
+              AND status IN (
+                %s::inventory.deployment_step_status,
+                %s::inventory.deployment_step_status
+              )
+            ORDER BY sequence_index ASC
+            LIMIT 1
+            """,
+            (
+                deployment_run_id,
+                HARDWARE_DEPLOYMENT_STEP_STATUS_PENDING,
+                HARDWARE_DEPLOYMENT_STEP_STATUS_BLOCKED,
+            ),
+        ).fetchone()
+        if next_step is None:
+            connection.execute(
+                """
+                UPDATE inventory.deployment_run
+                SET
+                  status = %s::inventory.deployment_run_status,
+                  latest_event_id = COALESCE(%s, latest_event_id),
+                  completed_at = NOW(),
+                  updated_at = NOW()
+                WHERE deployment_run_id = %s
+                """,
+                (
+                    HARDWARE_DEPLOYMENT_STATUS_COMPLETED,
+                    latest_event_id,
+                    deployment_run_id,
+                ),
+            )
+            return
+
+        if str(next_step["execution_mode"]) == "automatic" and next_step["task_kind"]:
+            connection.execute(
+                """
+                UPDATE inventory.deployment_run
+                SET
+                  status = %s::inventory.deployment_run_status,
+                  latest_event_id = COALESCE(%s, latest_event_id),
+                  updated_at = NOW()
+                WHERE deployment_run_id = %s
+                """,
+                (
+                    HARDWARE_DEPLOYMENT_STATUS_RUNNING,
+                    latest_event_id,
+                    deployment_run_id,
+                ),
+            )
+            return
+
+        connection.execute(
+            """
+            UPDATE inventory.deployment_step
+            SET
+              status = %s::inventory.deployment_step_status,
+              updated_at = NOW()
+            WHERE deployment_step_id = %s
+              AND status = %s::inventory.deployment_step_status
+            """,
+            (
+                HARDWARE_DEPLOYMENT_STEP_STATUS_AWAITING_CONFIRMATION,
+                int(next_step["deployment_step_id"]),
+                HARDWARE_DEPLOYMENT_STEP_STATUS_PENDING,
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE inventory.deployment_run
+            SET
+              status = %s::inventory.deployment_run_status,
+              latest_event_id = COALESCE(%s, latest_event_id),
+              updated_at = NOW()
+            WHERE deployment_run_id = %s
+            """,
+            (
+                HARDWARE_DEPLOYMENT_STATUS_AWAITING_INPUT,
+                latest_event_id,
+                deployment_run_id,
+            ),
+        )
 
     def _ui_review_root(self) -> Path:
         configured_root = os.environ.get("CLARTK_UI_REVIEW_ROOT")
@@ -2875,6 +3155,22 @@ class MemoryRepository:
                 raise LookupError("build not found")
             if build["status"] not in {HARDWARE_STATUS_BUILD_VALIDATED, HARDWARE_STATUS_BUILD_RUNTIME_PENDING}:
                 raise ValueError("build must reach bench_validated before runtime publish request")
+            if self._build_requires_completed_deployment(connection, build_id):
+                completed_deployment = connection.execute(
+                    """
+                    SELECT deployment_run_id
+                    FROM inventory.deployment_run
+                    WHERE build_id = %s
+                      AND status = %s::inventory.deployment_run_status
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (build_id, HARDWARE_DEPLOYMENT_STATUS_COMPLETED),
+                ).fetchone()
+                if completed_deployment is None:
+                    raise ValueError(
+                        "physical builds require a completed deployment run before runtime publish request"
+                    )
 
             dependency_task_id = connection.execute(
                 """
@@ -2946,6 +3242,581 @@ class MemoryRepository:
             "task": task,
         }
 
+    def list_hardware_deployments(
+        self,
+        build_id: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  deployment_run_id,
+                  build_id,
+                  deployment_kind,
+                  hardware_family,
+                  target_unit_id,
+                  bench_host,
+                  status,
+                  requested_by_account_id,
+                  summary_json,
+                  latest_event_id,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM inventory.deployment_run
+                WHERE (%s::BIGINT IS NULL OR build_id = %s::BIGINT)
+                ORDER BY created_at DESC, deployment_run_id DESC
+                LIMIT %s
+                """,
+                (build_id, build_id, limit),
+            ).fetchall()
+        return [map_hardware_deployment_run(row) for row in rows]
+
+    def get_hardware_deployment(self, deployment_run_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT
+                  deployment_run_id,
+                  build_id,
+                  deployment_kind,
+                  hardware_family,
+                  target_unit_id,
+                  bench_host,
+                  status,
+                  requested_by_account_id,
+                  summary_json,
+                  latest_event_id,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM inventory.deployment_run
+                WHERE deployment_run_id = %s
+                """,
+                (deployment_run_id,),
+            ).fetchone()
+            if run_row is None:
+                return None
+
+            step_rows = connection.execute(
+                """
+                SELECT
+                  deployment_step_id,
+                  deployment_run_id,
+                  sequence_index,
+                  step_kind,
+                  display_label,
+                  execution_mode,
+                  status,
+                  required,
+                  task_kind,
+                  agent_task_id,
+                  payload_json,
+                  result_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM inventory.deployment_step
+                WHERE deployment_run_id = %s
+                ORDER BY sequence_index ASC, deployment_step_id ASC
+                """,
+                (deployment_run_id,),
+            ).fetchall()
+            probe_rows = connection.execute(
+                """
+                SELECT host_probe_id, deployment_run_id, probe_kind, status, detail_json, created_at
+                FROM inventory.host_probe
+                WHERE deployment_run_id = %s
+                ORDER BY created_at DESC, host_probe_id DESC
+                """,
+                (deployment_run_id,),
+            ).fetchall()
+            tool_rows = connection.execute(
+                """
+                SELECT
+                  hardware_tool_status_id,
+                  deployment_run_id,
+                  tool_name,
+                  status,
+                  version,
+                  detail_json,
+                  created_at
+                FROM inventory.tool_status
+                WHERE deployment_run_id = %s
+                ORDER BY created_at DESC, hardware_tool_status_id DESC
+                """,
+                (deployment_run_id,),
+            ).fetchall()
+
+        return {
+            "run": map_hardware_deployment_run(run_row),
+            "steps": [map_hardware_deployment_step(row) for row in step_rows],
+            "probes": [map_hardware_port_probe(row) for row in probe_rows],
+            "toolStatuses": [map_hardware_tool_status(row) for row in tool_rows],
+        }
+
+    def start_hardware_deployment(self, payload: dict[str, Any]) -> dict[str, Any]:
+        build_id = as_int(payload.get("buildId"))
+        if build_id is None:
+            raise ValueError("buildId is required")
+        deployment_kind = str(payload.get("deploymentKind", "")).strip() or "px1122r_bench_v1"
+        queue_name = resolve_task_queue_name(
+            HARDWARE_PROBE_HOST_TASK_KIND,
+            str(payload.get("queueName") or DEFAULT_AGENT_TASK_QUEUE),
+        )
+        priority = int(payload.get("priority", 0))
+        bench_host = str(payload.get("benchHost", "")).strip() or socket.gethostname()
+        target_unit_id = as_int(payload.get("targetUnitId"))
+        requested_by_account_id = as_int(payload.get("requestedByAccountId"))
+
+        with self.connect() as connection:
+            build_row = connection.execute(
+                """
+                SELECT
+                  build.build_id,
+                  build.base_unit_id,
+                  build.rover_unit_id,
+                  COALESCE(base_item.model, rover_item.model, 'unknown') AS hardware_family
+                FROM inventory.build AS build
+                LEFT JOIN inventory.unit AS base_unit ON base_unit.unit_id = build.base_unit_id
+                LEFT JOIN inventory.item AS base_item ON base_item.item_id = base_unit.item_id
+                LEFT JOIN inventory.unit AS rover_unit ON rover_unit.unit_id = build.rover_unit_id
+                LEFT JOIN inventory.item AS rover_item ON rover_item.item_id = rover_unit.item_id
+                WHERE build.build_id = %s
+                FOR UPDATE
+                """,
+                (build_id,),
+            ).fetchone()
+            if build_row is None:
+                raise LookupError("build not found")
+
+            run_row = connection.execute(
+                """
+                INSERT INTO inventory.deployment_run (
+                  build_id,
+                  deployment_kind,
+                  hardware_family,
+                  target_unit_id,
+                  bench_host,
+                  status,
+                  requested_by_account_id,
+                  summary_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s::inventory.deployment_run_status, %s, %s)
+                RETURNING
+                  deployment_run_id,
+                  build_id,
+                  deployment_kind,
+                  hardware_family,
+                  target_unit_id,
+                  bench_host,
+                  status,
+                  requested_by_account_id,
+                  summary_json,
+                  latest_event_id,
+                  created_at,
+                  updated_at,
+                  completed_at
+                """,
+                (
+                    build_id,
+                    deployment_kind,
+                    str(build_row["hardware_family"] or "unknown"),
+                    target_unit_id,
+                    bench_host,
+                    HARDWARE_DEPLOYMENT_STATUS_RUNNING,
+                    requested_by_account_id,
+                    Jsonb({"queueName": queue_name}),
+                ),
+            ).fetchone()
+            if run_row is None:
+                raise RuntimeError("failed to create hardware deployment run")
+
+            deployment_run_id = int(run_row["deployment_run_id"])
+            step_specs = self._default_hardware_deployment_steps(deployment_kind)
+            created_steps: list[dict[str, Any]] = []
+            probe_task: dict[str, Any] | None = None
+            for spec in step_specs:
+                step_row = connection.execute(
+                    """
+                    INSERT INTO inventory.deployment_step (
+                      deployment_run_id,
+                      sequence_index,
+                      step_kind,
+                      display_label,
+                      execution_mode,
+                      status,
+                      required,
+                      task_kind,
+                      payload_json
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s::inventory.deployment_step_status, %s, %s, %s)
+                    RETURNING
+                      deployment_step_id,
+                      deployment_run_id,
+                      sequence_index,
+                      step_kind,
+                      display_label,
+                      execution_mode,
+                      status,
+                      required,
+                      task_kind,
+                      agent_task_id,
+                      payload_json,
+                      result_json,
+                      created_at,
+                      updated_at,
+                      completed_at
+                    """,
+                    (
+                        deployment_run_id,
+                        spec["sequenceIndex"],
+                        spec["stepKind"],
+                        spec["displayLabel"],
+                        spec["executionMode"],
+                        HARDWARE_DEPLOYMENT_STEP_STATUS_PENDING,
+                        spec["required"],
+                        spec.get("taskKind"),
+                        Jsonb(spec.get("payloadJson", {})),
+                    ),
+                ).fetchone()
+                if step_row is None:
+                    raise RuntimeError("failed to create deployment step")
+                mapped_step = map_hardware_deployment_step(step_row)
+                created_steps.append(mapped_step)
+
+            first_step = created_steps[0] if created_steps else None
+            if first_step and first_step["taskKind"]:
+                probe_task = self._create_hardware_task(
+                    connection,
+                    task_kind=str(first_step["taskKind"]),
+                    queue_name=queue_name,
+                    priority=priority,
+                    payload={
+                        "buildId": build_id,
+                        "deploymentRunId": deployment_run_id,
+                        "deploymentStepId": first_step["deploymentStepId"],
+                        "benchHost": bench_host,
+                        "deploymentKind": deployment_kind,
+                    },
+                )
+                connection.execute(
+                    """
+                    UPDATE inventory.deployment_step
+                    SET
+                      status = %s::inventory.deployment_step_status,
+                      agent_task_id = %s,
+                      updated_at = NOW()
+                    WHERE deployment_step_id = %s
+                    """,
+                    (
+                        HARDWARE_DEPLOYMENT_STEP_STATUS_QUEUED,
+                        int(probe_task["agentTaskId"]),
+                        first_step["deploymentStepId"],
+                    ),
+                )
+                self._notify_task_ready(
+                    connection,
+                    queue_name=queue_name,
+                    task_kind=str(first_step["taskKind"]),
+                )
+
+            event_id = self._record_inventory_event(
+                connection,
+                subject_kind="deployment_run",
+                subject_id=deployment_run_id,
+                event_kind="deployment.started",
+                payload={
+                    "buildId": build_id,
+                    "deploymentKind": deployment_kind,
+                    "benchHost": bench_host,
+                },
+            )
+            connection.execute(
+                """
+                UPDATE inventory.deployment_run
+                SET latest_event_id = %s, updated_at = NOW()
+                WHERE deployment_run_id = %s
+                """,
+                (event_id, deployment_run_id),
+            )
+            connection.commit()
+
+        detail = self.get_hardware_deployment(deployment_run_id)
+        if detail is None:
+            raise RuntimeError("deployment run missing after creation")
+        return {"deployment": detail, "task": probe_task}
+
+    def resume_hardware_deployment(
+        self,
+        deployment_run_id: int,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        priority: int = 0,
+    ) -> dict[str, Any]:
+        queue_name = resolve_task_queue_name(HARDWARE_PROBE_HOST_TASK_KIND, queue_name)
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT deployment_run_id, build_id, deployment_kind, bench_host, status
+                FROM inventory.deployment_run
+                WHERE deployment_run_id = %s
+                FOR UPDATE
+                """,
+                (deployment_run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise LookupError("deployment run not found")
+            if str(run_row["status"]) in {
+                HARDWARE_DEPLOYMENT_STATUS_COMPLETED,
+                HARDWARE_DEPLOYMENT_STATUS_CANCELLED,
+            }:
+                raise ValueError("deployment run is already terminal")
+
+            step_row = connection.execute(
+                """
+                SELECT deployment_step_id, step_kind, task_kind, execution_mode
+                FROM inventory.deployment_step
+                WHERE deployment_run_id = %s
+                  AND status IN (
+                    %s::inventory.deployment_step_status,
+                    %s::inventory.deployment_step_status,
+                    %s::inventory.deployment_step_status
+                  )
+                ORDER BY sequence_index ASC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (
+                    deployment_run_id,
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_PENDING,
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_BLOCKED,
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_AWAITING_CONFIRMATION,
+                ),
+            ).fetchone()
+            if step_row is None:
+                detail = self.get_hardware_deployment(deployment_run_id)
+                if detail is None:
+                    raise RuntimeError("deployment run not found")
+                return {"deployment": detail, "task": None}
+
+            if str(step_row["execution_mode"]) != "automatic" or not step_row["task_kind"]:
+                connection.execute(
+                    """
+                    UPDATE inventory.deployment_step
+                    SET status = %s::inventory.deployment_step_status, updated_at = NOW()
+                    WHERE deployment_step_id = %s
+                    """,
+                    (
+                        HARDWARE_DEPLOYMENT_STEP_STATUS_AWAITING_CONFIRMATION,
+                        int(step_row["deployment_step_id"]),
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE inventory.deployment_run
+                    SET status = %s::inventory.deployment_run_status, updated_at = NOW()
+                    WHERE deployment_run_id = %s
+                    """,
+                    (HARDWARE_DEPLOYMENT_STATUS_AWAITING_INPUT, deployment_run_id),
+                )
+                connection.commit()
+                detail = self.get_hardware_deployment(deployment_run_id)
+                if detail is None:
+                    raise RuntimeError("deployment run not found")
+                return {"deployment": detail, "task": None}
+
+            task = self._create_hardware_task(
+                connection,
+                task_kind=str(step_row["task_kind"]),
+                queue_name=queue_name,
+                priority=priority,
+                payload={
+                    "buildId": int(run_row["build_id"]),
+                    "deploymentRunId": deployment_run_id,
+                    "deploymentStepId": int(step_row["deployment_step_id"]),
+                    "benchHost": str(run_row["bench_host"] or socket.gethostname()),
+                    "deploymentKind": str(run_row["deployment_kind"]),
+                },
+            )
+            connection.execute(
+                """
+                UPDATE inventory.deployment_step
+                SET
+                  status = %s::inventory.deployment_step_status,
+                  agent_task_id = %s,
+                  updated_at = NOW()
+                WHERE deployment_step_id = %s
+                """,
+                (
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_QUEUED,
+                    int(task["agentTaskId"]),
+                    int(step_row["deployment_step_id"]),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE inventory.deployment_run
+                SET status = %s::inventory.deployment_run_status, updated_at = NOW()
+                WHERE deployment_run_id = %s
+                """,
+                (HARDWARE_DEPLOYMENT_STATUS_RUNNING, deployment_run_id),
+            )
+            self._notify_task_ready(
+                connection,
+                queue_name=queue_name,
+                task_kind=str(step_row["task_kind"]),
+            )
+            connection.commit()
+
+        detail = self.get_hardware_deployment(deployment_run_id)
+        if detail is None:
+            raise RuntimeError("deployment run missing after resume")
+        return {"deployment": detail, "task": task}
+
+    def complete_hardware_deployment_step(
+        self,
+        deployment_run_id: int,
+        deployment_step_id: int,
+        completion_note: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = payload or {}
+        with self.connect() as connection:
+            step_row = connection.execute(
+                """
+                SELECT deployment_step_id, deployment_run_id, step_kind, status, execution_mode
+                FROM inventory.deployment_step
+                WHERE deployment_run_id = %s
+                  AND deployment_step_id = %s
+                FOR UPDATE
+                """,
+                (deployment_run_id, deployment_step_id),
+            ).fetchone()
+            if step_row is None:
+                raise LookupError("deployment step not found")
+
+            current_status = str(step_row["status"])
+            if current_status in {
+                HARDWARE_DEPLOYMENT_STEP_STATUS_COMPLETED,
+                HARDWARE_DEPLOYMENT_STEP_STATUS_CANCELLED,
+            }:
+                raise ValueError("deployment step is already terminal")
+            if str(step_row["execution_mode"]) != "manual":
+                raise ValueError("only manual deployment steps can be completed directly")
+
+            result_json = {"completionNote": completion_note, **payload}
+            connection.execute(
+                """
+                UPDATE inventory.deployment_step
+                SET
+                  status = %s::inventory.deployment_step_status,
+                  result_json = result_json || %s,
+                  completed_at = NOW(),
+                  updated_at = NOW()
+                WHERE deployment_step_id = %s
+                """,
+                (
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_COMPLETED,
+                    Jsonb(result_json),
+                    deployment_step_id,
+                ),
+            )
+            event_id = self._record_inventory_event(
+                connection,
+                subject_kind="deployment_run",
+                subject_id=deployment_run_id,
+                event_kind="deployment.step_completed",
+                payload={
+                    "deploymentStepId": deployment_step_id,
+                    "stepKind": str(step_row["step_kind"]),
+                    "completionNote": completion_note,
+                    "payload": payload,
+                },
+            )
+            self._advance_hardware_deployment(connection, deployment_run_id, latest_event_id=event_id)
+            connection.commit()
+
+        detail = self.get_hardware_deployment(deployment_run_id)
+        if detail is None:
+            raise RuntimeError("deployment run missing after step completion")
+        return {"deployment": detail, "task": None}
+
+    def cancel_hardware_deployment(
+        self,
+        deployment_run_id: int,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT deployment_run_id
+                FROM inventory.deployment_run
+                WHERE deployment_run_id = %s
+                FOR UPDATE
+                """,
+                (deployment_run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise LookupError("deployment run not found")
+
+            connection.execute(
+                """
+                UPDATE inventory.deployment_step
+                SET
+                  status = CASE
+                    WHEN status IN (%s::inventory.deployment_step_status, %s::inventory.deployment_step_status)
+                      THEN %s::inventory.deployment_step_status
+                    ELSE status
+                  END,
+                  updated_at = NOW()
+                WHERE deployment_run_id = %s
+                """,
+                (
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_PENDING,
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_AWAITING_CONFIRMATION,
+                    HARDWARE_DEPLOYMENT_STEP_STATUS_CANCELLED,
+                    deployment_run_id,
+                ),
+            )
+            event_id = self._record_inventory_event(
+                connection,
+                subject_kind="deployment_run",
+                subject_id=deployment_run_id,
+                event_kind="deployment.cancelled",
+                payload={"reason": reason},
+            )
+            connection.execute(
+                """
+                UPDATE inventory.deployment_run
+                SET
+                  status = %s::inventory.deployment_run_status,
+                  summary_json = summary_json || %s,
+                  latest_event_id = %s,
+                  completed_at = NOW(),
+                  updated_at = NOW()
+                WHERE deployment_run_id = %s
+                """,
+                (
+                    HARDWARE_DEPLOYMENT_STATUS_CANCELLED,
+                    Jsonb({"cancelReason": reason} if reason else {}),
+                    event_id,
+                    deployment_run_id,
+                ),
+            )
+            connection.commit()
+
+        detail = self.get_hardware_deployment(deployment_run_id)
+        if detail is None:
+            raise RuntimeError("deployment run missing after cancel")
+        return {"deployment": detail, "task": None}
+
     def seed_inventory_from_markdown(self, manifest_path: str, force: bool) -> dict[str, int]:
         manifest = parse_inventory_manifest(manifest_path)
         item_rows = manifest.get("items", [])
@@ -2979,9 +3850,11 @@ class MemoryRepository:
                       category,
                       classification,
                       status,
-                      notes_json
+                      notes_json,
+                      source_kind,
+                      deployable
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::inventory.item_status, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::inventory.item_status, %s, %s, %s)
                     ON CONFLICT (item_key) DO UPDATE
                     SET
                       part_name = EXCLUDED.part_name,
@@ -2990,6 +3863,8 @@ class MemoryRepository:
                       category = EXCLUDED.category,
                       classification = EXCLUDED.classification,
                       status = CASE WHEN %s THEN EXCLUDED.status ELSE inventory.item.status END,
+                      source_kind = CASE WHEN %s THEN EXCLUDED.source_kind ELSE inventory.item.source_kind END,
+                      deployable = CASE WHEN %s THEN EXCLUDED.deployable ELSE inventory.item.deployable END,
                       notes_json = CASE WHEN %s THEN EXCLUDED.notes_json ELSE inventory.item.notes_json END,
                       updated_at = NOW()
                     RETURNING item_id, item_key
@@ -3003,6 +3878,10 @@ class MemoryRepository:
                         row.get("classification", "optional"),
                         row_status,
                         Jsonb(row.get("notes_json") or {}),
+                        str(row.get("source_kind", "fixture") or "fixture"),
+                        bool(row.get("deployable", False)),
+                        force,
+                        force,
                         force,
                         force,
                     ),
@@ -3060,9 +3939,11 @@ class MemoryRepository:
                       asset_tag,
                       status,
                       location,
-                      metadata_json
+                      metadata_json,
+                      source_kind,
+                      deployable
                     )
-                    VALUES (%s, %s, %s, %s, %s::inventory.unit_status, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s::inventory.unit_status, %s, %s, %s, %s)
                     ON CONFLICT (unit_label) DO UPDATE
                     SET
                       item_id = EXCLUDED.item_id,
@@ -3070,6 +3951,8 @@ class MemoryRepository:
                       asset_tag = COALESCE(EXCLUDED.asset_tag, inventory.unit.asset_tag),
                       status = CASE WHEN %s THEN EXCLUDED.status ELSE inventory.unit.status END,
                       location = COALESCE(EXCLUDED.location, inventory.unit.location),
+                      source_kind = CASE WHEN %s THEN EXCLUDED.source_kind ELSE inventory.unit.source_kind END,
+                      deployable = CASE WHEN %s THEN EXCLUDED.deployable ELSE inventory.unit.deployable END,
                       metadata_json = CASE WHEN %s THEN EXCLUDED.metadata_json ELSE inventory.unit.metadata_json END,
                       updated_at = NOW()
                     RETURNING unit_id
@@ -3082,6 +3965,10 @@ class MemoryRepository:
                         row_status,
                         row.get("location"),
                         Jsonb(row.get("metadata_json") or {}),
+                        str(row.get("source_kind", "fixture") or "fixture"),
+                        bool(row.get("deployable", False)),
+                        force,
+                        force,
                         force,
                         force,
                     ),
@@ -4330,6 +5217,18 @@ class MemoryRepository:
             return self._run_hardware_bench_validate(payload)
         if task_kind == HARDWARE_RUNTIME_REGISTER_TASK_KIND:
             return self._run_hardware_runtime_register(payload)
+        if task_kind == HARDWARE_PROBE_HOST_TASK_KIND:
+            return self._run_hardware_probe_host(payload)
+        if task_kind == HARDWARE_PROGRAM_RECEIVER_TASK_KIND:
+            return self._run_hardware_manual_task(payload, step_kind="program_receiver")
+        if task_kind == HARDWARE_CONFIGURE_RECEIVER_TASK_KIND:
+            return self._run_hardware_manual_task(payload, step_kind="configure_receiver")
+        if task_kind == HARDWARE_CAPTURE_ARTIFACTS_TASK_KIND:
+            return self._run_hardware_manual_task(payload, step_kind="capture_artifacts")
+        if task_kind == HARDWARE_PROGRAM_RADIO_TASK_KIND:
+            return self._run_hardware_manual_task(payload, step_kind="program_radio")
+        if task_kind == HARDWARE_IMAGE_HOST_TASK_KIND:
+            return self._run_hardware_manual_task(payload, step_kind="image_host")
         if task_kind == PREVIEW_RENDER_TASK_KIND:
             return self._run_preview_render(payload, run_id=run_id, task=task)
         if task_kind == PREVIEW_ANALYZE_TASK_KIND:
@@ -4524,6 +5423,98 @@ class MemoryRepository:
             "step": "runtime_register",
             "status": HARDWARE_STATUS_BUILD_RUNTIME_PENDING,
             "runtimeDeviceId": resolved_runtime_device_id,
+        }
+
+    def _run_hardware_probe_host(self, payload: dict[str, Any]) -> dict[str, Any]:
+        deployment_run_id = as_int(payload.get("deploymentRunId"))
+        if deployment_run_id is None:
+            raise ValueError("deploymentRunId is required for hardware.probe_host")
+        deployment_step_id = as_int(payload.get("deploymentStepId"))
+        if deployment_step_id is None:
+            raise ValueError("deploymentStepId is required for hardware.probe_host")
+
+        serial_candidates = []
+        serial_root = Path("/dev/serial/by-id")
+        if serial_root.exists():
+            serial_candidates.extend(str(path) for path in serial_root.glob("*"))
+        dev_root = Path("/dev")
+        serial_candidates.extend(str(path) for path in dev_root.glob("ttyUSB*"))
+        serial_candidates.extend(str(path) for path in dev_root.glob("ttyACM*"))
+        serial_candidates = sorted(set(serial_candidates))
+
+        tool_names = [
+            "node",
+            "uv",
+            "python3",
+            "powershell.exe",
+            "rpi-imager",
+            "raspi-imager",
+        ]
+        tool_statuses = []
+        for tool_name in tool_names:
+            resolved = shutil.which(tool_name)
+            tool_statuses.append(
+                {
+                    "toolName": tool_name,
+                    "status": "available" if resolved else "missing",
+                    "version": None,
+                    "detail": {"path": resolved},
+                }
+            )
+
+        artifact_dir = HARDWARE_DEPLOYMENT_ARTIFACT_DIR / f"run-{deployment_run_id:06d}"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        probe_path = artifact_dir / "host-probe.json"
+        probe_summary = {
+            "deploymentRunId": deployment_run_id,
+            "deploymentStepId": deployment_step_id,
+            "hostname": socket.gethostname(),
+            "platform": {
+                "osName": os.name,
+                "platform": os.uname().sysname if hasattr(os, "uname") else os.name,
+            },
+            "serialCandidates": serial_candidates,
+            "toolStatuses": tool_statuses,
+        }
+        probe_path.write_text(json.dumps(probe_summary, indent=2), encoding="utf-8")
+
+        return {
+            "deploymentRunId": deployment_run_id,
+            "deploymentStepId": deployment_step_id,
+            "status": "probed",
+            "artifactPath": self._relative_repo_path(probe_path),
+            "hostProbes": [
+                {
+                    "probeKind": "serial.enumeration",
+                    "status": "available" if serial_candidates else "missing",
+                    "detail": {"candidates": serial_candidates},
+                },
+                {
+                    "probeKind": "bench.host",
+                    "status": "available",
+                    "detail": {
+                        "hostname": socket.gethostname(),
+                        "platform": probe_summary["platform"],
+                    },
+                },
+            ],
+            "toolStatuses": tool_statuses,
+        }
+
+    def _run_hardware_manual_task(
+        self,
+        payload: dict[str, Any],
+        *,
+        step_kind: str,
+    ) -> dict[str, Any]:
+        deployment_run_id = as_int(payload.get("deploymentRunId"))
+        deployment_step_id = as_int(payload.get("deploymentStepId"))
+        return {
+            "deploymentRunId": deployment_run_id,
+            "deploymentStepId": deployment_step_id,
+            "stepKind": step_kind,
+            "status": "manual_required",
+            "message": "This deployment step is supervised/manual and must be completed through explicit operator confirmation.",
         }
 
     def _build_ui_fix_draft(
@@ -5660,6 +6651,12 @@ class MemoryRepository:
                 result=result,
                 success=True,
             )
+            self._apply_hardware_deployment_task_side_effects(
+                connection,
+                task=task,
+                result=result,
+                success=True,
+            )
             connection.execute(
                 """
                 UPDATE agent.task
@@ -5823,6 +6820,136 @@ class MemoryRepository:
             ),
         )
 
+    def _apply_hardware_deployment_task_side_effects(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        task: dict[str, Any],
+        result: dict[str, Any],
+        success: bool,
+    ) -> None:
+        task_kind = str(task["taskKind"])
+        if task_kind not in {
+            HARDWARE_PROBE_HOST_TASK_KIND,
+            HARDWARE_PROGRAM_RECEIVER_TASK_KIND,
+            HARDWARE_CONFIGURE_RECEIVER_TASK_KIND,
+            HARDWARE_CAPTURE_ARTIFACTS_TASK_KIND,
+            HARDWARE_PROGRAM_RADIO_TASK_KIND,
+            HARDWARE_IMAGE_HOST_TASK_KIND,
+        }:
+            return
+
+        payload = dict(task["payload"] or {})
+        deployment_run_id = as_int(payload.get("deploymentRunId"))
+        deployment_step_id = as_int(payload.get("deploymentStepId"))
+        if deployment_run_id is None or deployment_step_id is None:
+            return
+
+        status = (
+            HARDWARE_DEPLOYMENT_STEP_STATUS_COMPLETED
+            if success
+            else HARDWARE_DEPLOYMENT_STEP_STATUS_FAILED
+        )
+        connection.execute(
+            """
+            UPDATE inventory.deployment_step
+            SET
+              status = %s::inventory.deployment_step_status,
+              result_json = result_json || %s,
+              updated_at = NOW(),
+              completed_at = CASE
+                WHEN %s::inventory.deployment_step_status = %s::inventory.deployment_step_status
+                  THEN NOW()
+                ELSE completed_at
+              END
+            WHERE deployment_step_id = %s
+            """,
+            (
+                status,
+                Jsonb(result),
+                status,
+                HARDWARE_DEPLOYMENT_STEP_STATUS_COMPLETED,
+                deployment_step_id,
+            ),
+        )
+
+        if success:
+            for probe in result.get("hostProbes", []):
+                if not isinstance(probe, dict):
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO inventory.host_probe (
+                      deployment_run_id,
+                      probe_kind,
+                      status,
+                      detail_json
+                    )
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        deployment_run_id,
+                        str(probe.get("probeKind", "unknown")),
+                        str(probe.get("status", "unknown")),
+                        Jsonb(ensure_dict(probe.get("detail"))),
+                    ),
+                )
+            for descriptor in result.get("toolStatuses", []):
+                if not isinstance(descriptor, dict):
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO inventory.tool_status (
+                      deployment_run_id,
+                      tool_name,
+                      status,
+                      version,
+                      detail_json
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        deployment_run_id,
+                        str(descriptor.get("toolName", "unknown")),
+                        str(descriptor.get("status", "unknown")),
+                        descriptor.get("version"),
+                        Jsonb(ensure_dict(descriptor.get("detail"))),
+                    ),
+                )
+
+        event_id = self._record_inventory_event(
+            connection,
+            subject_kind="deployment_run",
+            subject_id=deployment_run_id,
+            event_kind=f"{task_kind.replace('.', '-')}.completed" if success else f"{task_kind.replace('.', '-')}.failed",
+            payload={"result": result, "status": status},
+            actor="agent-memory",
+            agent_task_id=task.get("agentTaskId"),
+        )
+
+        if success:
+            self._advance_hardware_deployment(connection, deployment_run_id, latest_event_id=event_id)
+            return
+
+        connection.execute(
+            """
+            UPDATE inventory.deployment_run
+            SET
+              status = %s::inventory.deployment_run_status,
+              latest_event_id = %s,
+              summary_json = summary_json || %s,
+              updated_at = NOW(),
+              completed_at = NOW()
+            WHERE deployment_run_id = %s
+            """,
+            (
+                HARDWARE_DEPLOYMENT_STATUS_FAILED,
+                event_id,
+                Jsonb({"lastError": result.get("error"), "failedTaskKind": task_kind}),
+                deployment_run_id,
+            ),
+        )
+
     def _apply_ui_review_task_side_effects(
         self,
         connection: psycopg.Connection[Any],
@@ -5925,6 +7052,12 @@ class MemoryRepository:
             if exhausted:
                 payload = dict(task["payload"] or {})
                 self._apply_hardware_task_side_effects(
+                    connection,
+                    task=task,
+                    result={"error": str(error)},
+                    success=False,
+                )
+                self._apply_hardware_deployment_task_side_effects(
                     connection,
                     task=task,
                     result={"error": str(error)},
@@ -6449,6 +7582,9 @@ def map_inventory_item(row: dict[str, Any]) -> dict[str, Any]:
         "notesJson": row["notes_json"] or {},
         "createdAt": row["created_at"].isoformat(),
         "updatedAt": row["updated_at"].isoformat(),
+        "sourceKind": row["source_kind"],
+        "deployable": bool(row["deployable"]),
+        "deployableUnits": int(row["deployable_units"]),
     }
 
 
@@ -6466,6 +7602,8 @@ def map_inventory_unit(row: dict[str, Any]) -> dict[str, Any]:
         "metadataJson": row["metadata_json"] or {},
         "createdAt": row["created_at"].isoformat(),
         "updatedAt": row["updated_at"].isoformat(),
+        "sourceKind": row["source_kind"],
+        "deployable": bool(row["deployable"]),
     }
 
 
@@ -6486,6 +7624,10 @@ def map_inventory_build(row: dict[str, Any]) -> dict[str, Any]:
         "latestEventId": row["latest_event_id"],
         "createdAt": row["created_at"].isoformat(),
         "updatedAt": row["updated_at"].isoformat(),
+        "latestDeploymentRunId": int(row["latest_deployment_run_id"])
+        if row["latest_deployment_run_id"] is not None
+        else None,
+        "deploymentSummaryJson": row["deployment_summary_json"] or {},
     }
 
 
@@ -6498,6 +7640,69 @@ def map_inventory_event(row: dict[str, Any]) -> dict[str, Any]:
         "payloadJson": row["payload_json"] or {},
         "actor": row["actor"],
         "agentTaskId": int(row["agent_task_id"]) if row["agent_task_id"] is not None else None,
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_hardware_deployment_run(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "deploymentRunId": int(row["deployment_run_id"]),
+        "buildId": int(row["build_id"]),
+        "deploymentKind": row["deployment_kind"],
+        "hardwareFamily": row["hardware_family"],
+        "targetUnitId": int(row["target_unit_id"]) if row["target_unit_id"] is not None else None,
+        "benchHost": row["bench_host"],
+        "status": row["status"],
+        "requestedByAccountId": str(row["requested_by_account_id"])
+        if row["requested_by_account_id"] is not None
+        else None,
+        "summaryJson": row["summary_json"] or {},
+        "latestEventId": int(row["latest_event_id"]) if row["latest_event_id"] is not None else None,
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+        "completedAt": row["completed_at"].isoformat() if row["completed_at"] is not None else None,
+    }
+
+
+def map_hardware_deployment_step(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "deploymentStepId": int(row["deployment_step_id"]),
+        "deploymentRunId": int(row["deployment_run_id"]),
+        "sequenceIndex": int(row["sequence_index"]),
+        "stepKind": row["step_kind"],
+        "displayLabel": row["display_label"],
+        "executionMode": row["execution_mode"],
+        "status": row["status"],
+        "required": bool(row["required"]),
+        "taskKind": row["task_kind"],
+        "agentTaskId": int(row["agent_task_id"]) if row["agent_task_id"] is not None else None,
+        "payloadJson": row["payload_json"] or {},
+        "resultJson": row["result_json"] or {},
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+        "completedAt": row["completed_at"].isoformat() if row["completed_at"] is not None else None,
+    }
+
+
+def map_hardware_port_probe(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "hostProbeId": int(row["host_probe_id"]),
+        "deploymentRunId": int(row["deployment_run_id"]),
+        "probeKind": row["probe_kind"],
+        "status": row["status"],
+        "detailJson": row["detail_json"] or {},
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_hardware_tool_status(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "hardwareToolStatusId": int(row["hardware_tool_status_id"]),
+        "deploymentRunId": int(row["deployment_run_id"]),
+        "toolName": row["tool_name"],
+        "status": row["status"],
+        "version": row["version"],
+        "detailJson": row["detail_json"] or {},
         "createdAt": row["created_at"].isoformat(),
     }
 
@@ -6665,8 +7870,15 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                 if parsed.path == "/v1/internal/inventory/items":
                     self.require_internal_token()
                     status = query.get("status", [None])[0]
+                    source_kind = query.get("sourceKind", [None])[0]
+                    only_deployable = query.get("onlyDeployable", ["false"])[0] == "true"
                     limit = as_optional_int(query.get("limit", [None])[0]) or 200
-                    items = repository.list_inventory_items(status=status, limit=limit)
+                    items = repository.list_inventory_items(
+                        status=status,
+                        source_kind=source_kind,
+                        only_deployable=only_deployable,
+                        limit=limit,
+                    )
                     self.send_json(200, {"items": items, "source": "dev-memory", "total": len(items)})
                     return
                 if (
@@ -6686,11 +7898,15 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                     item_id = as_optional_int(query.get("itemId", [None])[0])
                     status = query.get("status", [None])[0]
                     build_id = as_optional_int(query.get("buildId", [None])[0])
+                    source_kind = query.get("sourceKind", [None])[0]
+                    only_deployable = query.get("onlyDeployable", ["false"])[0] == "true"
                     limit = as_optional_int(query.get("limit", [None])[0]) or 200
                     units = repository.list_inventory_units(
                         item_id=item_id,
                         status=status,
                         build_id=build_id,
+                        source_kind=source_kind,
+                        only_deployable=only_deployable,
                         limit=limit,
                     )
                     self.send_json(200, {"units": units, "source": "dev-memory", "total": len(units)})
@@ -6749,6 +7965,25 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         limit=limit,
                     )
                     self.send_json(200, {"events": events, "source": "dev-memory", "total": len(events)})
+                    return
+                if parsed.path == "/v1/internal/inventory/deployments":
+                    self.require_internal_token()
+                    build_id = as_optional_int(query.get("buildId", [None])[0])
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 50
+                    runs = repository.list_hardware_deployments(build_id=build_id, limit=limit)
+                    self.send_json(200, {"runs": runs, "source": "dev-memory", "total": len(runs)})
+                    return
+                if (
+                    len(path_parts) == 5
+                    and path_parts[:4] == ["v1", "internal", "inventory", "deployments"]
+                    and path_parts[4].isdigit()
+                ):
+                    self.require_internal_token()
+                    detail = repository.get_hardware_deployment(int(path_parts[4]))
+                    if detail is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, detail)
                     return
                 if parsed.path == "/v1/internal/coordination/tasks":
                     self.require_internal_token()
@@ -7121,6 +8356,60 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         repository.seed_inventory_from_markdown(
                             manifest_path=str(payload["manifestPath"]),
                             force=bool(payload.get("force", False)),
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/inventory/deployments":
+                    self.require_internal_token()
+                    self.send_json(201, repository.start_hardware_deployment(payload))
+                    return
+                if (
+                    len(path_parts) == 6
+                    and path_parts[:4] == ["v1", "internal", "inventory", "deployments"]
+                    and path_parts[4].isdigit()
+                    and path_parts[5] == "resume"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        200,
+                        repository.resume_hardware_deployment(
+                            deployment_run_id=int(path_parts[4]),
+                            queue_name=str(payload.get("queueName", DEFAULT_AGENT_TASK_QUEUE)),
+                            priority=int(payload.get("priority", 0)),
+                        ),
+                    )
+                    return
+                if (
+                    len(path_parts) == 8
+                    and path_parts[:4] == ["v1", "internal", "inventory", "deployments"]
+                    and path_parts[4].isdigit()
+                    and path_parts[5] == "steps"
+                    and path_parts[6].isdigit()
+                    and path_parts[7] == "complete"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        200,
+                        repository.complete_hardware_deployment_step(
+                            deployment_run_id=int(path_parts[4]),
+                            deployment_step_id=int(path_parts[6]),
+                            completion_note=str(payload.get("completionNote", "")).strip() or None,
+                            payload=ensure_dict(payload.get("payloadJson")),
+                        ),
+                    )
+                    return
+                if (
+                    len(path_parts) == 6
+                    and path_parts[:4] == ["v1", "internal", "inventory", "deployments"]
+                    and path_parts[4].isdigit()
+                    and path_parts[5] == "cancel"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        200,
+                        repository.cancel_hardware_deployment(
+                            deployment_run_id=int(path_parts[4]),
+                            reason=str(payload.get("reason", "")).strip() or None,
                         ),
                     )
                     return

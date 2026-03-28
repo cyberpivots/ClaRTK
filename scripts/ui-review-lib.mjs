@@ -336,7 +336,10 @@ async function loginIfNeeded(page, email, password) {
 async function activatePanel(page, scenario) {
   const shellClass = `.console-shell-${scenario.panelKey}`;
   if (scenario.panelKey !== "preview") {
-    await page.locator(".icon-nav-button").nth(scenario.navIndex).click();
+    await page
+      .locator(`.icon-nav-button[data-review-label="${scenario.label}"]`)
+      .first()
+      .click();
   }
   await page.locator(shellClass).waitFor({ timeout: 15000 });
 }

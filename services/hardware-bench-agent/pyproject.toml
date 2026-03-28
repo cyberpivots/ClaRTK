@@ -1,0 +1,18 @@
+[project]
+name = "clartk-hardware-bench-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+clartk-hardware-bench-agent = "hardware_bench_agent.service:main"
+
+[build-system]
+requires = ["setuptools>=75.8.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]

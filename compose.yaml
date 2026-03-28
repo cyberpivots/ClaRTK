@@ -9,7 +9,7 @@ services:
       POSTGRES_DB: postgres
     ports:
       - target: 5432
-        published: "${CLARTK_POSTGRES_PORT:-5432}"
+        published: "${CLARTK_POSTGRES_PORT:-55432}"
         host_ip: 127.0.0.1
         protocol: tcp
         mode: host

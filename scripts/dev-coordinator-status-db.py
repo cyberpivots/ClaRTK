@@ -278,7 +278,7 @@ def main() -> None:
     )
     dev_console_origin = os.environ.get("CLARTK_DEV_CONSOLE_ORIGIN", "http://127.0.0.1:5180")
     postgres_host = resolved_env.get("CLARTK_RESOLVED_POSTGRES_HOST", os.environ.get("CLARTK_POSTGRES_HOST", "127.0.0.1"))
-    postgres_port = int(resolved_env.get("CLARTK_RESOLVED_POSTGRES_PORT", os.environ.get("CLARTK_POSTGRES_PORT", "5432")))
+    postgres_port = int(resolved_env.get("CLARTK_RESOLVED_POSTGRES_PORT", os.environ.get("CLARTK_POSTGRES_PORT", "55432")))
     postgres_source = resolved_env.get("CLARTK_RESOLVED_POSTGRES_SOURCE", "configured_env")
     database_url = resolved_env.get("CLARTK_RESOLVED_DEV_DATABASE_URL", os.environ.get("CLARTK_DEV_DATABASE_URL"))
 

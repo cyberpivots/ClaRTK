@@ -9,6 +9,11 @@ import type {
   DevPreferenceProfile,
   DocsCatalogResponse,
   EvaluationResultRecord,
+  HardwareDeploymentRunCollection,
+  HardwareDeploymentRunDetail,
+  InventoryBuildCollection,
+  InventoryItemCollection,
+  InventoryUnitCollection,
   JsonObject,
   JsonValue,
   KnowledgeClaimRecord,
@@ -76,6 +81,7 @@ const devConsoleApi = new DevConsoleClient({
 type PanelKey =
   | "preview"
   | "coordination"
+  | "hardware"
   | "review"
   | "preferences"
   | "index";
@@ -107,6 +113,12 @@ const panelDefinitions: Array<{
     description: "Task queues, safe control actions, and run inspection."
   },
   {
+    key: "hardware",
+    label: "Hardware",
+    eyebrow: "Bench",
+    description: "Deployable inventory, supervised programming steps, and runtime handoff."
+  },
+  {
     key: "review",
     label: "Review",
     eyebrow: "Evidence",
@@ -129,9 +141,10 @@ const panelDefinitions: Array<{
 const PANEL_SHORTCUTS: Record<PanelKey, string> = {
   preview: "Alt+1",
   coordination: "Alt+2",
-  review: "Alt+3",
-  preferences: "Alt+4",
-  index: "Alt+5"
+  hardware: "Alt+3",
+  review: "Alt+4",
+  preferences: "Alt+5",
+  index: "Alt+6"
 };
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -159,6 +172,12 @@ interface ConsoleState {
   docs: DocsCatalogResponse | null;
   skills: SkillCatalogResponse | null;
   devProfile: DevPreferenceProfile | null;
+  inventoryItems: InventoryItemCollection | null;
+  inventoryUnits: InventoryUnitCollection | null;
+  inventoryBuilds: InventoryBuildCollection | null;
+  deploymentRuns: HardwareDeploymentRunCollection | null;
+  selectedDeploymentRunId: number | null;
+  selectedDeployment: HardwareDeploymentRunDetail | null;
   previewDecks: PresentationDeckSourceCollection | null;
   previewRuns: PreviewRunCollection | null;
   selectedPreviewRunId: number | null;
@@ -192,6 +211,12 @@ export function App() {
     docs: null,
     skills: null,
     devProfile: null,
+    inventoryItems: null,
+    inventoryUnits: null,
+    inventoryBuilds: null,
+    deploymentRuns: null,
+    selectedDeploymentRunId: null,
+    selectedDeployment: null,
     previewDecks: null,
     previewRuns: null,
     selectedPreviewRunId: null,
@@ -843,7 +868,11 @@ export function App() {
       devConsoleApi.listSourceDocuments(),
       devConsoleApi.listClaims(),
       devConsoleApi.listEvaluations(),
-      devConsoleApi.getDevProfile()
+      devConsoleApi.getDevProfile(),
+      devConsoleApi.listInventoryItems({ limit: 50 }),
+      devConsoleApi.listInventoryUnits({ limit: 80 }),
+      devConsoleApi.listInventoryBuilds({ limit: 24 }),
+      devConsoleApi.listHardwareDeployments({ limit: 12 })
     ]);
     if (consoleLoadToken.current !== loadToken) {
       return;
@@ -882,6 +911,30 @@ export function App() {
       "dev profile",
       warnings
     );
+    const inventoryItems = resolveSettledResult(
+      secondaryResults[8],
+      previousState.inventoryItems,
+      "inventory items",
+      warnings
+    );
+    const inventoryUnits = resolveSettledResult(
+      secondaryResults[9],
+      previousState.inventoryUnits,
+      "inventory units",
+      warnings
+    );
+    const inventoryBuilds = resolveSettledResult(
+      secondaryResults[10],
+      previousState.inventoryBuilds,
+      "inventory builds",
+      warnings
+    );
+    const deploymentRuns = resolveSettledResult(
+      secondaryResults[11],
+      previousState.deploymentRuns,
+      "hardware deployments",
+      warnings
+    );
 
     const nextReviewRunId =
       previousState.selectedReviewRunId ?? reviewRuns?.runs[0]?.uiReviewRunId ?? null;
@@ -889,6 +942,12 @@ export function App() {
       nextReviewRunId === null
         ? null
         : reviewRuns?.runs.find((run) => run.uiReviewRunId === nextReviewRunId) ?? null;
+    const nextDeploymentRunId =
+      previousState.selectedDeploymentRunId ?? deploymentRuns?.runs[0]?.deploymentRunId ?? null;
+    const selectedDeploymentSummary =
+      nextDeploymentRunId === null
+        ? null
+        : deploymentRuns?.runs.find((run) => run.deploymentRunId === nextDeploymentRunId) ?? null;
     setState((current) => ({
       ...current,
       sourceDocuments,
@@ -897,6 +956,16 @@ export function App() {
       docs,
       skills,
       devProfile,
+      inventoryItems,
+      inventoryUnits,
+      inventoryBuilds,
+      deploymentRuns,
+      selectedDeploymentRunId: nextDeploymentRunId,
+      selectedDeployment:
+        selectedDeploymentSummary &&
+        current.selectedDeployment?.run.deploymentRunId === nextDeploymentRunId
+          ? current.selectedDeployment
+          : null,
       reviewRuns,
       selectedReviewRunId: nextReviewRunId,
       selectedReviewRun: selectedReviewRunSummary ?? current.selectedReviewRun,
@@ -916,7 +985,10 @@ export function App() {
         : devConsoleApi.listUiReviewFindings({
             uiReviewRunId: nextReviewRunId,
             limit: 200
-          })
+          }),
+      nextDeploymentRunId === null
+        ? Promise.resolve(previousState.selectedDeployment)
+        : devConsoleApi.getHardwareDeployment(nextDeploymentRunId)
     ]);
     if (consoleLoadToken.current !== loadToken) {
       return;
@@ -934,11 +1006,18 @@ export function App() {
       "ui review findings",
       warnings
     );
+    const selectedDeployment = resolveSettledResult(
+      reviewDetailResults[2],
+      previousState.selectedDeployment,
+      "hardware deployment detail",
+      warnings
+    );
 
     setState((current) => ({
       ...current,
       selectedReviewRun,
       reviewFindings,
+      selectedDeployment,
       notice:
         warnings.length > 0
           ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
@@ -989,6 +1068,12 @@ export function App() {
       docs: null,
       skills: null,
       devProfile: null,
+      inventoryItems: null,
+      inventoryUnits: null,
+      inventoryBuilds: null,
+      deploymentRuns: null,
+      selectedDeploymentRunId: null,
+      selectedDeployment: null,
       previewDecks: null,
       previewRuns: null,
       selectedPreviewRunId: null,
@@ -1342,6 +1427,139 @@ export function App() {
     }
   }
 
+  async function handleHardwareBuildStart(payload: {
+    buildName: string;
+    buildKind: string;
+    baseUnitId: number;
+    roverUnitId: number;
+  }) {
+    try {
+      const result = await devConsoleApi.startInventoryBuild({
+        ...payload,
+        planJson: {
+          initiatedFromPanel: state.selectedPanel,
+          source: "dev-console-hardware"
+        }
+      });
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        notice: `Started hardware build #${result.build.buildId}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleHardwareDeploymentStart(payload: {
+    buildId: number;
+    deploymentKind: string;
+    benchHost?: string;
+  }) {
+    try {
+      const result = await devConsoleApi.startHardwareDeployment(payload);
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        selectedPanel: "hardware",
+        selectedDeploymentRunId: result.deployment.run.deploymentRunId,
+        selectedDeployment: result.deployment,
+        notice: `Started deployment run #${result.deployment.run.deploymentRunId}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleHardwareDeploymentSelection(deploymentRunId: number) {
+    try {
+      const detail = await devConsoleApi.getHardwareDeployment(deploymentRunId);
+      setState((current) => ({
+        ...current,
+        selectedDeploymentRunId: deploymentRunId,
+        selectedDeployment: detail
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleHardwareDeploymentResume(deploymentRunId: number) {
+    try {
+      const result = await devConsoleApi.resumeHardwareDeployment({ deploymentRunId });
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        selectedDeploymentRunId: deploymentRunId,
+        selectedDeployment: result.deployment,
+        notice:
+          result.task !== null
+            ? `Queued ${result.task.taskKind} for deployment run #${deploymentRunId}.`
+            : `Deployment run #${deploymentRunId} is waiting on a manual step.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleHardwareDeploymentStepComplete(
+    deploymentRunId: number,
+    deploymentStepId: number,
+    completionNote: string
+  ) {
+    try {
+      const result = await devConsoleApi.completeHardwareDeploymentStep({
+        deploymentRunId,
+        deploymentStepId,
+        completionNote,
+        payloadJson: {
+          completedFromPanel: state.selectedPanel,
+          completedAt: new Date().toISOString()
+        }
+      });
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        selectedDeploymentRunId: deploymentRunId,
+        selectedDeployment: result.deployment,
+        notice: `Completed deployment step #${deploymentStepId}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleHardwareRuntimePublish(buildId: number, runtimeDeviceId: string) {
+    try {
+      const result = await devConsoleApi.triggerInventoryRuntimePublish({ buildId, runtimeDeviceId });
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        notice: `Queued runtime publish for build #${result.build.buildId}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
   const isAdmin = state.me?.account.role === "admin";
   const activePanel =
     panelDefinitions.find((panel) => panel.key === state.selectedPanel) ?? panelDefinitions[0];
@@ -1357,6 +1575,7 @@ export function App() {
   const panelMetrics: Record<PanelKey, string> = {
     preview: `${state.previewRuns?.runs.length ?? 0} runs`,
     coordination: `${state.tasks?.items.length ?? 0} tasks`,
+    hardware: `${state.deploymentRuns?.runs.length ?? 0} deployments`,
     review: `${state.reviewRuns?.runs.length ?? 0} reviews`,
     preferences: `${state.devProfile?.recentSignals.length ?? 0} signals`,
     index: `${healthyServiceCount}/${totalServiceCount || 0} ready`
@@ -1396,6 +1615,25 @@ export function App() {
         onSurfacePageChange={handleSurfacePageSignal}
         onSurfaceCardSignal={handleSurfaceCardSignal}
         onQuestionnaireEvent={handleQuestionnaireEvent}
+      />
+    );
+  } else if (state.selectedPanel === "hardware") {
+    selectedPanelContent = (
+      <HardwareSurface
+        inventoryItems={state.inventoryItems}
+        inventoryUnits={state.inventoryUnits}
+        inventoryBuilds={state.inventoryBuilds}
+        deploymentRuns={state.deploymentRuns}
+        selectedDeployment={state.selectedDeployment}
+        loading={state.loading}
+        onStartBuild={handleHardwareBuildStart}
+        onStartDeployment={handleHardwareDeploymentStart}
+        onSelectDeployment={handleHardwareDeploymentSelection}
+        onResumeDeployment={handleHardwareDeploymentResume}
+        onCompleteDeploymentStep={handleHardwareDeploymentStepComplete}
+        onRuntimePublish={handleHardwareRuntimePublish}
+        onSurfacePageChange={handleSurfacePageSignal}
+        onSurfaceCardSignal={handleSurfaceCardSignal}
       />
     );
   } else if (state.selectedPanel === "review") {
@@ -3140,6 +3378,389 @@ function CoordinationSurface(props: {
   );
 }
 
+function HardwareSurface(props: {
+  inventoryItems: InventoryItemCollection | null;
+  inventoryUnits: InventoryUnitCollection | null;
+  inventoryBuilds: InventoryBuildCollection | null;
+  deploymentRuns: HardwareDeploymentRunCollection | null;
+  selectedDeployment: HardwareDeploymentRunDetail | null;
+  loading: boolean;
+  onStartBuild: (payload: {
+    buildName: string;
+    buildKind: string;
+    baseUnitId: number;
+    roverUnitId: number;
+  }) => Promise<void>;
+  onStartDeployment: (payload: {
+    buildId: number;
+    deploymentKind: string;
+    benchHost?: string;
+  }) => Promise<void>;
+  onSelectDeployment: (deploymentRunId: number) => Promise<void>;
+  onResumeDeployment: (deploymentRunId: number) => Promise<void>;
+  onCompleteDeploymentStep: (
+    deploymentRunId: number,
+    deploymentStepId: number,
+    completionNote: string
+  ) => Promise<void>;
+  onRuntimePublish: (buildId: number, runtimeDeviceId: string) => Promise<void>;
+  onSurfacePageChange: (panelKey: PanelKey, pageKey: string, origin: SurfacePageOrigin) => Promise<void>;
+  onSurfaceCardSignal: (panelKey: PanelKey, cardKey: string) => Promise<void>;
+}) {
+  const [page, setPage] = React.useState("inventory");
+  const [includeFixtures, setIncludeFixtures] = React.useState(false);
+  const [buildName, setBuildName] = React.useState("bench-001");
+  const [buildKind, setBuildKind] = React.useState("base_rover_smoke_pair");
+  const [baseUnitId, setBaseUnitId] = React.useState("");
+  const [roverUnitId, setRoverUnitId] = React.useState("");
+  const [benchHost, setBenchHost] = React.useState("");
+  const [runtimeDeviceId, setRuntimeDeviceId] = React.useState("");
+  const [stepNotes, setStepNotes] = React.useState<Record<number, string>>({});
+  const items = props.inventoryItems?.items ?? [];
+  const units = props.inventoryUnits?.units ?? [];
+  const builds = props.inventoryBuilds?.builds ?? [];
+  const deploymentRuns = props.deploymentRuns?.runs ?? [];
+  const filteredItems = includeFixtures ? items : items.filter((item) => item.deployable);
+  const filteredUnits = includeFixtures ? units : units.filter((unit) => unit.deployable);
+  const selectedDeployment = props.selectedDeployment;
+  const selectedBuild =
+    (selectedDeployment
+      ? builds.find((build) => build.buildId === selectedDeployment.run.buildId)
+      : null) ?? builds[0] ?? null;
+
+  React.useEffect(() => {
+    void props.onSurfacePageChange("hardware", page, "auto");
+  }, [page, props]);
+
+  React.useEffect(() => {
+    if (!baseUnitId && filteredUnits[0]) {
+      setBaseUnitId(String(filteredUnits[0].unitId));
+    }
+    if (!roverUnitId && filteredUnits[1]) {
+      setRoverUnitId(String(filteredUnits[1].unitId));
+    }
+  }, [baseUnitId, filteredUnits, roverUnitId]);
+
+  function changePage(pageKey: string, origin: SurfacePageOrigin) {
+    setPage(pageKey);
+    void props.onSurfacePageChange("hardware", pageKey, origin);
+  }
+
+  const pages: SurfacePageDefinition[] = [
+    {
+      key: "inventory",
+      label: "Inventory",
+      eyebrow: "Deployable",
+      summary: "Only deployable physical stock is shown by default; fixture rows stay hidden unless explicitly revealed.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Inventory Filter" eyebrow="Truth Boundary">
+            <div className="detail-stack">
+              <label className="console-inline-field">
+                <span>Include fixtures</span>
+                <input
+                  type="checkbox"
+                  checked={includeFixtures}
+                  onChange={(event) => setIncludeFixtures(event.target.checked)}
+                />
+              </label>
+              <FactGrid
+                entries={[
+                  { label: "Visible items", value: String(filteredItems.length) },
+                  { label: "Visible units", value: String(filteredUnits.length) },
+                  { label: "Fixture rows", value: String(units.filter((unit) => !unit.deployable).length) },
+                  { label: "Deployable rows", value: String(units.filter((unit) => unit.deployable).length) }
+                ]}
+              />
+            </div>
+          </Panel>
+          <Panel title="Deployable Units" eyebrow="Bench Targets">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading inventory…" : "No deployable hardware is currently available in the canonical inventory."}
+              items={filteredUnits.slice(0, 16).map((unit) => ({
+                title: unit.unitLabel,
+                subtitle: `${unit.status} · ${unit.sourceKind}${unit.deployable ? " · deployable" : ""}`,
+                body: <StructuredValue value={unit.metadataJson} emptyLabel="No metadata recorded." />
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "builds",
+      label: "Builds",
+      eyebrow: "Sessions",
+      summary: "Start a build session, then launch a supervised deployment run from a selected build.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-wide">
+          <Panel title="Start Hardware Build" eyebrow="Provisioning">
+            <div className="detail-stack">
+              <label className="preview-field">
+                <span>Build name</span>
+                <input value={buildName} onChange={(event) => setBuildName(event.target.value)} style={inputStyle} />
+              </label>
+              <label className="preview-field">
+                <span>Build kind</span>
+                <input value={buildKind} onChange={(event) => setBuildKind(event.target.value)} style={inputStyle} />
+              </label>
+              <label className="preview-field">
+                <span>Base unit</span>
+                <select value={baseUnitId} onChange={(event) => setBaseUnitId(event.target.value)} style={inputStyle}>
+                  <option value="">Select base unit</option>
+                  {filteredUnits.map((unit) => (
+                    <option key={unit.unitId} value={unit.unitId}>{unit.unitLabel}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="preview-field">
+                <span>Rover unit</span>
+                <select value={roverUnitId} onChange={(event) => setRoverUnitId(event.target.value)} style={inputStyle}>
+                  <option value="">Select rover unit</option>
+                  {filteredUnits.map((unit) => (
+                    <option key={unit.unitId} value={unit.unitId}>{unit.unitLabel}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={!buildName || !buildKind || !baseUnitId || !roverUnitId}
+                onClick={() =>
+                  void props.onStartBuild({
+                    buildName,
+                    buildKind,
+                    baseUnitId: Number(baseUnitId),
+                    roverUnitId: Number(roverUnitId)
+                  })
+                }
+              >
+                Start build
+              </button>
+            </div>
+          </Panel>
+          <Panel title="Build Sessions" eyebrow="Deployment Entry">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading builds…" : "No hardware builds have been recorded yet."}
+              items={builds.slice(0, 12).map((build) => ({
+                title: `${build.buildName} · #${build.buildId}`,
+                subtitle: `${build.buildKind} · ${build.status}`,
+                body: (
+                  <div className="action-strip">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void props.onStartDeployment({
+                          buildId: build.buildId,
+                          deploymentKind: "px1122r_bench_v1",
+                          benchHost: benchHost || undefined
+                        });
+                        void props.onSurfaceCardSignal("hardware", `build:${build.buildId}`);
+                      }}
+                    >
+                      Start deployment
+                    </button>
+                    <StatusPill status={statusToneForHardware(build.status)}>{build.status}</StatusPill>
+                  </div>
+                )
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "readiness",
+      label: "Readiness",
+      eyebrow: "Host Probe",
+      summary: "Probe results, tool availability, and deployment-run state before any supervised manual step is accepted.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Deployment Run" eyebrow="Selected">
+            {selectedDeployment ? (
+              <div className="detail-stack">
+                <FactGrid
+                  entries={[
+                    { label: "Run", value: `#${selectedDeployment.run.deploymentRunId}` },
+                    { label: "Build", value: `#${selectedDeployment.run.buildId}` },
+                    { label: "Status", value: selectedDeployment.run.status },
+                    { label: "Bench host", value: selectedDeployment.run.benchHost ?? "not set" }
+                  ]}
+                />
+                <label className="preview-field">
+                  <span>Bench host override</span>
+                  <input value={benchHost} onChange={(event) => setBenchHost(event.target.value)} style={inputStyle} />
+                </label>
+                <button type="button" onClick={() => void props.onResumeDeployment(selectedDeployment.run.deploymentRunId)}>
+                  Resume / queue next step
+                </button>
+              </div>
+            ) : (
+              <p className="empty-copy">Select or start a deployment run first.</p>
+            )}
+          </Panel>
+          <Panel title="Host Probes And Tools" eyebrow="Bench Evidence">
+            {selectedDeployment ? (
+              <div className="detail-stack">
+                <ListBlock
+                  emptyLabel="No host probe artifacts yet."
+                  items={selectedDeployment.probes.map((probe) => ({
+                    title: probe.probeKind,
+                    subtitle: probe.status,
+                    body: <StructuredValue value={probe.detailJson} emptyLabel="No probe detail." />
+                  }))}
+                />
+                <ListBlock
+                  emptyLabel="No tool status recorded yet."
+                  items={selectedDeployment.toolStatuses.map((tool) => ({
+                    title: tool.toolName,
+                    subtitle: `${tool.status}${tool.version ? ` · ${tool.version}` : ""}`,
+                    body: <StructuredValue value={tool.detailJson} emptyLabel="No tool detail." />
+                  }))}
+                />
+              </div>
+            ) : (
+              <p className="empty-copy">No deployment run selected.</p>
+            )}
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "checklist",
+      label: "Checklist",
+      eyebrow: "Manual Gates",
+      summary: "Supervised manual steps must be explicitly completed; the UI never implies they happened automatically.",
+      content: (
+        <Panel title="Deployment Steps" eyebrow="Execution Plan">
+          {selectedDeployment ? (
+            <ListBlock
+              emptyLabel="No deployment steps recorded."
+              items={selectedDeployment.steps.map((step) => ({
+                title: `${String(step.sequenceIndex).padStart(2, "0")} · ${step.displayLabel}`,
+                subtitle: `${step.executionMode} · ${step.status}`,
+                body: (
+                  <div className="detail-stack">
+                    <StructuredValue value={step.payloadJson} emptyLabel="No step payload." />
+                    {step.executionMode === "manual" &&
+                    ["awaiting_confirmation", "pending", "blocked"].includes(step.status) ? (
+                      <>
+                        <textarea
+                          value={stepNotes[step.deploymentStepId] ?? ""}
+                          onChange={(event) =>
+                            setStepNotes((current) => ({
+                              ...current,
+                              [step.deploymentStepId]: event.target.value
+                            }))
+                          }
+                          rows={3}
+                          style={inputStyle}
+                          placeholder="Record what was done, what evidence was captured, and any file/hash references."
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void props.onCompleteDeploymentStep(
+                              step.deploymentRunId,
+                              step.deploymentStepId,
+                              stepNotes[step.deploymentStepId] ?? ""
+                            )
+                          }
+                        >
+                          Mark step complete
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                )
+              }))}
+            />
+          ) : (
+            <p className="empty-copy">Start a deployment run to see the checklist.</p>
+          )}
+        </Panel>
+      )
+    },
+    {
+      key: "evidence",
+      label: "Evidence",
+      eyebrow: "Artifacts",
+      summary: "Deployment summary, step results, and recorded evidence stay together for bench review.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Run Summary" eyebrow="Deployment">
+            {selectedDeployment ? (
+              <StructuredValue value={selectedDeployment.run.summaryJson} emptyLabel="No deployment summary." />
+            ) : (
+              <p className="empty-copy">No deployment selected.</p>
+            )}
+          </Panel>
+          <Panel title="Step Results" eyebrow="Recorded">
+            {selectedDeployment ? (
+              <StructuredValue
+                value={selectedDeployment.steps.map((step) => ({
+                  stepKind: step.stepKind,
+                  status: step.status,
+                  result: step.resultJson
+                }))}
+                emptyLabel="No step results yet."
+              />
+            ) : (
+              <p className="empty-copy">No step evidence loaded.</p>
+            )}
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "runtime",
+      label: "Runtime",
+      eyebrow: "Handoff",
+      summary: "Runtime publish remains blocked until the build is bench-validated and the deployment run is complete.",
+      content: (
+        <Panel title="Runtime Handoff" eyebrow="Gate">
+          <div className="detail-stack">
+            <FactGrid
+              entries={[
+                { label: "Selected build", value: selectedBuild ? `#${selectedBuild.buildId}` : "none" },
+                { label: "Build status", value: selectedBuild?.status ?? "n/a" },
+                { label: "Deployment", value: selectedDeployment?.run.status ?? "n/a" },
+                { label: "Latest deployment", value: selectedBuild?.latestDeploymentRunId ?? "n/a" }
+              ]}
+            />
+            <label className="preview-field">
+              <span>Runtime device ID</span>
+              <input value={runtimeDeviceId} onChange={(event) => setRuntimeDeviceId(event.target.value)} style={inputStyle} />
+            </label>
+            <button
+              type="button"
+              disabled={
+                !selectedBuild ||
+                selectedBuild.status !== "bench_validated" ||
+                selectedDeployment?.run.status !== "completed" ||
+                !runtimeDeviceId
+              }
+              onClick={() => selectedBuild && void props.onRuntimePublish(selectedBuild.buildId, runtimeDeviceId)}
+            >
+              Queue runtime publish
+            </button>
+          </div>
+        </Panel>
+      )
+    }
+  ];
+
+  return (
+    <SurfaceCarousel
+      panelKey="hardware"
+      title="Hardware"
+      summary="Deployable inventory, supervised bench programming, and gated runtime handoff."
+      pages={pages}
+      activePage={page}
+      onPageChange={changePage}
+    />
+  );
+}
+
 function ReviewSurface(props: {
   reviewRuns: UiReviewRunCollection | null;
   selectedReviewRun: UiReviewRun | null;
@@ -4672,6 +5293,16 @@ function statusToneForPreviewRun(status: string): "ok" | "neutral" | "degraded" 
     return "ok";
   }
   if (status === "failed" || status === "cancelled") {
+    return "degraded";
+  }
+  return "neutral";
+}
+
+function statusToneForHardware(status: string): "ok" | "neutral" | "degraded" {
+  if (["completed", "bench_validated", "runtime_published", "validated", "available"].includes(status)) {
+    return "ok";
+  }
+  if (["failed", "runtime_registration_failed", "cancelled", "damaged"].includes(status)) {
     return "degraded";
   }
   return "neutral";

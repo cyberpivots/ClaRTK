@@ -267,6 +267,9 @@ class InventoryItem:
     notes_json: str
     created_at: str
     updated_at: str
+    source_kind: str
+    deployable: bool
+    deployable_units: int
 
 @dataclass(slots=True, kw_only=True)
 class InventoryItemCollection:
@@ -288,6 +291,8 @@ class InventoryUnit:
     metadata_json: str
     created_at: str
     updated_at: str
+    source_kind: str
+    deployable: bool
 
 @dataclass(slots=True, kw_only=True)
 class InventoryUnitCollection:
@@ -312,6 +317,8 @@ class InventoryBuild:
     latest_event_id: str
     created_at: str
     updated_at: str
+    latest_deployment_run_id: int
+    deployment_summary_json: str
 
 @dataclass(slots=True, kw_only=True)
 class InventoryBuildCollection:
@@ -335,6 +342,72 @@ class InventoryEventCollection:
     events: List[InventoryEvent] = field(default_factory=list)
     source: str
     total: int
+
+@dataclass(slots=True, kw_only=True)
+class HardwareDeploymentRun:
+    deployment_run_id: int
+    build_id: int
+    deployment_kind: str
+    hardware_family: str
+    target_unit_id: int
+    bench_host: str
+    status: str
+    requested_by_account_id: str
+    summary_json: str
+    latest_event_id: int
+    created_at: str
+    updated_at: str
+    completed_at: str
+
+@dataclass(slots=True, kw_only=True)
+class HardwareDeploymentStep:
+    deployment_step_id: int
+    deployment_run_id: int
+    sequence_index: int
+    step_kind: str
+    display_label: str
+    execution_mode: str
+    status: str
+    required: bool
+    task_kind: str
+    agent_task_id: int
+    payload_json: str
+    result_json: str
+    created_at: str
+    updated_at: str
+    completed_at: str
+
+@dataclass(slots=True, kw_only=True)
+class HardwarePortProbe:
+    host_probe_id: int
+    deployment_run_id: int
+    probe_kind: str
+    status: str
+    detail_json: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class HardwareToolStatus:
+    hardware_tool_status_id: int
+    deployment_run_id: int
+    tool_name: str
+    status: str
+    version: str
+    detail_json: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class HardwareDeploymentRunCollection:
+    runs: List[HardwareDeploymentRun] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class HardwareDeploymentRunDetail:
+    run: HardwareDeploymentRun
+    steps: List[HardwareDeploymentStep] = field(default_factory=list)
+    probes: List[HardwarePortProbe] = field(default_factory=list)
+    tool_statuses: List[HardwareToolStatus] = field(default_factory=list)
 
 @dataclass(slots=True, kw_only=True)
 class PresentationDeckSource:
@@ -538,6 +611,38 @@ class TriggerHardwareRuntimePublishRequest:
     runtime_device_id: str
     queue_name: str
     priority: int
+
+@dataclass(slots=True, kw_only=True)
+class StartHardwareDeploymentRequest:
+    build_id: int
+    deployment_kind: str
+    target_unit_id: int
+    bench_host: str
+    queue_name: str
+    priority: int
+
+@dataclass(slots=True, kw_only=True)
+class ResumeHardwareDeploymentRequest:
+    deployment_run_id: int
+    queue_name: str
+    priority: int
+
+@dataclass(slots=True, kw_only=True)
+class CompleteHardwareDeploymentStepRequest:
+    deployment_run_id: int
+    deployment_step_id: int
+    completion_note: str
+    payload_json: str
+
+@dataclass(slots=True, kw_only=True)
+class CancelHardwareDeploymentRequest:
+    deployment_run_id: int
+    reason: str
+
+@dataclass(slots=True, kw_only=True)
+class HardwareDeploymentMutationResponse:
+    deployment: HardwareDeploymentRunDetail
+    task: AgentTask
 
 @dataclass(slots=True, kw_only=True)
 class SeedInventoryRequest:

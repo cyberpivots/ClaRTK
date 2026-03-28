@@ -156,7 +156,7 @@ async function loadFallbackSummary(primaryError) {
         status: "degraded",
         postgres: {
           host: resolvedEnv.CLARTK_RESOLVED_POSTGRES_HOST ?? "127.0.0.1",
-          port: Number(resolvedEnv.CLARTK_RESOLVED_POSTGRES_PORT ?? "5432"),
+          port: Number(resolvedEnv.CLARTK_RESOLVED_POSTGRES_PORT ?? "55432"),
           source: resolvedEnv.CLARTK_RESOLVED_POSTGRES_SOURCE ?? "configured_env",
           reachable: false
         },

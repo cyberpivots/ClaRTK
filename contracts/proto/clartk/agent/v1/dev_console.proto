@@ -250,6 +250,9 @@ message InventoryItem {
   string notes_json = 11;
   string created_at = 12;
   string updated_at = 13;
+  string source_kind = 14;
+  bool deployable = 15;
+  int32 deployable_units = 16;
 }
 
 message InventoryItemCollection {
@@ -271,6 +274,8 @@ message InventoryUnit {
   string metadata_json = 10;
   string created_at = 11;
   string updated_at = 12;
+  string source_kind = 13;
+  bool deployable = 14;
 }
 
 message InventoryUnitCollection {
@@ -295,6 +300,8 @@ message InventoryBuild {
   string latest_event_id = 13;
   string created_at = 14;
   string updated_at = 15;
+  int64 latest_deployment_run_id = 16;
+  string deployment_summary_json = 17;
 }
 
 message InventoryBuildCollection {
@@ -318,6 +325,72 @@ message InventoryEventCollection {
   repeated InventoryEvent events = 1;
   string source = 2;
   int32 total = 3;
+}
+
+message HardwareDeploymentRun {
+  int64 deployment_run_id = 1;
+  int64 build_id = 2;
+  string deployment_kind = 3;
+  string hardware_family = 4;
+  int64 target_unit_id = 5;
+  string bench_host = 6;
+  string status = 7;
+  string requested_by_account_id = 8;
+  string summary_json = 9;
+  int64 latest_event_id = 10;
+  string created_at = 11;
+  string updated_at = 12;
+  string completed_at = 13;
+}
+
+message HardwareDeploymentStep {
+  int64 deployment_step_id = 1;
+  int64 deployment_run_id = 2;
+  int32 sequence_index = 3;
+  string step_kind = 4;
+  string display_label = 5;
+  string execution_mode = 6;
+  string status = 7;
+  bool required = 8;
+  string task_kind = 9;
+  int64 agent_task_id = 10;
+  string payload_json = 11;
+  string result_json = 12;
+  string created_at = 13;
+  string updated_at = 14;
+  string completed_at = 15;
+}
+
+message HardwarePortProbe {
+  int64 host_probe_id = 1;
+  int64 deployment_run_id = 2;
+  string probe_kind = 3;
+  string status = 4;
+  string detail_json = 5;
+  string created_at = 6;
+}
+
+message HardwareToolStatus {
+  int64 hardware_tool_status_id = 1;
+  int64 deployment_run_id = 2;
+  string tool_name = 3;
+  string status = 4;
+  string version = 5;
+  string detail_json = 6;
+  string created_at = 7;
+}
+
+message HardwareDeploymentRunCollection {
+  repeated HardwareDeploymentRun runs = 1;
+  string source = 2;
+  int32 total = 3;
+}
+
+message HardwareDeploymentRunDetail {
+  HardwareDeploymentRun run = 1;
+  repeated HardwareDeploymentStep steps = 2;
+  repeated HardwarePortProbe probes = 3;
+  repeated HardwareToolStatus tool_statuses = 4;
 }
 
 message PresentationDeckSource {
@@ -521,6 +594,38 @@ message TriggerHardwareRuntimePublishRequest {
   string runtime_device_id = 2;
   string queue_name = 3;
   int32 priority = 4;
+}
+
+message StartHardwareDeploymentRequest {
+  int64 build_id = 1;
+  string deployment_kind = 2;
+  int64 target_unit_id = 3;
+  string bench_host = 4;
+  string queue_name = 5;
+  int32 priority = 6;
+}
+
+message ResumeHardwareDeploymentRequest {
+  int64 deployment_run_id = 1;
+  string queue_name = 2;
+  int32 priority = 3;
+}
+
+message CompleteHardwareDeploymentStepRequest {
+  int64 deployment_run_id = 1;
+  int64 deployment_step_id = 2;
+  string completion_note = 3;
+  string payload_json = 4;
+}
+
+message CancelHardwareDeploymentRequest {
+  int64 deployment_run_id = 1;
+  string reason = 2;
+}
+
+message HardwareDeploymentMutationResponse {
+  HardwareDeploymentRunDetail deployment = 1;
+  AgentTask task = 2;
 }
 
 message SeedInventoryRequest {

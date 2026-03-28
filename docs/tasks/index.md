@@ -42,5 +42,7 @@
   Status: in progress
 - `TASK-0530-hardware-blueprint-guides.md`: Add beginner-friendly hardware workbook and blueprint diagrams grounded in canonical inventory
   Status: in progress
+- `TASK-0540-hardware-deployment-interface.md`: Add the bench-first hardware deployment interface, deployment state, and supervised runtime handoff gate
+  Status: in progress
 - `TASK-0600-user-preference-profile.md`: Implement real-account operator profiles, reviewable preference suggestions, and dashboard-first preference management
   Status: completed

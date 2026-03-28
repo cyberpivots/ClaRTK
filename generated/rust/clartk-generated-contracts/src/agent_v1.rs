@@ -298,6 +298,9 @@ pub struct InventoryItem {
     pub notes_json: String,
     pub created_at: String,
     pub updated_at: String,
+    pub source_kind: String,
+    pub deployable: bool,
+    pub deployable_units: i32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -321,6 +324,8 @@ pub struct InventoryUnit {
     pub metadata_json: String,
     pub created_at: String,
     pub updated_at: String,
+    pub source_kind: String,
+    pub deployable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -347,6 +352,8 @@ pub struct InventoryBuild {
     pub latest_event_id: String,
     pub created_at: String,
     pub updated_at: String,
+    pub latest_deployment_run_id: i64,
+    pub deployment_summary_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -373,6 +380,78 @@ pub struct InventoryEventCollection {
     pub events: Vec<InventoryEvent>,
     pub source: String,
     pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareDeploymentRun {
+    pub deployment_run_id: i64,
+    pub build_id: i64,
+    pub deployment_kind: String,
+    pub hardware_family: String,
+    pub target_unit_id: i64,
+    pub bench_host: String,
+    pub status: String,
+    pub requested_by_account_id: String,
+    pub summary_json: String,
+    pub latest_event_id: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareDeploymentStep {
+    pub deployment_step_id: i64,
+    pub deployment_run_id: i64,
+    pub sequence_index: i32,
+    pub step_kind: String,
+    pub display_label: String,
+    pub execution_mode: String,
+    pub status: String,
+    pub required: bool,
+    pub task_kind: String,
+    pub agent_task_id: i64,
+    pub payload_json: String,
+    pub result_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwarePortProbe {
+    pub host_probe_id: i64,
+    pub deployment_run_id: i64,
+    pub probe_kind: String,
+    pub status: String,
+    pub detail_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareToolStatus {
+    pub hardware_tool_status_id: i64,
+    pub deployment_run_id: i64,
+    pub tool_name: String,
+    pub status: String,
+    pub version: String,
+    pub detail_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareDeploymentRunCollection {
+    pub runs: Vec<HardwareDeploymentRun>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareDeploymentRunDetail {
+    pub run: HardwareDeploymentRun,
+    pub steps: Vec<HardwareDeploymentStep>,
+    pub probes: Vec<HardwarePortProbe>,
+    pub tool_statuses: Vec<HardwareToolStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -597,6 +676,43 @@ pub struct TriggerHardwareRuntimePublishRequest {
     pub runtime_device_id: String,
     pub queue_name: String,
     pub priority: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartHardwareDeploymentRequest {
+    pub build_id: i64,
+    pub deployment_kind: String,
+    pub target_unit_id: i64,
+    pub bench_host: String,
+    pub queue_name: String,
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResumeHardwareDeploymentRequest {
+    pub deployment_run_id: i64,
+    pub queue_name: String,
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompleteHardwareDeploymentStepRequest {
+    pub deployment_run_id: i64,
+    pub deployment_step_id: i64,
+    pub completion_note: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CancelHardwareDeploymentRequest {
+    pub deployment_run_id: i64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareDeploymentMutationResponse {
+    pub deployment: HardwareDeploymentRunDetail,
+    pub task: AgentTask,
 }
 
 #[derive(Debug, Clone, PartialEq)]

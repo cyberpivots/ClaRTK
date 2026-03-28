@@ -11,10 +11,7 @@ postgres_host="${CLARTK_RESOLVED_POSTGRES_HOST:-${CLARTK_POSTGRES_HOST:-127.0.0.
 postgres_port="${CLARTK_RESOLVED_POSTGRES_PORT:-${CLARTK_POSTGRES_PORT:-55432}}"
 
 export CLARTK_DEV_DATABASE_URL="${CLARTK_RESOLVED_DEV_DATABASE_URL:-${CLARTK_DEV_DATABASE_URL:-postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/clartk_dev}}"
-export CLARTK_AGENT_TASK_QUEUE="${CLARTK_AGENT_TASK_QUEUE:-default}"
-export CLARTK_AGENT_TASK_QUEUES="${CLARTK_AGENT_TASK_QUEUES:-default,memory.maintenance,catalog.refresh,preferences.recompute,ui.review,preview.review,hardware.build}"
-export CLARTK_AGENT_TASK_LEASE_SECONDS="${CLARTK_AGENT_TASK_LEASE_SECONDS:-60}"
-export CLARTK_AGENT_TASK_IDLE_TIMEOUT="${CLARTK_AGENT_TASK_IDLE_TIMEOUT:-30}"
-export PYTHONPATH="$(pwd)/services/agent-memory/src${PYTHONPATH:+:${PYTHONPATH}}"
+export CLARTK_HARDWARE_BENCH_QUEUE="${CLARTK_HARDWARE_BENCH_QUEUE:-hardware.build}"
+export PYTHONPATH="$(pwd)/services/agent-memory/src:$(pwd)/services/hardware-bench-agent/src${PYTHONPATH:+:${PYTHONPATH}}"
 
-exec uv run python -m agent_memory.service run-worker "$@"
+exec uv run python -m hardware_bench_agent.service "$@"

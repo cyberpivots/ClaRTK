@@ -18,6 +18,6 @@ if [[ -n "$binding" ]]; then
   fi
 fi
 
-read -r proxy_host proxy_port <<<"$(clartk_start_postgres_proxy "127.0.0.1" "${CLARTK_POSTGRES_PORT:-5432}" "$(clartk_postgres_container_name)" "127.0.0.1" "5432")"
+read -r proxy_host proxy_port <<<"$(clartk_start_postgres_proxy "127.0.0.1" "${CLARTK_POSTGRES_PORT:-55432}" "$(clartk_postgres_container_name)" "127.0.0.1" "5432")"
 clartk_write_resolved_postgres_env "$proxy_host" "$proxy_port" "docker_exec_proxy"
 echo "resolved PostgreSQL endpoint: ${proxy_host}:${proxy_port} (docker_exec_proxy)"

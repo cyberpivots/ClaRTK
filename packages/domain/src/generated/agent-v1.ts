@@ -266,6 +266,9 @@ export interface InventoryItem {
   notesJson: string;
   createdAt: string;
   updatedAt: string;
+  sourceKind: string;
+  deployable: boolean;
+  deployableUnits: number;
 }
 
 export interface InventoryItemCollection {
@@ -287,6 +290,8 @@ export interface InventoryUnit {
   metadataJson: string;
   createdAt: string;
   updatedAt: string;
+  sourceKind: string;
+  deployable: boolean;
 }
 
 export interface InventoryUnitCollection {
@@ -311,6 +316,8 @@ export interface InventoryBuild {
   latestEventId: string;
   createdAt: string;
   updatedAt: string;
+  latestDeploymentRunId: number;
+  deploymentSummaryJson: string;
 }
 
 export interface InventoryBuildCollection {
@@ -334,6 +341,72 @@ export interface InventoryEventCollection {
   events: InventoryEvent[];
   source: string;
   total: number;
+}
+
+export interface HardwareDeploymentRun {
+  deploymentRunId: number;
+  buildId: number;
+  deploymentKind: string;
+  hardwareFamily: string;
+  targetUnitId: number;
+  benchHost: string;
+  status: string;
+  requestedByAccountId: string;
+  summaryJson: string;
+  latestEventId: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+}
+
+export interface HardwareDeploymentStep {
+  deploymentStepId: number;
+  deploymentRunId: number;
+  sequenceIndex: number;
+  stepKind: string;
+  displayLabel: string;
+  executionMode: string;
+  status: string;
+  required: boolean;
+  taskKind: string;
+  agentTaskId: number;
+  payloadJson: string;
+  resultJson: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+}
+
+export interface HardwarePortProbe {
+  hostProbeId: number;
+  deploymentRunId: number;
+  probeKind: string;
+  status: string;
+  detailJson: string;
+  createdAt: string;
+}
+
+export interface HardwareToolStatus {
+  hardwareToolStatusId: number;
+  deploymentRunId: number;
+  toolName: string;
+  status: string;
+  version: string;
+  detailJson: string;
+  createdAt: string;
+}
+
+export interface HardwareDeploymentRunCollection {
+  runs: HardwareDeploymentRun[];
+  source: string;
+  total: number;
+}
+
+export interface HardwareDeploymentRunDetail {
+  run: HardwareDeploymentRun;
+  steps: HardwareDeploymentStep[];
+  probes: HardwarePortProbe[];
+  toolStatuses: HardwareToolStatus[];
 }
 
 export interface PresentationDeckSource {
@@ -537,6 +610,38 @@ export interface TriggerHardwareRuntimePublishRequest {
   runtimeDeviceId: string;
   queueName: string;
   priority: number;
+}
+
+export interface StartHardwareDeploymentRequest {
+  buildId: number;
+  deploymentKind: string;
+  targetUnitId: number;
+  benchHost: string;
+  queueName: string;
+  priority: number;
+}
+
+export interface ResumeHardwareDeploymentRequest {
+  deploymentRunId: number;
+  queueName: string;
+  priority: number;
+}
+
+export interface CompleteHardwareDeploymentStepRequest {
+  deploymentRunId: number;
+  deploymentStepId: number;
+  completionNote: string;
+  payloadJson: string;
+}
+
+export interface CancelHardwareDeploymentRequest {
+  deploymentRunId: number;
+  reason: string;
+}
+
+export interface HardwareDeploymentMutationResponse {
+  deployment: HardwareDeploymentRunDetail;
+  task: AgentTask;
 }
 
 export interface SeedInventoryRequest {

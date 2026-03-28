@@ -117,6 +117,7 @@ def test_resolve_task_queue_name_routes_known_task_kinds() -> None:
     )
     assert resolve_task_queue_name("ui.review.capture", "") == "ui.review"
     assert resolve_task_queue_name("memory.run_evaluations", None) == "memory.maintenance"
+    assert resolve_task_queue_name("hardware.probe_host", None) == "hardware.build"
     assert resolve_task_queue_name("memory.run_evaluations", "custom.queue") == "custom.queue"
     assert resolve_task_queue_name("unknown.task", "default") == "default"
 

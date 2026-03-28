@@ -13,6 +13,9 @@ import type {
   DevPreferenceProfile,
   DevPreferenceSignal,
   DocsCatalogResponse,
+  HardwareDeploymentMutationResponse,
+  HardwareDeploymentRunCollection,
+  HardwareDeploymentRunDetail,
   InventoryBuild,
   InventoryBuildCollection,
   InventoryBuildStartResponse,
@@ -600,8 +603,28 @@ export class DevConsoleClient extends JsonClient {
     return this.getJson<DevPreferenceProfile>("/v1/preferences/dev-profile");
   }
 
-  async listInventoryItems(): Promise<InventoryItemCollection> {
-    return this.getJson<InventoryItemCollection>("/v1/inventory/items");
+  async listInventoryItems(query: {
+    status?: string;
+    sourceKind?: string;
+    onlyDeployable?: boolean;
+    limit?: number;
+  } = {}): Promise<InventoryItemCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.status === "string" && query.status) {
+      params.set("status", query.status);
+    }
+    if (typeof query.sourceKind === "string" && query.sourceKind) {
+      params.set("sourceKind", query.sourceKind);
+    }
+    if (query.onlyDeployable === true) {
+      params.set("onlyDeployable", "true");
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const path = suffix ? `/v1/inventory/items?${suffix}` : "/v1/inventory/items";
+    return this.getJson<InventoryItemCollection>(path);
   }
 
   async getInventoryItem(itemId: number): Promise<InventoryItem> {
@@ -612,6 +635,8 @@ export class DevConsoleClient extends JsonClient {
     itemId?: number;
     status?: string;
     buildId?: number;
+    sourceKind?: string;
+    onlyDeployable?: boolean;
     limit?: number;
   } = {}): Promise<InventoryUnitCollection> {
     const params = new URLSearchParams();
@@ -623,6 +648,12 @@ export class DevConsoleClient extends JsonClient {
     }
     if (typeof query.buildId === "number") {
       params.set("buildId", String(query.buildId));
+    }
+    if (typeof query.sourceKind === "string" && query.sourceKind) {
+      params.set("sourceKind", query.sourceKind);
+    }
+    if (query.onlyDeployable === true) {
+      params.set("onlyDeployable", "true");
     }
     if (typeof query.limit === "number") {
       params.set("limit", String(query.limit));
@@ -710,6 +741,90 @@ export class DevConsoleClient extends JsonClient {
           runtimeDeviceId: payload.runtimeDeviceId,
           queueName: payload.queueName,
           priority: payload.priority
+        }
+      }
+    );
+  }
+
+  async listHardwareDeployments(query: {
+    buildId?: number;
+    limit?: number;
+  } = {}): Promise<HardwareDeploymentRunCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.buildId === "number") {
+      params.set("buildId", String(query.buildId));
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const path = suffix ? `/v1/inventory/deployments?${suffix}` : "/v1/inventory/deployments";
+    return this.getJson<HardwareDeploymentRunCollection>(path);
+  }
+
+  async getHardwareDeployment(deploymentRunId: number): Promise<HardwareDeploymentRunDetail> {
+    return this.getJson<HardwareDeploymentRunDetail>(`/v1/inventory/deployments/${deploymentRunId}`);
+  }
+
+  async startHardwareDeployment(payload: {
+    buildId: number;
+    deploymentKind: string;
+    targetUnitId?: number;
+    benchHost?: string;
+    queueName?: string;
+    priority?: number;
+  }): Promise<HardwareDeploymentMutationResponse> {
+    return this.sendJson<HardwareDeploymentMutationResponse>("/v1/inventory/deployments", {
+      method: "POST",
+      body: payload
+    });
+  }
+
+  async resumeHardwareDeployment(payload: {
+    deploymentRunId: number;
+    queueName?: string;
+    priority?: number;
+  }): Promise<HardwareDeploymentMutationResponse> {
+    return this.sendJson<HardwareDeploymentMutationResponse>(
+      `/v1/inventory/deployments/${payload.deploymentRunId}/resume`,
+      {
+        method: "POST",
+        body: {
+          queueName: payload.queueName,
+          priority: payload.priority
+        }
+      }
+    );
+  }
+
+  async completeHardwareDeploymentStep(payload: {
+    deploymentRunId: number;
+    deploymentStepId: number;
+    completionNote?: string;
+    payloadJson?: JsonObject;
+  }): Promise<HardwareDeploymentMutationResponse> {
+    return this.sendJson<HardwareDeploymentMutationResponse>(
+      `/v1/inventory/deployments/${payload.deploymentRunId}/steps/${payload.deploymentStepId}/complete`,
+      {
+        method: "POST",
+        body: {
+          completionNote: payload.completionNote,
+          payloadJson: payload.payloadJson
+        }
+      }
+    );
+  }
+
+  async cancelHardwareDeployment(payload: {
+    deploymentRunId: number;
+    reason?: string;
+  }): Promise<HardwareDeploymentMutationResponse> {
+    return this.sendJson<HardwareDeploymentMutationResponse>(
+      `/v1/inventory/deployments/${payload.deploymentRunId}/cancel`,
+      {
+        method: "POST",
+        body: {
+          reason: payload.reason
         }
       }
     );

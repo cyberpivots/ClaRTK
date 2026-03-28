@@ -36,6 +36,9 @@ import type {
   SeedInventoryResponse,
   DocsCatalogItem,
   DocsCatalogResponse,
+  HardwareDeploymentMutationResponse,
+  HardwareDeploymentRunCollection,
+  HardwareDeploymentRunDetail,
   EvaluationResultRecord,
   JsonObject,
   KnowledgeClaimRecord,
@@ -84,7 +87,13 @@ const allowedTaskKinds = new Set([
   "hardware.reserve_parts",
   "hardware.build",
   "hardware.bench_validate",
-  "hardware.runtime_register"
+  "hardware.runtime_register",
+  "hardware.probe_host",
+  "hardware.program_receiver",
+  "hardware.configure_receiver",
+  "hardware.capture_artifacts",
+  "hardware.program_radio",
+  "hardware.image_host"
 ]);
 
 const app = Fastify({ logger: true });
@@ -543,6 +552,117 @@ app.post("/v1/inventory/seed", async (request): Promise<SeedInventoryResponse> =
   );
 });
 
+app.get("/v1/inventory/deployments", async (request): Promise<HardwareDeploymentRunCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const path = suffix
+    ? `/v1/internal/inventory/deployments?${suffix}`
+    : "/v1/internal/inventory/deployments";
+  return agentMemoryInternalRequest<HardwareDeploymentRunCollection>(path);
+});
+
+app.get(
+  "/v1/inventory/deployments/:deploymentRunId",
+  async (request): Promise<HardwareDeploymentRunDetail> => {
+    await requireAdmin(request.headers);
+    const deploymentRunId = requireInteger(
+      (request.params as Record<string, unknown>).deploymentRunId,
+      "deploymentRunId"
+    );
+    return agentMemoryInternalRequest<HardwareDeploymentRunDetail>(
+      `/v1/internal/inventory/deployments/${deploymentRunId}`
+    );
+  }
+);
+
+app.post(
+  "/v1/inventory/deployments",
+  async (request): Promise<HardwareDeploymentMutationResponse> => {
+    const me = await requireAdmin(request.headers);
+    const body = asBody(request.body);
+    return agentMemoryInternalRequest<HardwareDeploymentMutationResponse>(
+      "/v1/internal/inventory/deployments",
+      {
+        method: "POST",
+        body: {
+          buildId: requireInteger(body.buildId, "buildId"),
+          deploymentKind: requireString(body.deploymentKind, "deploymentKind"),
+          targetUnitId: typeof body.targetUnitId === "number" ? body.targetUnitId : undefined,
+          benchHost: typeof body.benchHost === "string" ? body.benchHost : undefined,
+          queueName: typeof body.queueName === "string" ? body.queueName : undefined,
+          priority: typeof body.priority === "number" ? body.priority : 0,
+          requestedByAccountId: me.account.accountId
+        }
+      }
+    );
+  }
+);
+
+app.post(
+  "/v1/inventory/deployments/:deploymentRunId/resume",
+  async (request): Promise<HardwareDeploymentMutationResponse> => {
+    await requireAdmin(request.headers);
+    const deploymentRunId = requireInteger(
+      (request.params as Record<string, unknown>).deploymentRunId,
+      "deploymentRunId"
+    );
+    const body = asBody(request.body);
+    return agentMemoryInternalRequest<HardwareDeploymentMutationResponse>(
+      `/v1/internal/inventory/deployments/${deploymentRunId}/resume`,
+      {
+        method: "POST",
+        body: {
+          queueName: typeof body.queueName === "string" ? body.queueName : undefined,
+          priority: typeof body.priority === "number" ? body.priority : 0
+        }
+      }
+    );
+  }
+);
+
+app.post(
+  "/v1/inventory/deployments/:deploymentRunId/steps/:deploymentStepId/complete",
+  async (request): Promise<HardwareDeploymentMutationResponse> => {
+    await requireAdmin(request.headers);
+    const params = request.params as Record<string, unknown>;
+    const deploymentRunId = requireInteger(params.deploymentRunId, "deploymentRunId");
+    const deploymentStepId = requireInteger(params.deploymentStepId, "deploymentStepId");
+    const body = asBody(request.body);
+    return agentMemoryInternalRequest<HardwareDeploymentMutationResponse>(
+      `/v1/internal/inventory/deployments/${deploymentRunId}/steps/${deploymentStepId}/complete`,
+      {
+        method: "POST",
+        body: {
+          completionNote: typeof body.completionNote === "string" ? body.completionNote : undefined,
+          payloadJson: ensureJsonObject(body.payloadJson)
+        }
+      }
+    );
+  }
+);
+
+app.post(
+  "/v1/inventory/deployments/:deploymentRunId/cancel",
+  async (request): Promise<HardwareDeploymentMutationResponse> => {
+    await requireAdmin(request.headers);
+    const deploymentRunId = requireInteger(
+      (request.params as Record<string, unknown>).deploymentRunId,
+      "deploymentRunId"
+    );
+    const body = asBody(request.body);
+    return agentMemoryInternalRequest<HardwareDeploymentMutationResponse>(
+      `/v1/internal/inventory/deployments/${deploymentRunId}/cancel`,
+      {
+        method: "POST",
+        body: {
+          reason: typeof body.reason === "string" ? body.reason : undefined
+        }
+      }
+    );
+  }
+);
+
 app.get(
   "/v1/knowledge/source-documents",
   async (request): Promise<ResourceCollection<SourceDocumentRecord>> => {
@@ -807,7 +927,7 @@ async function buildWorkspaceOverview(): Promise<WorkspaceOverview> {
   const resolvedEnv = await loadResolvedEnv();
   const postgresHost = resolvedEnv.CLARTK_RESOLVED_POSTGRES_HOST ?? process.env.CLARTK_POSTGRES_HOST ?? "127.0.0.1";
   const postgresPort = Number(
-    resolvedEnv.CLARTK_RESOLVED_POSTGRES_PORT ?? process.env.CLARTK_POSTGRES_PORT ?? "5432"
+    resolvedEnv.CLARTK_RESOLVED_POSTGRES_PORT ?? process.env.CLARTK_POSTGRES_PORT ?? "55432"
   );
   const postgresSource = resolvedEnv.CLARTK_RESOLVED_POSTGRES_SOURCE ?? "configured_env";
   const postgresReachable = await tcpReachable(postgresHost, postgresPort);
