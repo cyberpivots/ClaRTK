@@ -437,6 +437,22 @@ def build_dev_preference_scorecard(
     signals: list[dict[str, Any]],
     decisions: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    def collect_payload_values(signal_kind: str, *keys: str) -> list[str]:
+        return [
+            extract_string(signal.get("payload", {}), *keys)
+            for signal in signals
+            if signal.get("signalKind") == signal_kind
+        ]
+
+    def collect_payload_values_for_signal_kinds(
+        signal_kinds: set[str], *keys: str
+    ) -> list[str]:
+        return [
+            extract_string(signal.get("payload", {}), *keys)
+            for signal in signals
+            if signal.get("signalKind") in signal_kinds
+        ]
+
     landing_panels = [
         signal.get("panelKey")
         for signal in signals
@@ -477,6 +493,46 @@ def build_dev_preference_scorecard(
         for signal in signals
         if signal.get("signalKind") == "preview_subpane_selected"
     ]
+    telemetry_drawers = collect_payload_values_for_signal_kinds(
+        {"telemetry_drawer_opened", "telemetry_mode_selected"},
+        "drawerKey",
+        "telemetryMode",
+        "value",
+    )
+    questionnaire_surfaces = collect_payload_values_for_signal_kinds(
+        {"questionnaire_started", "questionnaire_completed"},
+        "questionnaireSurface",
+        "value",
+    )
+    questionnaire_answers = [
+        signal
+        for signal in signals
+        if signal.get("signalKind") == "questionnaire_step_answered"
+    ]
+    questionnaire_started = [
+        signal for signal in signals if signal.get("signalKind") == "questionnaire_started"
+    ]
+    questionnaire_completed = [
+        signal for signal in signals if signal.get("signalKind") == "questionnaire_completed"
+    ]
+    surface_page_signals = [
+        signal
+        for signal in signals
+        if signal.get("signalKind") == "surface_carousel_page_selected"
+    ]
+    surface_card_signals = [
+        signal for signal in signals if signal.get("signalKind") == "surface_card_selected"
+    ]
+    evidence_page_signals = [
+        signal
+        for signal in surface_page_signals
+        if extract_string(signal.get("payload", {}), "pageKey", "value") == "evidence"
+    ]
+    evidence_card_signals = [
+        signal
+        for signal in surface_card_signals
+        if "evidence" in extract_string(signal.get("payload", {}), "cardKey", "value")
+    ]
 
     accepted_actions = [
         decision
@@ -495,6 +551,28 @@ def build_dev_preference_scorecard(
         for decision in decisions
         if decision.get("subjectKind") == "recommended_action"
         and decision.get("decisionKind") == "overridden"
+    ]
+    questionnaire_decisions = [
+        decision
+        for decision in decisions
+        if decision.get("subjectKind") == "questionnaire_answer"
+    ]
+    preview_questionnaire_decisions = [
+        decision
+        for decision in questionnaire_decisions
+        if extract_string(decision.get("payload", {}), "panelKey", "value") == "preview"
+    ]
+    preview_approved = [
+        decision
+        for decision in preview_questionnaire_decisions
+        if str(decision.get("subjectKey")) == "next_action"
+        and str(decision.get("chosenValue")) == "approve_direction"
+    ]
+    preview_rejected = [
+        decision
+        for decision in preview_questionnaire_decisions
+        if str(decision.get("subjectKey")) == "next_action"
+        and str(decision.get("chosenValue")) in {"request_revision", "pause_for_research"}
     ]
 
     preferred_landing_panel, landing_confidence = choose_top_value(
@@ -521,6 +599,12 @@ def build_dev_preference_scorecard(
     preferred_preview_subpane, preview_subpane_confidence = choose_top_value(
         [value for value in preview_subpanes if value]
     )
+    preferred_questionnaire_surface, questionnaire_surface_confidence = choose_top_value(
+        [value for value in questionnaire_surfaces if value]
+    )
+    preferred_telemetry_mode, telemetry_confidence = choose_top_value(
+        [value for value in telemetry_drawers if value]
+    )
 
     total_action_decisions = (
         len(accepted_actions) + len(rejected_actions) + len(overridden_actions)
@@ -533,6 +617,45 @@ def build_dev_preference_scorecard(
         automation_style = "assisted" if acceptance_ratio >= 0.5 else "supervised"
         automation_confidence = round(max(0.4, acceptance_ratio), 2)
 
+    review_decision_count = len(accepted_actions) + len(rejected_actions)
+    review_acceptance_ratio = (
+        round(len(accepted_actions) / review_decision_count, 2)
+        if review_decision_count > 0
+        else 0.0
+    )
+    preview_decision_count = len(preview_approved) + len(preview_rejected)
+    preview_approval_ratio = (
+        round(len(preview_approved) / preview_decision_count, 2)
+        if preview_decision_count > 0
+        else 0.0
+    )
+    questionnaire_completion_rate = (
+        round(len(questionnaire_completed) / len(questionnaire_started), 2)
+        if questionnaire_started
+        else 0.0
+    )
+    evidence_signal_count = len(evidence_page_signals) + len(evidence_card_signals)
+    evidence_engagement = (
+        round(evidence_signal_count / len(signals), 2) if signals else 0.0
+    )
+
+    page_preferences: dict[str, dict[str, Any]] = {}
+    page_signals_by_panel: dict[str, list[str]] = {}
+    for signal in surface_page_signals:
+        payload = signal.get("payload", {})
+        panel_key = extract_string(payload, "panelKey", "value")
+        page_key = extract_string(payload, "pageKey", "value")
+        if not panel_key or not page_key:
+            continue
+        page_signals_by_panel.setdefault(panel_key, []).append(page_key)
+    for panel_key in sorted(page_signals_by_panel):
+        page_values = page_signals_by_panel[panel_key]
+        preferred_page, preferred_page_confidence = choose_top_value(page_values)
+        page_preferences[panel_key] = {
+            "value": preferred_page,
+            "confidence": preferred_page_confidence,
+        }
+
     feature_summary = {
         "signalCount": len(signals),
         "decisionCount": len(decisions),
@@ -542,6 +665,13 @@ def build_dev_preference_scorecard(
         "hudDensitySelectionCount": len([value for value in hud_densities if value]),
         "motionModeSelectionCount": len([value for value in motion_modes if value]),
         "previewSubpaneSelectionCount": len([value for value in preview_subpanes if value]),
+        "telemetryDrawerSelectionCount": len([value for value in telemetry_drawers if value]),
+        "questionnaireStartedCount": len(questionnaire_started),
+        "questionnaireAnsweredCount": len(questionnaire_answers),
+        "questionnaireCompletedCount": len(questionnaire_completed),
+        "surfacePageSelectionCount": len(surface_page_signals),
+        "surfaceCardSelectionCount": len(surface_card_signals),
+        "evidenceEngagementSignalCount": evidence_signal_count,
     }
     scorecard = {
         "preferredLandingPanel": {
@@ -576,9 +706,34 @@ def build_dev_preference_scorecard(
             "value": preferred_preview_subpane,
             "confidence": preview_subpane_confidence,
         },
+        "preferredQuestionnaireSurface": {
+            "value": preferred_questionnaire_surface,
+            "confidence": questionnaire_surface_confidence,
+        },
+        "preferredTelemetryMode": {
+            "value": preferred_telemetry_mode,
+            "confidence": telemetry_confidence,
+        },
+        "preferredPageByPanel": page_preferences,
         "automationStyle": {
             "value": automation_style,
             "confidence": automation_confidence,
+        },
+        "questionnaireCompletionRate": {
+            "value": questionnaire_completion_rate,
+            "confidence": round(max(0.4, questionnaire_completion_rate or 0.4), 2),
+        },
+        "reviewAcceptanceRatio": {
+            "value": review_acceptance_ratio,
+            "confidence": round(max(0.4, review_acceptance_ratio or 0.4), 2),
+        },
+        "previewApprovalRatio": {
+            "value": preview_approval_ratio,
+            "confidence": round(max(0.4, preview_approval_ratio or 0.4), 2),
+        },
+        "evidenceEngagement": {
+            "value": evidence_engagement,
+            "confidence": round(max(0.4, evidence_engagement or 0.4), 2),
         },
     }
     return feature_summary, scorecard

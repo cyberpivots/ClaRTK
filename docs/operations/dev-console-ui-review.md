@@ -58,6 +58,16 @@
 4. Accept or reject findings.
 5. Promote baselines only from a reviewed run with acceptable screenshots.
 
+## Carousel HUD acceptance
+
+- Review the carousel shell as a low-scroll interface, not only as a screenshot-diff target.
+- Baseline acceptance should confirm:
+  - visible page controls and markers
+  - no top-level document scroll on initial load for the primary review surfaces
+  - bounded internal scrolling only for high-volume lists such as findings, runs, docs, or artifacts
+  - reduced-motion mode still presents the same pages and evidence clearly
+- The `questions` page is part of the reviewed shell and should be treated as first-class UI evidence rather than as an out-of-band form flow.
+
 ## Artifact conventions
 
 - Trace zip:
@@ -78,6 +88,7 @@
 - Use `ui-review-supervisor` when the job is to inspect or triage review evidence.
 - Use `ui_review_reviewer` for read-only agent work over stored review artifacts.
 - Keep remediation separate from supervision. Once a finding is accepted, create a bounded implementation task rather than editing directly from the review step.
+- Use `dev-console-hud-supervisor` when the finding or review scope is specifically about carousel navigation, low-scroll regressions, or questionnaire-page behavior.
 
 ## Verified external guidance
 

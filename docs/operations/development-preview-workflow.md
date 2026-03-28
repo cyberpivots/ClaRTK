@@ -53,12 +53,19 @@
 - The dev console hosts the preview in a sandboxed iframe.
 - Preview artifacts must ship with a dedicated CSP rather than inheriting the dev-console app policy.
 - Preview feedback is part of the development plane only. It does not publish directly into runtime/operator state.
+- In the carousel HUD, preview review should happen on page-sized trays:
+  - `launch`
+  - `stage`
+  - `evidence`
+  - `questions`
+- The preview stage should stay above the fold on initial load. If supporting data grows, move it into bounded internal lists or the dedicated evidence/questions pages rather than extending document scroll.
 
 ## Agent guidance
 
 - Use `development-preview-presenter` when the job is to build or revise the preview companion, run the preview lane, or prepare a human-reviewable concept deck.
 - Use `research-to-deck` when the job is to derive a repo-native evidence deck from tasks, ADRs, docs, and checks.
 - Use `ui-review-supervisor` only for the separate automated UI review lane. Do not mix UI baseline review with presentation preview approval.
+- Use `dev-console-hud-supervisor` when the task is specifically about the carousel shell, questionnaire flow, or low-scroll HUD behavior around the preview lane.
 
 ## Current example
 

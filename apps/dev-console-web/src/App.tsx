@@ -9,6 +9,8 @@ import type {
   DevPreferenceProfile,
   DocsCatalogResponse,
   EvaluationResultRecord,
+  JsonObject,
+  JsonValue,
   KnowledgeClaimRecord,
   PresentationDeckSourceCollection,
   PreviewFeedbackCollection,
@@ -26,12 +28,42 @@ import type {
 
 type HudDensity = "compact" | "comfortable";
 type MotionMode = "reduced" | "standard";
+type LauncherDrawerKey = "status" | "quick-controls" | "filters" | "comms" | "profile";
 
 function browserBaseUrl(defaultPort: number): string {
   if (typeof window === "undefined") {
     return `http://localhost:${defaultPort}`;
   }
   return `${window.location.protocol}//${window.location.hostname}:${defaultPort}`;
+}
+
+function toJsonValue(value: unknown): JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => toJsonValue(item));
+  }
+  if (typeof value === "object" && value !== null) {
+    return toJsonObject(value as Record<string, unknown>) ?? {};
+  }
+  return String(value);
+}
+
+function toJsonObject(value?: Record<string, unknown>): JsonObject | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => [key, toJsonValue(item)])
+  ) as JsonObject;
 }
 
 const runtimeApi = new ApiClient({
@@ -43,12 +75,18 @@ const devConsoleApi = new DevConsoleClient({
 
 type PanelKey =
   | "preview"
-  | "overview"
   | "coordination"
   | "review"
-  | "knowledge"
-  | "docs"
-  | "preferences";
+  | "preferences"
+  | "index";
+
+type SurfacePageOrigin = "button" | "arrow" | "marker" | "auto";
+
+const EMPTY_PREVIEW_FEEDBACK: PreviewFeedbackCollection = {
+  items: [],
+  source: "dev-memory",
+  total: 0
+};
 
 const panelDefinitions: Array<{
   key: PanelKey;
@@ -63,12 +101,6 @@ const panelDefinitions: Array<{
     description: "Slide-style HTML previews with media, run history, and human review."
   },
   {
-    key: "overview",
-    label: "Overview",
-    eyebrow: "Health",
-    description: "Environment status, resolved endpoints, and backups."
-  },
-  {
     key: "coordination",
     label: "Coordination",
     eyebrow: "Queues",
@@ -81,22 +113,16 @@ const panelDefinitions: Array<{
     description: "Playwright capture, deterministic analysis, and baseline supervision."
   },
   {
-    key: "knowledge",
-    label: "Knowledge",
-    eyebrow: "Dev Memory",
-    description: "Source documents, claims, and evaluation review."
-  },
-  {
-    key: "docs",
-    label: "Docs",
-    eyebrow: "Filesystem",
-    description: "Documentation and skill catalog snapshots."
-  },
-  {
     key: "preferences",
     label: "Preferences",
     eyebrow: "Signals",
     description: "Supervised decisions and derived scorecards."
+  },
+  {
+    key: "index",
+    label: "Index",
+    eyebrow: "Archive",
+    description: "Workspace overview, knowledge review, and documentation catalogs."
   }
 ];
 
@@ -170,11 +196,15 @@ export function App() {
     displayName: "ClaRTK Admin"
   });
   const [authMode, setAuthMode] = React.useState<"login" | "bootstrap">("login");
+  const [activeLauncher, setActiveLauncher] = React.useState<LauncherDrawerKey | null>("status");
   const lastPanelSignal = React.useRef<PanelKey | null>(null);
   const lastDetailSignal = React.useRef<"compact" | "expanded" | null>(null);
   const lastHudDensitySignal = React.useRef<HudDensity | null>(null);
   const lastMotionModeSignal = React.useRef<MotionMode | null>(null);
   const consoleLoadInFlight = React.useRef(false);
+  const primaryHydrationRetryScheduled = React.useRef(false);
+  const previewHydrationRetryScheduled = React.useRef(false);
+  const postSessionRefreshScheduled = React.useRef(false);
   const consoleLoadToken = React.useRef(0);
   const stateRef = React.useRef(state);
 
@@ -332,7 +362,152 @@ export function App() {
     });
   }, [state.devProfile]);
 
+  async function recordPreferenceSignal(
+    signalKind: string,
+    options: {
+      surface?: string;
+      panelKey?: string | null;
+      payload?: Record<string, unknown>;
+    } = {}
+  ) {
+    if (!stateRef.current.me || stateRef.current.me.account.role !== "admin") {
+      return null;
+    }
+    try {
+      const signal = await devConsoleApi.createDevPreferenceSignal({
+        signalKind,
+        surface: options.surface,
+        panelKey: options.panelKey,
+        payload: toJsonObject(options.payload)
+      });
+      setState((current) => ({
+        ...current,
+        devProfile: current.devProfile
+          ? {
+              ...current.devProfile,
+              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
+            }
+          : current.devProfile
+      }));
+      return signal;
+    } catch {
+      return null;
+    }
+  }
+
+  async function recordPreferenceDecision(payload: {
+    decisionKind: "accepted" | "rejected" | "overridden";
+    subjectKind: string;
+    subjectKey: string;
+    chosenValue?: string | null;
+    panelKey?: PanelKey;
+    questionnaireKey?: string;
+    questionKey?: string;
+    optionKey?: string;
+  }) {
+    if (!stateRef.current.me || stateRef.current.me.account.role !== "admin") {
+      return;
+    }
+    try {
+      const profile = await devConsoleApi.createDevPreferenceDecision({
+        decisionKind: payload.decisionKind,
+        subjectKind: payload.subjectKind,
+        subjectKey: payload.subjectKey,
+        chosenValue: payload.chosenValue,
+        payload: toJsonObject({
+          panelKey: payload.panelKey,
+          questionnaireKey: payload.questionnaireKey,
+          questionKey: payload.questionKey,
+          optionKey: payload.optionKey
+        })
+      });
+      setState((current) => ({
+        ...current,
+        devProfile: profile
+      }));
+    } catch {
+      // Keep the current profile on decision write failure.
+    }
+  }
+
+  async function handleSurfacePageSignal(
+    panelKey: PanelKey,
+    pageKey: string,
+    origin: SurfacePageOrigin
+  ) {
+    await recordPreferenceSignal("surface_carousel_page_selected", {
+      panelKey,
+      payload: {
+        panelKey,
+        pageKey,
+        origin
+      }
+    });
+  }
+
+  async function handleSurfaceCardSignal(panelKey: PanelKey, cardKey: string) {
+    await recordPreferenceSignal("surface_card_selected", {
+      panelKey,
+      payload: {
+        panelKey,
+        cardKey
+      }
+    });
+  }
+
+  async function handleQuestionnaireEvent(
+    panelKey: PanelKey,
+    questionnaireKey: string,
+    questionKey: string | null,
+    optionKey: string | null,
+    eventKind: "started" | "answered" | "completed"
+  ) {
+    const signalKind =
+      eventKind === "started"
+        ? "questionnaire_started"
+        : eventKind === "answered"
+          ? "questionnaire_step_answered"
+          : "questionnaire_completed";
+    await recordPreferenceSignal(signalKind, {
+      panelKey,
+      payload: {
+        panelKey,
+        questionnaireKey,
+        questionnaireSurface: "separate_screen",
+        questionKey,
+        optionKey,
+        completionState: eventKind === "completed" ? "completed" : undefined
+      }
+    });
+    if (eventKind === "answered" && questionKey && optionKey) {
+      await recordPreferenceDecision({
+        decisionKind: "accepted",
+        subjectKind: "questionnaire_answer",
+        subjectKey: questionKey,
+        chosenValue: optionKey,
+        panelKey,
+        questionnaireKey,
+        questionKey,
+        optionKey
+      });
+    }
+  }
+
+  async function handleLauncherToggle(drawerKey: LauncherDrawerKey) {
+    setActiveLauncher((current) => (current === drawerKey ? null : drawerKey));
+    if (activeLauncher !== drawerKey) {
+      await recordPreferenceSignal("telemetry_drawer_opened", {
+        payload: {
+          drawerKey
+        }
+      });
+    }
+  }
+
   async function loadSession() {
+    primaryHydrationRetryScheduled.current = false;
+    previewHydrationRetryScheduled.current = false;
+    postSessionRefreshScheduled.current = false;
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
       const sessionState = await runtimeApi.getSessionState();
@@ -347,6 +522,14 @@ export function App() {
       setState((current) => ({ ...current, me: sessionState.me }));
       if (sessionState.me.account.role === "admin") {
         await loadConsoleData(undefined, true);
+        if (!postSessionRefreshScheduled.current) {
+          postSessionRefreshScheduled.current = true;
+          window.setTimeout(() => {
+            if (stateRef.current.me?.account.role === "admin") {
+              void loadConsoleData(stateRef.current.selectedRunId ?? undefined);
+            }
+          }, 1000);
+        }
       } else {
         setState((current) => ({ ...current, loading: false }));
       }
@@ -374,11 +557,13 @@ export function App() {
     try {
       const warnings: string[] = [];
       const previousState = stateRef.current;
+      void loadPreviewDeckData(loadToken);
+      void loadPreviewRunData(loadToken);
+      void loadSupplementalConsoleData(loadToken);
       const primaryResults = await Promise.allSettled([
         devConsoleApi.getWorkspaceOverview(),
         devConsoleApi.listTasks(),
-        devConsoleApi.listRuns(),
-        devConsoleApi.listPreviewDecks()
+        devConsoleApi.listRuns()
       ]);
       if (consoleLoadToken.current !== loadToken) {
         return;
@@ -392,13 +577,6 @@ export function App() {
       );
       const tasks = resolveSettledResult(primaryResults[1], previousState.tasks, "coordination tasks", warnings);
       const runs = resolveSettledResult(primaryResults[2], previousState.runs, "coordination runs", warnings);
-      const previewDecks = resolveSettledResult(
-        primaryResults[3],
-        previousState.previewDecks,
-        "preview decks",
-        warnings
-      );
-
       const nextRunId = selectedRunId ?? previousState.selectedRunId ?? runs?.items[0]?.agentRunId ?? null;
       const nextNotice =
         warnings.length > 0
@@ -410,7 +588,6 @@ export function App() {
         ...current,
         overview,
         tasks,
-        previewDecks,
         runs,
         selectedRunId: nextRunId,
         notice: nextNotice,
@@ -418,8 +595,6 @@ export function App() {
       }));
 
       void loadRunDetailData(loadToken, nextRunId);
-      void loadPreviewRunData(loadToken);
-      void loadSupplementalConsoleData(loadToken);
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -428,6 +603,46 @@ export function App() {
       }));
     } finally {
       consoleLoadInFlight.current = false;
+    }
+  }
+
+  async function loadPreviewDeckData(loadToken: number) {
+    const previousState = stateRef.current;
+    const warnings: string[] = [];
+    const previewDecksResult = await Promise.allSettled([devConsoleApi.listPreviewDecks()]);
+    if (consoleLoadToken.current !== loadToken) {
+      return;
+    }
+
+    const previewDecks = resolveSettledResult(
+      previewDecksResult[0],
+      previousState.previewDecks,
+      "preview decks",
+      warnings
+    );
+
+    setState((current) => ({
+      ...current,
+      previewDecks,
+      notice:
+        warnings.length > 0
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : current.notice
+    }));
+
+    if (
+      previewDecks?.items.length === 0 &&
+      previousState.previewDecks === null &&
+      !primaryHydrationRetryScheduled.current
+    ) {
+      primaryHydrationRetryScheduled.current = true;
+      window.setTimeout(() => {
+        if (consoleLoadToken.current === loadToken) {
+          void loadPreviewDeckData(loadToken);
+        }
+      }, 750);
+    } else if ((previewDecks?.items.length ?? 0) > 0) {
+      primaryHydrationRetryScheduled.current = false;
     }
   }
 
@@ -469,18 +684,45 @@ export function App() {
       "preview runs",
       warnings
     );
-    const nextPreviewRunId =
-      previousState.selectedPreviewRunId ?? previewRuns?.runs[0]?.previewRunId ?? null;
-    const selectedPreviewRunSummary =
-      nextPreviewRunId === null
-        ? null
-        : previewRuns?.runs.find((run) => run.previewRunId === nextPreviewRunId) ?? null;
+
+    if (
+      (previewRuns?.runs.length ?? 0) === 0 &&
+      previousState.previewRuns === null &&
+      !previewHydrationRetryScheduled.current
+    ) {
+      previewHydrationRetryScheduled.current = true;
+      setState((current) => ({
+        ...current,
+        previewRuns: null
+      }));
+      window.setTimeout(() => {
+        if (consoleLoadToken.current === loadToken) {
+          void loadPreviewRunData(loadToken);
+        }
+      }, 750);
+      return;
+    }
+    if ((previewRuns?.runs.length ?? 0) > 0) {
+      previewHydrationRetryScheduled.current = false;
+    }
+
+    const selectedPreviewRunSummary = pickPreferredPreviewRun(
+      previewRuns,
+      previousState.selectedPreviewRunId
+    );
+    const nextPreviewRunId = selectedPreviewRunSummary?.previewRunId ?? null;
 
     setState((current) => ({
       ...current,
       previewRuns,
       selectedPreviewRunId: nextPreviewRunId,
       selectedPreviewRun: selectedPreviewRunSummary ?? current.selectedPreviewRun,
+      previewFeedback:
+        nextPreviewRunId === null
+          ? EMPTY_PREVIEW_FEEDBACK
+          : nextPreviewRunId === current.selectedPreviewRunId && current.previewFeedback
+            ? current.previewFeedback
+            : EMPTY_PREVIEW_FEEDBACK,
       notice:
         warnings.length > 0
           ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
@@ -510,7 +752,7 @@ export function App() {
     );
     const previewFeedback = resolveSettledResult(
       detailResults[1],
-      stateRef.current.previewFeedback,
+      stateRef.current.previewFeedback ?? EMPTY_PREVIEW_FEEDBACK,
       "preview feedback",
       warnings
     );
@@ -579,9 +821,31 @@ export function App() {
 
     const nextReviewRunId =
       previousState.selectedReviewRunId ?? reviewRuns?.runs[0]?.uiReviewRunId ?? null;
+    const selectedReviewRunSummary =
+      nextReviewRunId === null
+        ? null
+        : reviewRuns?.runs.find((run) => run.uiReviewRunId === nextReviewRunId) ?? null;
+    setState((current) => ({
+      ...current,
+      sourceDocuments,
+      claims,
+      evaluations,
+      docs,
+      skills,
+      devProfile,
+      reviewRuns,
+      selectedReviewRunId: nextReviewRunId,
+      selectedReviewRun: selectedReviewRunSummary ?? current.selectedReviewRun,
+      reviewBaselines,
+      notice:
+        warnings.length > 0
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : current.notice
+    }));
+
     const reviewDetailResults = await Promise.allSettled([
       nextReviewRunId === null
-        ? Promise.resolve(previousState.selectedReviewRun)
+        ? Promise.resolve(selectedReviewRunSummary ?? previousState.selectedReviewRun)
         : devConsoleApi.getUiReviewRun(nextReviewRunId),
       nextReviewRunId === null
         ? Promise.resolve(previousState.reviewFindings)
@@ -609,17 +873,8 @@ export function App() {
 
     setState((current) => ({
       ...current,
-      sourceDocuments,
-      claims,
-      evaluations,
-      docs,
-      skills,
-      devProfile,
-      reviewRuns,
-      selectedReviewRunId: nextReviewRunId,
       selectedReviewRun,
       reviewFindings,
-      reviewBaselines,
       notice:
         warnings.length > 0
           ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
@@ -654,6 +909,9 @@ export function App() {
 
   async function handleLogout() {
     await runtimeApi.logout();
+    primaryHydrationRetryScheduled.current = false;
+    previewHydrationRetryScheduled.current = false;
+    postSessionRefreshScheduled.current = false;
     setState((current) => ({
       ...current,
       me: null,
@@ -771,15 +1029,31 @@ export function App() {
 
   async function handlePreviewRunSelection(previewRunId: number) {
     try {
-      const [run, feedback] = await Promise.all([
+      const selectedPreviewRunSummary =
+        stateRef.current.previewRuns?.runs.find((run) => run.previewRunId === previewRunId) ?? null;
+      setState((current) => ({
+        ...current,
+        selectedPreviewRunId: previewRunId,
+        selectedPreviewRun: selectedPreviewRunSummary ?? current.selectedPreviewRun,
+        previewFeedback:
+          current.selectedPreviewRunId === previewRunId && current.previewFeedback
+            ? current.previewFeedback
+            : EMPTY_PREVIEW_FEEDBACK
+      }));
+      const detailResults = await Promise.allSettled([
         devConsoleApi.getPreviewRun(previewRunId),
         devConsoleApi.listPreviewFeedback({ previewRunId, limit: 200 })
       ]);
       setState((current) => ({
         ...current,
-        selectedPreviewRunId: previewRunId,
-        selectedPreviewRun: run,
-        previewFeedback: feedback
+        selectedPreviewRun:
+          detailResults[0].status === "fulfilled"
+            ? detailResults[0].value
+            : selectedPreviewRunSummary ?? current.selectedPreviewRun,
+        previewFeedback:
+          detailResults[1].status === "fulfilled"
+            ? detailResults[1].value
+            : current.previewFeedback ?? EMPTY_PREVIEW_FEEDBACK
       }));
     } catch (error) {
       setState((current) => ({
@@ -788,6 +1062,55 @@ export function App() {
       }));
     }
   }
+
+  const handlePreviewHydration = React.useCallback(async () => {
+    try {
+      const previewRuns = await devConsoleApi.listPreviewRuns({ limit: 12 });
+      const selectedPreviewRunSummary = pickPreferredPreviewRun(
+        previewRuns,
+        stateRef.current.selectedPreviewRunId
+      );
+      const nextPreviewRunId = selectedPreviewRunSummary?.previewRunId ?? null;
+      setState((current) => ({
+        ...current,
+        previewRuns,
+        selectedPreviewRunId: nextPreviewRunId,
+        selectedPreviewRun: selectedPreviewRunSummary ?? current.selectedPreviewRun,
+        previewFeedback:
+          nextPreviewRunId === null
+            ? EMPTY_PREVIEW_FEEDBACK
+            : nextPreviewRunId === current.selectedPreviewRunId && current.previewFeedback
+              ? current.previewFeedback
+              : EMPTY_PREVIEW_FEEDBACK
+      }));
+      if (nextPreviewRunId === null) {
+        return;
+      }
+
+      const detailResults = await Promise.allSettled([
+        devConsoleApi.getPreviewRun(nextPreviewRunId),
+        devConsoleApi.listPreviewFeedback({
+          previewRunId: nextPreviewRunId,
+          limit: 200
+        })
+      ]);
+      const selectedPreviewRun =
+        detailResults[0].status === "fulfilled"
+          ? detailResults[0].value
+          : selectedPreviewRunSummary;
+      const previewFeedback =
+        detailResults[1].status === "fulfilled"
+          ? detailResults[1].value
+          : stateRef.current.previewFeedback ?? EMPTY_PREVIEW_FEEDBACK;
+      setState((current) => ({
+        ...current,
+        selectedPreviewRun: selectedPreviewRun ?? current.selectedPreviewRun,
+        previewFeedback
+      }));
+    } catch {
+      // Keep current preview state on hydration failure.
+    }
+  }, []);
 
   async function handlePreviewFeedbackSubmit(
     previewRunId: number,
@@ -965,20 +1288,20 @@ export function App() {
     : state.runs?.items[0]
       ? `#${state.runs.items[0].agentRunId}`
       : "none";
+  const queueSummary = summarizeQueueHealth(state.tasks?.queues ?? []);
+  const learningStats = summarizeLearningStats(state.devProfile);
   const panelMetrics: Record<PanelKey, string> = {
     preview: `${state.previewRuns?.runs.length ?? 0} runs`,
-    overview: `${healthyServiceCount}/${totalServiceCount || 0} healthy`,
     coordination: `${state.tasks?.items.length ?? 0} tasks`,
     review: `${state.reviewRuns?.runs.length ?? 0} reviews`,
-    knowledge: `${state.claims?.items.length ?? 0} claims`,
-    docs: `${state.docs?.items.length ?? 0} docs`,
-    preferences: `${state.devProfile?.recentSignals.length ?? 0} signals`
+    preferences: `${state.devProfile?.recentSignals.length ?? 0} signals`,
+    index: `${healthyServiceCount}/${totalServiceCount || 0} ready`
   };
 
   let selectedPanelContent: React.ReactNode = null;
   if (state.selectedPanel === "preview") {
     selectedPanelContent = (
-      <PreviewPanel
+      <PreviewSurface
         previewDecks={state.previewDecks}
         previewRuns={state.previewRuns}
         selectedPreviewRunId={state.selectedPreviewRunId}
@@ -988,14 +1311,16 @@ export function App() {
         onStartPreview={handlePreviewStart}
         onSelectPreviewRun={handlePreviewRunSelection}
         onSubmitFeedback={handlePreviewFeedbackSubmit}
+        onHydratePreviewState={handlePreviewHydration}
         onStageModeChange={handlePreviewSubpaneChange}
+        onSurfacePageChange={handleSurfacePageSignal}
+        onSurfaceCardSignal={handleSurfaceCardSignal}
+        onQuestionnaireEvent={handleQuestionnaireEvent}
       />
     );
-  } else if (state.selectedPanel === "overview") {
-    selectedPanelContent = <OverviewPanel overview={state.overview} loading={state.loading} />;
   } else if (state.selectedPanel === "coordination") {
     selectedPanelContent = (
-      <CoordinationPanel
+      <CoordinationSurface
         tasks={state.tasks}
         runs={state.runs}
         runDetail={state.runDetail}
@@ -1004,11 +1329,14 @@ export function App() {
         onRetrySelectedTask={handleRetrySelectedTask}
         onEnqueue={handleEnqueue}
         onSupervision={handleSupervision}
+        onSurfacePageChange={handleSurfacePageSignal}
+        onSurfaceCardSignal={handleSurfaceCardSignal}
+        onQuestionnaireEvent={handleQuestionnaireEvent}
       />
     );
   } else if (state.selectedPanel === "review") {
     selectedPanelContent = (
-      <ReviewPanel
+      <ReviewSurface
         reviewRuns={state.reviewRuns}
         selectedReviewRun={state.selectedReviewRun}
         reviewFindings={state.reviewFindings}
@@ -1019,27 +1347,33 @@ export function App() {
         onSelectReviewRun={handleUiReviewSelection}
         onReviewFinding={handleUiReviewFindingReview}
         onPromoteBaseline={handleUiReviewPromoteBaseline}
+        onSurfacePageChange={handleSurfacePageSignal}
+        onSurfaceCardSignal={handleSurfaceCardSignal}
+        onQuestionnaireEvent={handleQuestionnaireEvent}
       />
-    );
-  } else if (state.selectedPanel === "knowledge") {
-    selectedPanelContent = (
-      <KnowledgePanel
-        sourceDocuments={state.sourceDocuments}
-        claims={state.claims}
-        evaluations={state.evaluations}
-        detailDepth={state.detailDepth}
-      />
-    );
-  } else if (state.selectedPanel === "docs") {
-    selectedPanelContent = (
-      <DocsPanel docs={state.docs} skills={state.skills} detailDepth={state.detailDepth} />
     );
   } else if (state.selectedPanel === "preferences") {
     selectedPanelContent = (
-      <PreferencesPanel
+      <PreferencesSurface
         me={state.me}
         devProfile={state.devProfile}
         onSupervision={handleSupervision}
+        onSurfacePageChange={handleSurfacePageSignal}
+        onQuestionnaireEvent={handleQuestionnaireEvent}
+      />
+    );
+  } else if (state.selectedPanel === "index") {
+    selectedPanelContent = (
+      <IndexSurface
+        overview={state.overview}
+        loading={state.loading}
+        sourceDocuments={state.sourceDocuments}
+        claims={state.claims}
+        evaluations={state.evaluations}
+        docs={state.docs}
+        skills={state.skills}
+        detailDepth={state.detailDepth}
+        onSurfacePageChange={handleSurfacePageSignal}
       />
     );
   }
@@ -1114,6 +1448,137 @@ export function App() {
     </Panel>
   );
 
+  let launcherDrawerContent: React.ReactNode = null;
+  if (activeLauncher === "status") {
+    launcherDrawerContent = (
+      <div className="hud-launcher-drawer-grid">
+        <TelemetryChip
+          label="Workspace"
+          value={state.overview?.status ?? (state.loading ? "loading" : "unknown")}
+        />
+        <TelemetryChip label="Services" value={`${healthyServiceCount}/${totalServiceCount || 0}`} />
+        <TelemetryChip
+          label="Preview"
+          value={state.selectedPreviewRun ? `#${state.selectedPreviewRun.previewRunId}` : "idle"}
+        />
+        <TelemetryChip
+          label="Review"
+          value={state.selectedReviewRun ? `#${state.selectedReviewRun.uiReviewRunId}` : "idle"}
+        />
+        <TelemetryChip label="Queue" value={selectedRunLabel} />
+      </div>
+    );
+  } else if (activeLauncher === "quick-controls") {
+    launcherDrawerContent = (
+      <div className="hud-launcher-drawer-grid hud-launcher-controls">
+        <label className="console-inline-field">
+          <span>Density</span>
+          <select
+            value={state.hudDensity}
+            onChange={(event) =>
+              setState((current) => ({
+                ...current,
+                hudDensity: event.target.value as HudDensity
+              }))
+            }
+            style={inputStyle}
+          >
+            <option value="compact">compact</option>
+            <option value="comfortable">comfortable</option>
+          </select>
+        </label>
+        <label className="console-inline-field">
+          <span>Motion</span>
+          <select
+            value={state.motionMode}
+            onChange={(event) =>
+              setState((current) => ({
+                ...current,
+                motionMode: event.target.value as MotionMode
+              }))
+            }
+            style={inputStyle}
+          >
+            <option value="reduced">reduced</option>
+            <option value="standard">standard</option>
+          </select>
+        </label>
+        <label className="console-inline-field">
+          <span>Detail depth</span>
+          <select
+            value={state.detailDepth}
+            onChange={(event) =>
+              setState((current) => ({
+                ...current,
+                detailDepth: event.target.value as "compact" | "expanded"
+              }))
+            }
+            style={inputStyle}
+          >
+            <option value="compact">compact</option>
+            <option value="expanded">expanded</option>
+          </select>
+        </label>
+        <button onClick={() => void loadConsoleData(state.selectedRunId ?? undefined)}>
+          Refresh
+        </button>
+      </div>
+    );
+  } else if (activeLauncher === "filters") {
+    launcherDrawerContent = (
+      <FactGrid
+        entries={[
+          { label: "Active panel", value: activePanel.label },
+          { label: "Selected run", value: selectedRunLabel },
+          { label: "Queue failures", value: String(queueSummary.failedCount) },
+          { label: "Signals", value: String(learningStats.signalCount) },
+          {
+            label: "Archive records",
+            value: String(
+              (state.docs?.items.length ?? 0) +
+                (state.claims?.items.length ?? 0) +
+                (state.sourceDocuments?.items.length ?? 0)
+            )
+          }
+        ]}
+      />
+    );
+  } else if (activeLauncher === "comms") {
+    launcherDrawerContent = (
+      <div className="detail-stack">
+        <div className="detail-card">
+          <div className="section-heading">
+            <h4>Supervised flow</h4>
+            <p>Use the `Questions` page in the active surface for structured answers.</p>
+          </div>
+          <p className="detail-copy">
+            Each answer is written as a signal plus a supervised decision inside the development
+            preference plane.
+          </p>
+        </div>
+        <div className="detail-card">
+          <div className="section-heading">
+            <h4>Recent supervised decisions</h4>
+          </div>
+          <ListBlock
+            emptyLabel="No supervised decisions yet."
+            items={(state.devProfile?.recentDecisions ?? []).slice(0, 4).map((decision) => ({
+              title: `${decision.decisionKind} · ${decision.subjectKey}`,
+              subtitle: decision.subjectKind,
+              body: (
+                <p className="detail-copy">
+                  {decision.chosenValue ?? "No chosen value"} · {formatTimestamp(decision.createdAt)}
+                </p>
+              )
+            }))}
+          />
+        </div>
+      </div>
+    );
+  } else if (activeLauncher === "profile") {
+    launcherDrawerContent = sessionPanel;
+  }
+
   return (
     <AppFrame
       title="ClaRTK Development Interface"
@@ -1123,90 +1588,87 @@ export function App() {
     >
       {isAdmin ? (
         <div className="console-shell">
-          <div className="telemetry-strip">
-            <div className="telemetry-group">
-              <TelemetryChip label="Workspace" value={state.overview?.status ?? (state.loading ? "loading" : "unknown")} />
-              <TelemetryChip label="Services" value={`${healthyServiceCount}/${totalServiceCount || 0}`} />
-              <TelemetryChip label="Preview" value={state.selectedPreviewRun ? `#${state.selectedPreviewRun.previewRunId}` : "idle"} />
-              <TelemetryChip label="Review" value={state.selectedReviewRun ? `#${state.selectedReviewRun.uiReviewRunId}` : "idle"} />
-              <TelemetryChip label="Queue" value={selectedRunLabel} />
+          <div className="hud-launcher">
+            <div className="hud-launcher-brand">
+              <span className="hud-kicker">ClaRTK // Development Interface</span>
+              <strong>{activePanel.label}</strong>
+              <p>{activePanel.description}</p>
             </div>
-            <div className="telemetry-controls">
-              <label className="console-inline-field">
-                <span>Density</span>
-                <select
-                  value={state.hudDensity}
-                  onChange={(event) =>
-                    setState((current) => ({
-                      ...current,
-                      hudDensity: event.target.value as HudDensity
-                    }))
-                  }
-                  style={inputStyle}
-                >
-                  <option value="compact">compact</option>
-                  <option value="comfortable">comfortable</option>
-                </select>
-              </label>
-              <label className="console-inline-field">
-                <span>Motion</span>
-                <select
-                  value={state.motionMode}
-                  onChange={(event) =>
-                    setState((current) => ({
-                      ...current,
-                      motionMode: event.target.value as MotionMode
-                    }))
-                  }
-                  style={inputStyle}
-                >
-                  <option value="reduced">reduced</option>
-                  <option value="standard">standard</option>
-                </select>
-              </label>
-              <label className="console-inline-field">
-                <span>Detail depth</span>
-                <select
-                  value={state.detailDepth}
-                  onChange={(event) =>
-                    setState((current) => ({
-                      ...current,
-                      detailDepth: event.target.value as "compact" | "expanded"
-                    }))
-                  }
-                  style={inputStyle}
-                >
-                  <option value="compact">compact</option>
-                  <option value="expanded">expanded</option>
-                </select>
-              </label>
-              <button onClick={() => void loadConsoleData(state.selectedRunId ?? undefined)}>
-                Refresh
-              </button>
+            <div className="hud-launcher-actions">
+              <LauncherButton
+                label="Status"
+                icon="status"
+                active={activeLauncher === "status"}
+                onClick={() => void handleLauncherToggle("status")}
+              />
+              <LauncherButton
+                label="Quick Controls"
+                icon="controls"
+                active={activeLauncher === "quick-controls"}
+                onClick={() => void handleLauncherToggle("quick-controls")}
+              />
+              <LauncherButton
+                label="Filters"
+                icon="filters"
+                active={activeLauncher === "filters"}
+                onClick={() => void handleLauncherToggle("filters")}
+              />
+              <LauncherButton
+                label="Comms"
+                icon="comms"
+                active={activeLauncher === "comms"}
+                onClick={() => void handleLauncherToggle("comms")}
+              />
+              <LauncherButton
+                label="Profile"
+                icon="profile"
+                active={activeLauncher === "profile"}
+                onClick={() => void handleLauncherToggle("profile")}
+              />
             </div>
           </div>
+          {launcherDrawerContent ? (
+            <div className="hud-launcher-drawer">{launcherDrawerContent}</div>
+          ) : null}
 
           {state.notice ? <Message tone="ok">{state.notice}</Message> : null}
           {state.error ? <Message tone="error">{state.error}</Message> : null}
 
           <div className="console-grid">
             <aside className="command-rail">
-              <Panel title="Console Surface" eyebrow="Command Rail" accent="muted">
-                <div className="console-nav">
+              <Panel title="Surface Ring" eyebrow="Command Rail" accent="muted">
+                <div className="console-nav console-nav-icons">
                   {panelDefinitions.map((panel) => (
-                    <button
+                    <IconNavButton
                       key={panel.key}
-                      className={`console-nav-button${state.selectedPanel === panel.key ? " is-active" : ""}`}
-                      onClick={() => setState((current) => ({ ...current, selectedPanel: panel.key }))}
-                    >
-                      <span className="console-nav-title">{panel.label}</span>
-                      <span className="console-nav-description">{panel.description}</span>
-                      <span className="console-nav-metric">{panelMetrics[panel.key]}</span>
-                    </button>
+                      panelKey={panel.key}
+                      label={panel.label}
+                      detail={panelMetrics[panel.key]}
+                      active={state.selectedPanel === panel.key}
+                      onClick={() =>
+                        setState((current) => ({ ...current, selectedPanel: panel.key }))
+                      }
+                    />
                   ))}
                 </div>
               </Panel>
-              {sessionPanel}
+              <Panel title="Telemetry" eyebrow="Derived" accent="muted">
+                <div className="detail-stack">
+                  <StatusRing
+                    label="Run health"
+                    values={[
+                      { label: "preview", value: state.previewRuns?.runs.length ?? 0, tone: "ok" },
+                      { label: "review", value: state.reviewRuns?.runs.length ?? 0, tone: "neutral" },
+                      { label: "failed queues", value: queueSummary.failedCount, tone: "degraded" }
+                    ]}
+                  />
+                  <SparkBars
+                    label="Learning pulse"
+                    values={learningStats.sparkValues}
+                    captions={["signals", "decisions", "accepted", "rejected", "overridden"]}
+                  />
+                </div>
+              </Panel>
             </aside>
 
             <main className="console-main">
@@ -1217,65 +1679,30 @@ export function App() {
               <Panel title="Current Focus" eyebrow={activePanel.eyebrow} accent="muted">
                 <div className="console-focus-grid">
                   <InfoCard label="Panel" value={activePanel.label} detail={activePanel.description} />
-                  <InfoCard
-                    label="Density"
-                    value={state.hudDensity}
-                    detail={
-                      state.hudDensity === "compact"
-                        ? "High-density telemetry and tighter cards."
-                        : "More breathing room for longer inspection."
-                    }
-                  />
-                  <InfoCard
-                    label="Motion"
-                    value={state.motionMode}
-                    detail={
-                      state.motionMode === "reduced"
-                        ? "State changes stay restrained."
-                        : "Ambient transitions enabled."
-                    }
-                  />
-                  <InfoCard
-                    label="Selected run"
-                    value={selectedRunLabel}
-                    detail={state.runDetail?.run.taskSlug ?? "Choose a run from coordination."}
-                  />
-                  <InfoCard
-                    label="Preview stage"
-                    value={state.selectedPreviewRun?.status ?? "idle"}
-                    detail={state.selectedPreviewRun?.deckKey ?? "Select a deck to inspect render output."}
-                  />
-                  <InfoCard
-                    label="Review lane"
-                    value={state.selectedReviewRun?.status ?? "idle"}
-                    detail={
-                      state.reviewFindings?.findings.length
-                        ? `${state.reviewFindings.findings.length} findings loaded`
-                        : "No findings loaded."
-                    }
-                  />
+                  <InfoCard label="Density" value={state.hudDensity} detail={`${state.motionMode} motion`} />
+                  <InfoCard label="Selected run" value={selectedRunLabel} detail={state.runDetail?.run.taskSlug ?? "No coordination run selected."} />
+                  <InfoCard label="Preview" value={state.selectedPreviewRun?.status ?? "idle"} detail={state.selectedPreviewRun?.deckKey ?? "No preview run selected."} />
+                  <InfoCard label="Review" value={state.selectedReviewRun?.status ?? "idle"} detail={state.reviewFindings?.findings.length ? `${state.reviewFindings.findings.length} findings loaded` : "No findings loaded."} />
                 </div>
               </Panel>
               <Panel title="Mission Brief" eyebrow="Ops Context" accent="muted">
                 <div className="detail-stack">
                   <div className="detail-card">
                     <div className="section-heading">
-                      <h4>Primary objective</h4>
-                      <p>Preview remains the dominant surface for usable HTML review artifacts.</p>
+                      <h4>Carousel rule</h4>
+                      <p>The main surface rotates page-sized trays instead of stacking long forms.</p>
                     </div>
                     <p className="detail-copy">
-                      Use this HUD to render concepts, inspect slide-linked evidence, and keep
-                      human approvals attached to the same development run.
+                      Preview stays stage-first. Questions live on separate surface pages. Long
+                      evidence streams belong in bounded list panes, not in document scroll.
                     </p>
                   </div>
                   <div className="detail-card">
-                    <FactGrid
-                      entries={[
-                        { label: "Deck sources", value: String(state.previewDecks?.items.length ?? 0) },
-                        { label: "Preview runs", value: String(state.previewRuns?.runs.length ?? 0) },
-                        { label: "Review baselines", value: String(state.reviewBaselines?.baselines.length ?? 0) },
-                        { label: "Preference signals", value: String(state.devProfile?.recentSignals.length ?? 0) }
-                      ]}
+                    <QueuePulseBars queues={state.tasks?.queues ?? []} />
+                  </div>
+                  <div className="detail-card">
+                    <VisualAlertStrip
+                      items={collectVisualAlerts(state.selectedPreviewRun, state.selectedReviewRun)}
                     />
                   </div>
                 </div>
@@ -1316,16 +1743,7 @@ function AppFrame(props: {
   children: React.ReactNode;
 }) {
   return (
-    <div
-      className={`hud-frame hud-density-${props.density} hud-motion-${props.motionMode}`}
-    >
-      <header className="hud-hero">
-        <div className="hud-hero-copy">
-          <span className="hud-kicker">ClaRTK // Development Interface</span>
-          <h1>{props.title}</h1>
-          <p>{props.subtitle}</p>
-        </div>
-      </header>
+    <div className={`hud-frame hud-density-${props.density} hud-motion-${props.motionMode}`}>
       <div className="hud-body">{props.children}</div>
     </div>
   );
@@ -1366,7 +1784,503 @@ function TelemetryChip(props: { label: string; value: React.ReactNode }) {
   );
 }
 
-function PreviewPanel(props: {
+type GlyphKey =
+  | "status"
+  | "controls"
+  | "filters"
+  | "comms"
+  | "profile"
+  | PanelKey;
+
+interface SurfacePageDefinition {
+  key: string;
+  label: string;
+  eyebrow: string;
+  summary?: string;
+  content: React.ReactNode;
+}
+
+interface QuestionnaireOption {
+  key: string;
+  label: string;
+  description: string;
+}
+
+interface QuestionnaireStep {
+  key: string;
+  prompt: string;
+  options: QuestionnaireOption[];
+}
+
+const SURFACE_QUESTIONNAIRES: Record<
+  "preview" | "coordination" | "review" | "preferences",
+  QuestionnaireStep[]
+> = {
+  preview: [
+    {
+      key: "outcome",
+      prompt: "What outcome should this preview optimize first?",
+      options: [
+        { key: "clarity", label: "Concept Clarity", description: "Prioritize understanding of the proposal." },
+        { key: "visual_impact", label: "Visual Impact", description: "Push the presentation and staging harder." },
+        { key: "implementation_scope", label: "Implementation Scope", description: "Show concrete build intent and limits." }
+      ]
+    },
+    {
+      key: "priority",
+      prompt: "Which revision priority should agents act on next?",
+      options: [
+        { key: "stage_layout", label: "Stage Layout", description: "Improve preview framing and page flow." },
+        { key: "evidence_quality", label: "Evidence Quality", description: "Strengthen screenshots and source mapping." },
+        { key: "feedback_capture", label: "Feedback Capture", description: "Refine the supervised review loop." }
+      ]
+    },
+    {
+      key: "next_action",
+      prompt: "What should happen immediately after this review pass?",
+      options: [
+        { key: "approve_direction", label: "Approve Direction", description: "Continue with the current concept." },
+        { key: "request_revision", label: "Request Revision", description: "Iterate this deck before further build-out." },
+        { key: "pause_for_research", label: "Pause For Research", description: "Gather more verified evidence first." }
+      ]
+    }
+  ],
+  coordination: [
+    {
+      key: "queue_action",
+      prompt: "Which coordination action is the best next move?",
+      options: [
+        { key: "retry_selected", label: "Retry Selected", description: "Re-run the currently selected task path." },
+        { key: "enqueue_research", label: "Enqueue Research", description: "Queue more evidence gathering first." },
+        { key: "stabilize_queue", label: "Stabilize Queue", description: "Reduce churn and clear failure backlog." }
+      ]
+    },
+    {
+      key: "owner_scope",
+      prompt: "What ownership pattern should apply to the next change?",
+      options: [
+        { key: "single_owner", label: "Single Owner", description: "Keep one path owner for the next slice." },
+        { key: "split_write_sets", label: "Split Write Sets", description: "Parallelize only disjoint path owners." },
+        { key: "read_only_research", label: "Read-Only Research", description: "Hold code edits until research completes." }
+      ]
+    },
+    {
+      key: "urgency",
+      prompt: "How urgent is the next coordination step?",
+      options: [
+        { key: "immediate", label: "Immediate", description: "Act on the next worker cycle." },
+        { key: "normal", label: "Normal", description: "Handle in the standard queue cadence." },
+        { key: "defer", label: "Defer", description: "Hold this until other evidence lands." }
+      ]
+    }
+  ],
+  review: [
+    {
+      key: "finding_disposition",
+      prompt: "How should current review findings be treated?",
+      options: [
+        { key: "accept_findings", label: "Accept Findings", description: "Treat the deterministic findings as valid." },
+        { key: "reject_findings", label: "Reject Findings", description: "Dismiss the current findings as non-actionable." },
+        { key: "needs_more_evidence", label: "Need Evidence", description: "Capture more evidence before deciding." }
+      ]
+    },
+    {
+      key: "baseline_intent",
+      prompt: "What baseline action should follow review?",
+      options: [
+        { key: "promote", label: "Promote", description: "Approve the current images as the new baseline." },
+        { key: "hold", label: "Hold", description: "Keep current baselines and continue iterating." },
+        { key: "rebuild", label: "Rebuild", description: "Capture a new run before deciding." }
+      ]
+    },
+    {
+      key: "next_action",
+      prompt: "What should the review lane do next?",
+      options: [
+        { key: "generate_fix", label: "Generate Fix", description: "Turn findings into a remediation slice." },
+        { key: "retest", label: "Retest", description: "Run capture/analyze again with the same target." },
+        { key: "archive", label: "Archive", description: "Record the result and move on." }
+      ]
+    }
+  ],
+  preferences: [
+    {
+      key: "density",
+      prompt: "Which HUD density serves this workspace best?",
+      options: [
+        { key: "compact", label: "Compact", description: "Maximize information density." },
+        { key: "comfortable", label: "Comfortable", description: "Increase spacing for readability." }
+      ]
+    },
+    {
+      key: "motion",
+      prompt: "Which motion mode should the HUD prefer?",
+      options: [
+        { key: "reduced", label: "Reduced Motion", description: "Prefer instant transitions and lower movement." },
+        { key: "standard", label: "Standard Motion", description: "Allow restrained animated transitions." }
+      ]
+    },
+    {
+      key: "telemetry_mode",
+      prompt: "How much telemetry should stay visible by default?",
+      options: [
+        { key: "minimal", label: "Minimal", description: "Show only essential mission signals." },
+        { key: "balanced", label: "Balanced", description: "Mix high-signal telemetry with context." },
+        { key: "verbose", label: "Verbose", description: "Keep dense instrumentation visible." }
+      ]
+    }
+  ]
+};
+
+function Glyph(props: { icon: GlyphKey }) {
+  const node =
+    props.icon === "status" ? "S" :
+    props.icon === "controls" ? "C" :
+    props.icon === "filters" ? "F" :
+    props.icon === "comms" ? "M" :
+    props.icon === "profile" ? "P" :
+    props.icon === "preview" ? "P" :
+    props.icon === "coordination" ? "Q" :
+    props.icon === "review" ? "R" :
+    props.icon === "preferences" ? "T" :
+    "I";
+  return <span aria-hidden="true">{node}</span>;
+}
+
+function LauncherButton(props: {
+  label: string;
+  icon: GlyphKey;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`launcher-button hud-launcher-button${props.active ? " is-active" : ""}`}
+      onClick={props.onClick}
+      type="button"
+    >
+      <Glyph icon={props.icon} />
+      <span>{props.label}</span>
+    </button>
+  );
+}
+
+function IconNavButton(props: {
+  panelKey: PanelKey;
+  label: string;
+  detail: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`icon-nav-button${props.active ? " is-active" : ""}`}
+      onClick={props.onClick}
+      type="button"
+    >
+      <Glyph icon={props.panelKey} />
+      <span className="icon-nav-copy">
+        <strong>{props.label}</strong>
+        <span>{props.detail}</span>
+      </span>
+    </button>
+  );
+}
+
+function StatusRing(props:
+  | { label: string; value: number; total: number }
+  | { label: string; values: Array<{ label: string; value: number; tone: "ok" | "neutral" | "degraded" }> }
+) {
+  const totalValue = "values" in props ? props.values.reduce((sum, item) => sum + item.value, 0) : props.total;
+  const currentValue = "values" in props ? Math.max(...props.values.map((item) => item.value), 0) : props.value;
+  const safeTotal = Math.max(totalValue, 1);
+  const ratio = Math.max(0, Math.min(1, currentValue / safeTotal));
+  const circumference = 94;
+  const dashOffset = circumference * (1 - ratio);
+  return (
+    <div className="status-ring">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <circle className="status-ring-base" cx="20" cy="20" r="15" />
+        <circle
+          className="status-ring-segment"
+          cx="20"
+          cy="20"
+          r="15"
+          strokeDasharray={circumference}
+          strokeDashoffset={dashOffset}
+        />
+      </svg>
+      <div>
+        <strong>
+          {"values" in props ? `${props.values.length} lanes` : `${props.value}/${props.total}`}
+        </strong>
+        <span>{props.label}</span>
+      </div>
+    </div>
+  );
+}
+
+function SparkBars(props: { values: number[]; label?: string; captions?: string[] }) {
+  const maxValue = Math.max(...props.values, 1);
+  return (
+    <div className="detail-stack">
+      {props.label ? <span className="surface-shell-page-label">{props.label}</span> : null}
+      <div className="spark-bars" aria-hidden="true">
+        {props.values.map((value, index) => (
+          <span
+            key={`${value}-${index}`}
+            title={props.captions?.[index]}
+            style={{ height: `${Math.max(12, (value / maxValue) * 100)}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function QueuePulseBars(props: {
+  queues?: AgentTaskCollection["queues"];
+  values?: number[];
+}) {
+  const entries =
+    props.queues?.map((queue) => ({
+      label: queue.queueName,
+      value: queue.queuedCount + queue.leasedCount,
+      tone: queue.failedCount > 0 ? "degraded" : queue.leasedCount > 0 ? "neutral" : "ok"
+    })) ??
+    (props.values ?? []).map((value, index) => ({
+      label: `Lane ${index + 1}`,
+      value,
+      tone: value > 0 ? "neutral" : "ok"
+    }));
+  const maxValue = Math.max(...entries.map((entry) => entry.value), 1);
+  if (!entries.length) {
+    return <p className="empty-copy">No queue pulse data available.</p>;
+  }
+  return (
+    <div className="queue-pulse-list">
+      {entries.map((entry) => (
+        <div key={entry.label} className="queue-pulse-row">
+          <div className="queue-pulse-label">
+            <strong>{entry.label}</strong>
+            <span>{entry.value}</span>
+          </div>
+          <div className="queue-pulse-bar">
+            <div
+              className={`queue-pulse-fill tone-${entry.tone}`}
+              style={{ width: `${Math.max(8, (entry.value / maxValue) * 100)}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function QuestionnaireProgressMeter(props: { currentStep: number; totalSteps: number }) {
+  const ratio = props.totalSteps > 0 ? (props.currentStep + 1) / props.totalSteps : 0;
+  return (
+    <div className="questionnaire-progress">
+      <span>Step {Math.min(props.currentStep + 1, props.totalSteps)} / {props.totalSteps}</span>
+      <div className="questionnaire-progress-track">
+        <div className="questionnaire-progress-fill" style={{ width: `${ratio * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function VisualAlertStrip(props: { items: string[] }) {
+  if (!props.items.length) {
+    return (
+      <div className="visual-alert-strip">
+        <StatusPill status="ok">No visual alerts</StatusPill>
+      </div>
+    );
+  }
+  return (
+    <div className="visual-alert-strip">
+      {props.items.slice(0, 4).map((item) => (
+        <StatusPill key={item} status="neutral">{item}</StatusPill>
+      ))}
+    </div>
+  );
+}
+
+function SurfaceCarousel(props: {
+  panelKey: PanelKey;
+  title: string;
+  summary: string;
+  pages: SurfacePageDefinition[];
+  activePage: string;
+  onPageChange: (pageKey: string, origin: SurfacePageOrigin) => void;
+}) {
+  const activeIndex = Math.max(0, props.pages.findIndex((page) => page.key === props.activePage));
+  const activePage = props.pages[activeIndex] ?? props.pages[0];
+
+  React.useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+      const nextIndex =
+        event.key === "ArrowRight"
+          ? Math.min(props.pages.length - 1, activeIndex + 1)
+          : Math.max(0, activeIndex - 1);
+      if (nextIndex !== activeIndex) {
+        props.onPageChange(props.pages[nextIndex].key, "arrow");
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeIndex, props]);
+
+  return (
+    <section className="surface-carousel">
+      <header className="surface-carousel-header">
+        <div className="surface-shell-copy">
+          <span className="surface-shell-page-label">{activePage?.eyebrow ?? props.title}</span>
+          <h3>{props.title}</h3>
+          <p>{activePage?.summary ?? props.summary}</p>
+        </div>
+        <div className="surface-carousel-controls">
+          <button
+            type="button"
+            onClick={() => props.onPageChange(props.pages[Math.max(0, activeIndex - 1)].key, "arrow")}
+            disabled={activeIndex === 0}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onPageChange(props.pages[Math.min(props.pages.length - 1, activeIndex + 1)].key, "arrow")}
+            disabled={activeIndex === props.pages.length - 1}
+          >
+            Next
+          </button>
+        </div>
+      </header>
+      <div className="surface-carousel-stage">
+        <div className="surface-carousel-track" style={{ transform: `translateX(-${activeIndex * 100}%)` }}>
+          {props.pages.map((page) => (
+            <section key={page.key} className="surface-carousel-page" aria-hidden={page.key !== activePage?.key}>
+              <div className="surface-carousel-page-inner">{page.content}</div>
+            </section>
+          ))}
+        </div>
+      </div>
+      <div className="surface-carousel-markers">
+        {props.pages.map((page) => (
+          <button
+            key={page.key}
+            className={`surface-carousel-marker${page.key === activePage?.key ? " is-active" : ""}`}
+            onClick={() => props.onPageChange(page.key, "marker")}
+            type="button"
+          >
+            <strong>{page.label}</strong>
+            <span>{page.eyebrow}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function QuestionnairePage(props: {
+  panelKey: PanelKey;
+  questionnaireKey: string;
+  title: string;
+  description: string;
+  steps: QuestionnaireStep[];
+  onEvent: (
+    panelKey: PanelKey,
+    questionnaireKey: string,
+    questionKey: string | null,
+    optionKey: string | null,
+    eventKind: "started" | "answered" | "completed"
+  ) => Promise<void>;
+  onExit: () => void;
+}) {
+  const [stepIndex, setStepIndex] = React.useState(0);
+  const [answers, setAnswers] = React.useState<Record<string, string>>({});
+  const step = props.steps[stepIndex];
+  const selectedOption = answers[step.key] ?? null;
+
+  React.useEffect(() => {
+    void props.onEvent(props.panelKey, props.questionnaireKey, null, null, "started");
+  }, [props]);
+
+  async function selectOption(optionKey: string) {
+    setAnswers((current) => ({ ...current, [step.key]: optionKey }));
+    await props.onEvent(props.panelKey, props.questionnaireKey, step.key, optionKey, "answered");
+  }
+
+  async function completeQuestionnaire() {
+    await props.onEvent(props.panelKey, props.questionnaireKey, null, null, "completed");
+    props.onExit();
+  }
+
+  return (
+    <div className="questionnaire-shell">
+      <div className="questionnaire-brief">
+        <h3>{props.title}</h3>
+        <p>{props.description}</p>
+      </div>
+      <div className="questionnaire-stage">
+        <div className="questionnaire-card">
+          <QuestionnaireProgressMeter currentStep={stepIndex} totalSteps={props.steps.length} />
+          <div className="section-heading">
+            <h4>{step.prompt}</h4>
+            <p>Multiple choice only. One supervised answer per step.</p>
+          </div>
+          <div className="questionnaire-options">
+            {step.options.map((option) => (
+              <button
+                key={option.key}
+                className={`questionnaire-option${selectedOption === option.key ? " is-active" : ""}`}
+                onClick={() => void selectOption(option.key)}
+                type="button"
+              >
+                <strong>{option.label}</strong>
+                <span>{option.description}</span>
+              </button>
+            ))}
+          </div>
+          <div className="action-strip">
+            <button type="button" onClick={() => setStepIndex((current) => Math.max(0, current - 1))} disabled={stepIndex === 0}>
+              Back
+            </button>
+            {stepIndex < props.steps.length - 1 ? (
+              <button
+                type="button"
+                onClick={() => setStepIndex((current) => Math.min(props.steps.length - 1, current + 1))}
+                disabled={!selectedOption}
+              >
+                Continue
+              </button>
+            ) : (
+              <button type="button" onClick={() => void completeQuestionnaire()} disabled={!selectedOption}>
+                Complete
+              </button>
+            )}
+            <button type="button" onClick={props.onExit}>
+              Return
+            </button>
+          </div>
+        </div>
+        <aside className="questionnaire-sidebar">
+          <ListBlock
+            items={props.steps.map((question, index) => ({
+              title: `${String(index + 1).padStart(2, "0")} · ${question.key}`,
+              subtitle: answers[question.key] ? `Answer: ${answers[question.key]}` : "Pending"
+            }))}
+          />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function PreviewSurface(props: {
   previewDecks: PresentationDeckSourceCollection | null;
   previewRuns: PreviewRunCollection | null;
   selectedPreviewRunId: number | null;
@@ -1375,424 +2289,275 @@ function PreviewPanel(props: {
   loading: boolean;
   onStartPreview: (deckKey: string) => void;
   onSelectPreviewRun: (previewRunId: number) => void;
-  onSubmitFeedback: (
-    previewRunId: number,
-    feedbackKind: string,
-    comment: string,
-    slideId?: string | null
-  ) => void;
+  onSubmitFeedback: (previewRunId: number, feedbackKind: string, comment: string, slideId?: string | null) => void;
+  onHydratePreviewState: () => Promise<void>;
   onStageModeChange: (mode: "conversation" | "deck") => void;
+  onSurfacePageChange: (panelKey: PanelKey, pageKey: string, origin: SurfacePageOrigin) => Promise<void>;
+  onSurfaceCardSignal: (panelKey: PanelKey, cardKey: string) => Promise<void>;
+  onQuestionnaireEvent: (
+    panelKey: PanelKey,
+    questionnaireKey: string,
+    questionKey: string | null,
+    optionKey: string | null,
+    eventKind: "started" | "answered" | "completed"
+  ) => Promise<void>;
 }) {
+  const [page, setPage] = React.useState("stage");
+  const [returnPage, setReturnPage] = React.useState("stage");
+  const [selectedDeckKey, setSelectedDeckKey] = React.useState("");
+  const [selectedSlideId, setSelectedSlideId] = React.useState<string | null>(null);
+  const [feedbackScope, setFeedbackScope] = React.useState("");
+  const [feedbackComment, setFeedbackComment] = React.useState("");
+  const [stageMode, setStageMode] = React.useState<"conversation" | "deck">("conversation");
+  const previewDecksLoaded = props.previewDecks !== null;
+  const previewRunsLoaded = props.previewRuns !== null;
   const decks = props.previewDecks?.items ?? [];
   const runs = props.previewRuns?.runs ?? [];
-  const selectedRun =
-    props.selectedPreviewRun ??
-    (props.selectedPreviewRunId === null
-      ? null
-      : runs.find((run) => run.previewRunId === props.selectedPreviewRunId) ?? null);
-  const feedbackItems = props.previewFeedback?.items ?? [];
+  const selectedRun = props.selectedPreviewRun ?? pickPreferredPreviewRun(props.previewRuns, props.selectedPreviewRunId);
   const manifest = parsePreviewManifest(selectedRun);
   const previewAnalysis = summarizePreviewAnalysis(selectedRun);
   const slides = manifest?.slides ?? [];
-  const [selectedDeckKey, setSelectedDeckKey] = React.useState("");
-  const [focusedSlideId, setFocusedSlideId] = React.useState<string | null>(null);
-  const [feedbackSlideId, setFeedbackSlideId] = React.useState("");
-  const [feedbackComment, setFeedbackComment] = React.useState("");
-  const [stageMode, setStageMode] = React.useState<"conversation" | "deck">("conversation");
-  const lastStageModeSignal = React.useRef<"conversation" | "deck" | null>(null);
-  const deckSignature = decks.map((deck) => deck.deckKey).join("|");
-  const slideSignature = slides.map((slide) => slide.slideId).join("|");
-  const selectedDeck = decks.find((deck) => deck.deckKey === selectedDeckKey) ?? decks[0] ?? null;
+  const selectedDeck =
+    decks.find((deck) => deck.deckKey === selectedDeckKey) ??
+    decks.find((deck) => deck.deckKey === selectedRun?.deckKey) ??
+    decks[0] ??
+    null;
   const selectedSlide =
-    slides.find((slide) => slide.slideId === focusedSlideId) ?? slides[0] ?? null;
+    slides.find((slide) => slide.slideId === selectedSlideId) ??
+    slides[0] ??
+    null;
   const previewHtmlPath = extractPreviewHtmlPath(selectedRun);
   const previewUrl = previewHtmlPath ? devConsoleApi.previewAssetUrl(previewHtmlPath) : null;
-  const selectedPreviewDeckKey = selectedRun?.deckKey ?? null;
-  const runFeedbackItems = feedbackItems.filter((item) => !item.slideId);
-  const slideFeedbackItems = selectedSlide
-    ? feedbackItems.filter((item) => item.slideId === selectedSlide.slideId)
-    : [];
-  const communicationItems =
-    selectedSlide && slideFeedbackItems.length
-      ? [...slideFeedbackItems, ...runFeedbackItems]
-      : runFeedbackItems.length
-        ? runFeedbackItems
-        : slideFeedbackItems;
-  const communicationSummary = summarizePreviewFeedback(communicationItems);
+  const feedbackItems = props.previewFeedback?.items ?? [];
+  const scopedFeedback = selectedSlide
+    ? feedbackItems.filter((item) => !item.slideId || item.slideId === selectedSlide.slideId)
+    : feedbackItems;
+  const feedbackSummary = summarizePreviewFeedback(scopedFeedback);
 
   React.useEffect(() => {
-    setSelectedDeckKey((current) => {
-      if (current && decks.some((deck) => deck.deckKey === current)) {
-        return current;
-      }
-      if (
-        selectedPreviewDeckKey &&
-        decks.some((deck) => deck.deckKey === selectedPreviewDeckKey)
-      ) {
-        return selectedPreviewDeckKey;
-      }
-      return decks[0]?.deckKey ?? "";
-    });
-  }, [deckSignature, selectedPreviewDeckKey, decks]);
+    void props.onSurfacePageChange("preview", page, "auto");
+  }, [page, props]);
 
   React.useEffect(() => {
-    setFocusedSlideId((current) => {
-      if (current && slides.some((slide) => slide.slideId === current)) {
-        return current;
-      }
-      return slides[0]?.slideId ?? null;
-    });
-  }, [selectedRun?.previewRunId, slideSignature, slides]);
+    if (!selectedDeckKey && decks.length) {
+      setSelectedDeckKey(selectedRun?.deckKey ?? decks[0].deckKey);
+    }
+  }, [decks, selectedDeckKey, selectedRun?.deckKey]);
 
   React.useEffect(() => {
-    setFeedbackSlideId("");
-    setFeedbackComment("");
-    setStageMode("conversation");
-  }, [selectedRun?.previewRunId]);
+    setSelectedSlideId(slides[0]?.slideId ?? null);
+  }, [selectedRun?.previewRunId, slides]);
 
   React.useEffect(() => {
-    if (lastStageModeSignal.current === stageMode) {
+    void props.onStageModeChange(stageMode);
+  }, [props, stageMode]);
+
+  React.useEffect(() => {
+    if (!previewDecksLoaded || previewRunsLoaded) {
       return;
     }
-    lastStageModeSignal.current = stageMode;
-    void props.onStageModeChange(stageMode);
-  }, [props.onStageModeChange, stageMode]);
+    void props.onHydratePreviewState();
+  }, [previewDecksLoaded, previewRunsLoaded, props]);
+
+  function changePage(pageKey: string, origin: SurfacePageOrigin) {
+    if (pageKey === "questions") {
+      setReturnPage(page);
+    }
+    setPage(pageKey);
+    void props.onSurfacePageChange("preview", pageKey, origin);
+  }
 
   function submitFeedback(feedbackKind: string) {
     if (!selectedRun) {
       return;
     }
-    void props.onSubmitFeedback(
-      selectedRun.previewRunId,
-      feedbackKind,
-      feedbackComment.trim(),
-      feedbackSlideId || null
-    );
+    props.onSubmitFeedback(selectedRun.previewRunId, feedbackKind, feedbackComment.trim(), feedbackScope || null);
     setFeedbackComment("");
   }
 
-  return (
-    <Panel title="Preview Workspace" eyebrow="Decks">
-      <div className="preview-summary-row">
-        <InfoCard
-          label="Decks"
-          value={String(decks.length)}
-          detail={selectedDeck?.deckKey ?? "Choose a deck source to start a preview run."}
-        />
-        <InfoCard
-          label="Runs"
-          value={String(runs.length)}
-          detail={
-            selectedRun
-              ? `Selected #${selectedRun.previewRunId} · ${selectedRun.status}`
-              : "No preview run selected."
-          }
-        />
-        <InfoCard
-          label="Slides"
-          value={String(slides.length)}
-          detail={
-            previewAnalysis.slideCount
-              ? `${previewAnalysis.slideCount} analyzed screenshots`
-              : "Manifest only"
-          }
-        />
-      </div>
-
-      <div className="preview-workspace">
-        <aside className="preview-sidebar">
-          <section className="preview-section">
-            <div className="preview-section-header">
-              <div>
-                <h3>Deck Sources</h3>
-                <p>Markdown and preview companion files are cataloged before render.</p>
-              </div>
-              <button
-                onClick={() => void props.onStartPreview(selectedDeckKey)}
-                disabled={!selectedDeckKey}
-              >
-                Start preview run
-              </button>
-            </div>
-            <div className="preview-list">
-              {decks.length ? (
-                decks.map((deck) => (
-                  <button
-                    key={deck.deckKey}
-                    className={`preview-list-item${selectedDeckKey === deck.deckKey ? " is-active" : ""}`}
-                    onClick={() => setSelectedDeckKey(deck.deckKey)}
-                  >
-                    <span className="preview-list-title">{deck.title}</span>
-                    <span className="preview-list-subtitle">{deck.deckKey}</span>
-                    <span className="preview-list-meta">
-                      {deck.slideCount} slides · {deck.hasPreviewCompanion ? "companion ready" : "markdown only"}
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <p className="preview-empty-state">
-                  {props.loading ? "Loading preview decks…" : "No preview decks found."}
-                </p>
-              )}
-            </div>
-          </section>
-
-          <section className="preview-section">
-            <div className="preview-section-header">
-              <div>
-                <h3>Preview Runs</h3>
-                <p>Render and analysis history from the dev plane.</p>
-              </div>
-            </div>
-            <div className="preview-list">
-              {runs.length ? (
-                runs.map((run) => (
-                  <button
-                    key={run.previewRunId}
-                    className={`preview-list-item${selectedRun?.previewRunId === run.previewRunId ? " is-active" : ""}`}
-                    onClick={() => void props.onSelectPreviewRun(run.previewRunId)}
-                  >
-                    <div className="preview-run-heading">
-                      <span className="preview-list-title">Run #{run.previewRunId}</span>
-                      <StatusPill status={statusToneForPreviewRun(run.status)}>{run.status}</StatusPill>
+  const pages: SurfacePageDefinition[] = [
+    {
+      key: "launch",
+      label: "Launch",
+      eyebrow: "Deck Sources",
+      summary: "Start a render from source-verified deck inputs without burying the stage.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-preview-launch">
+          <Panel title="Deck Sources" eyebrow="Catalog">
+            <ListBlock
+              emptyLabel={previewDecksLoaded ? "No preview decks found." : "Loading preview decks…"}
+              items={decks.map((deck) => ({
+                title: deck.title,
+                subtitle: `${deck.slideCount} slides · ${deck.deckKey}`,
+                body: (
+                  <div className="detail-stack">
+                    <p className="detail-copy">{deck.summary || "No summary recorded."}</p>
+                    <div className="action-strip">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDeckKey(deck.deckKey);
+                          void props.onSurfaceCardSignal("preview", `deck:${deck.deckKey}`);
+                        }}
+                      >
+                        Select
+                      </button>
+                      <button type="button" onClick={() => props.onStartPreview(deck.deckKey)}>
+                        Start preview
+                      </button>
                     </div>
-                    <span className="preview-list-subtitle">{run.deckKey}</span>
-                    <span className="preview-list-meta">Updated {formatTimestamp(run.updatedAt)}</span>
-                  </button>
-                ))
-              ) : (
-                <p className="preview-empty-state">
-                  {props.loading ? "Loading preview runs…" : "No preview runs recorded yet."}
-                </p>
-              )}
-            </div>
-          </section>
-        </aside>
-
-        <section className="preview-stage-column">
-          <div className="preview-stage-toolbar">
-            <div>
-              <h3>{selectedRun?.title ?? "Select a preview run"}</h3>
-              <p>
-                {selectedRun
-                  ? `${selectedRun.deckKey} · ${selectedRun.browser} · ${formatViewport(selectedRun.viewportJson)}`
-                  : "Open a generated HTML deck here after starting or selecting a run."}
-              </p>
-            </div>
-            {selectedRun ? (
-              <div className="preview-stage-actions">
-                <div className="preview-chip-row">
-                  <StatusPill status={statusToneForPreviewRun(selectedRun.status)}>
-                    {selectedRun.status}
-                  </StatusPill>
-                  <StatusPill status={previewAnalysis.hasWarnings ? "neutral" : "ok"}>
-                    {previewAnalysis.hasWarnings ? "analysis warnings" : "analysis clean"}
-                  </StatusPill>
-                </div>
-                <div className="preview-stage-toggle">
-                  <button
-                    className={stageMode === "conversation" ? "is-active" : ""}
-                    onClick={() => setStageMode("conversation")}
-                  >
-                    Slide review
-                  </button>
-                  <button
-                    className={stageMode === "deck" ? "is-active" : ""}
-                    onClick={() => setStageMode("deck")}
-                    disabled={!previewUrl}
-                  >
-                    Full deck
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="preview-stage-frame">
-            {selectedRun && stageMode === "conversation" ? (
-              <SlideConversationStage
-                run={selectedRun}
-                selectedSlide={selectedSlide}
-                slides={slides}
-                communicationItems={communicationItems}
-                communicationSummary={communicationSummary}
-                previewUrl={previewUrl}
-                onSelectSlide={setFocusedSlideId}
+                  </div>
+                )
+              }))}
+            />
+          </Panel>
+          <Panel title="Launch Summary" eyebrow="Readiness">
+            <div className="detail-stack">
+              <StatusRing value={runs.length} total={Math.max(runs.length, 1)} label="Preview runs" />
+              <FactGrid
+                entries={[
+                  { label: "Selected deck", value: selectedDeck?.deckKey ?? "none" },
+                  { label: "Companion", value: selectedDeck?.hasPreviewCompanion ? "present" : "markdown only" },
+                  { label: "Latest run", value: selectedRun ? `#${selectedRun.previewRunId}` : "none" },
+                  { label: "Slides", value: selectedDeck ? String(selectedDeck.slideCount) : "0" }
+                ]}
               />
-            ) : previewUrl ? (
-              <iframe
-                key={previewUrl}
-                title={selectedRun?.title ?? "Preview run"}
-                src={previewUrl}
-                sandbox="allow-scripts allow-popups allow-presentation"
-                className="preview-iframe"
-              />
-            ) : selectedDeck ? (
-              <DeckSourcePreview deck={selectedDeck} />
-            ) : (
-              <PreviewEmptyState loading={props.loading} />
-            )}
-          </div>
-
-          <div className="preview-stage-footer">
-            <div className="preview-paths">
-              <span>Markdown: {manifest?.markdownPath ?? selectedRun?.markdownPath ?? "n/a"}</span>
-              <span>Companion: {manifest?.companionPath ?? selectedRun?.companionPath ?? "none"}</span>
-              <span>HTML: {previewHtmlPath ?? "not rendered yet"}</span>
+              {selectedDeck ? <DeckSourcePreview deck={selectedDeck} /> : <PreviewEmptyState loading={props.loading} />}
             </div>
-            {previewUrl ? (
-              <a href={previewUrl} target="_blank" rel="noreferrer">
-                Open preview artifact
-              </a>
-            ) : null}
-          </div>
-
-          {previewAnalysis.hasWarnings ? (
-            <div className="preview-warning-block">
-              {previewAnalysis.warnings.length ? <p>{previewAnalysis.warnings.join(" ")}</p> : null}
-              {previewAnalysis.consoleErrors.length ? (
-                <p>Console errors: {previewAnalysis.consoleErrors.join(" | ")}</p>
-              ) : null}
-              {previewAnalysis.requestFailures.length ? (
-                <p>Request failures: {previewAnalysis.requestFailures.join(" | ")}</p>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-
-        <aside className="preview-inspector">
-          <section className="preview-section">
-            <div className="preview-section-header">
-              <div>
-                <h3>Slides</h3>
-                <p>Slide navigation and source data come from `manifestJson`.</p>
-              </div>
-            </div>
-            <div className="preview-slide-list">
-              {slides.length ? (
-                slides.map((slide, index) => (
-                  <button
-                    key={slide.slideId}
-                    className={`preview-slide-button${selectedSlide?.slideId === slide.slideId ? " is-active" : ""}`}
-                    onClick={() => setFocusedSlideId(slide.slideId)}
-                  >
-                    <span className="preview-slide-index">{String(index + 1).padStart(2, "0")}</span>
-                    <span className="preview-slide-copy">
-                      <strong>{slide.title}</strong>
-                      <span>{slide.slideId}</span>
-                    </span>
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "stage",
+      label: "Stage",
+      eyebrow: "Mission Surface",
+      summary: "Keep the preview stage above the fold with run and slide context docked around it.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-wide">
+          <Panel title="Preview Stage" eyebrow="Renderable">
+            <div className="detail-stack">
+              <div className="action-strip">
+                <button type="button" onClick={() => setStageMode("conversation")}>Slide Review</button>
+                <button type="button" onClick={() => setStageMode("deck")} disabled={!previewUrl}>Full Deck</button>
+                {selectedRun ? (
+                  <button type="button" onClick={() => void props.onSelectPreviewRun(selectedRun.previewRunId)}>
+                    Refresh selected run
                   </button>
-                ))
-              ) : (
-                <p className="preview-empty-state">
-                  {selectedRun ? "No slide manifest data available yet." : "Select a preview run to inspect slides."}
-                </p>
-              )}
-            </div>
-          </section>
-
-          <section className="preview-section">
-            <div className="preview-section-header">
-              <div>
-                <h3>Slide Source</h3>
-                <p>{selectedSlide ? selectedSlide.slideId : "No slide selected."}</p>
-              </div>
-            </div>
-            {selectedSlide ? (
-              <div className="preview-slide-detail">
-                <div className="preview-detail-group">
-                  <span className="preview-detail-label">Audience goal</span>
-                  <p>{selectedSlide.audienceGoal || "Not specified."}</p>
-                </div>
-                <div className="preview-detail-group">
-                  <span className="preview-detail-label">Visual guidance</span>
-                  <p>{selectedSlide.visualGuidance || "Not specified."}</p>
-                </div>
-                <div className="preview-detail-group">
-                  <span className="preview-detail-label">Bullets</span>
-                  {selectedSlide.bullets.length ? (
-                    <ul className="preview-detail-list">
-                      {selectedSlide.bullets.map((bullet) => (
-                        <li key={bullet}>{bullet}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>No bullets captured.</p>
-                  )}
-                </div>
-                <div className="preview-detail-group">
-                  <span className="preview-detail-label">Media</span>
-                  {selectedSlide.media.length ? (
-                    <ul className="preview-detail-list">
-                      {selectedSlide.media.map((media, index) => (
-                        <li key={`${media.kind}-${media.source ?? index}`}>
-                          {media.kind}
-                          {media.source ? ` · ${media.source}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>No media declared.</p>
-                  )}
-                </div>
-                <div className="preview-detail-group">
-                  <span className="preview-detail-label">Evidence paths</span>
-                  {selectedSlide.evidencePaths.length ? (
-                    <ul className="preview-detail-list">
-                      {selectedSlide.evidencePaths.map((evidencePath) => (
-                        <li key={evidencePath}>{evidencePath}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>No evidence references listed.</p>
-                  )}
-                </div>
-                <div className="preview-detail-group">
-                  <span className="preview-detail-label">Speaker notes</span>
-                  <p>{selectedSlide.speakerNotes || "No speaker notes."}</p>
-                </div>
-                {selectedSlide.screenshotPath ? (
-                  <a
-                    href={devConsoleApi.previewAssetUrl(selectedSlide.screenshotPath)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="preview-screenshot-link"
-                  >
-                    <img
-                      src={devConsoleApi.previewAssetUrl(selectedSlide.screenshotPath)}
-                      alt={`${selectedSlide.title} screenshot`}
-                      className="preview-screenshot"
-                    />
-                    <span>{selectedSlide.screenshotPath}</span>
-                  </a>
                 ) : null}
               </div>
-            ) : (
-              <p className="preview-empty-state">No slide detail available.</p>
-            )}
-          </section>
-
-          <section className="preview-section">
-            <div className="preview-section-header">
-              <div>
-                <h3>Communication Thread</h3>
-                <p>Run-level decisions and slide-specific review stay in one supervised thread.</p>
-              </div>
+              {selectedRun && stageMode === "conversation" ? (
+                <SlideConversationStage
+                  run={selectedRun}
+                  selectedSlide={selectedSlide}
+                  slides={slides}
+                  communicationItems={scopedFeedback}
+                  communicationSummary={feedbackSummary}
+                  previewUrl={previewUrl}
+                  onSelectSlide={(slideId) => {
+                    setSelectedSlideId(slideId);
+                    void props.onSurfaceCardSignal("preview", `slide:${slideId}`);
+                  }}
+                />
+              ) : previewUrl ? (
+                <iframe
+                  className="preview-iframe"
+                  key={previewUrl}
+                  src={previewUrl}
+                  title={selectedRun?.title ?? "Preview stage"}
+                  sandbox="allow-scripts allow-popups allow-presentation"
+                />
+              ) : (
+                <PreviewEmptyState loading={props.loading} />
+              )}
             </div>
-            {selectedRun ? (
-              <div className="preview-feedback-form">
-                <label className="preview-field">
-                  <span>Feedback scope</span>
-                  <select
-                    value={feedbackSlideId}
-                    onChange={(event) => setFeedbackSlideId(event.target.value)}
-                    style={inputStyle}
+          </Panel>
+          <Panel title="Run Rail" eyebrow="Recent">
+            <ListBlock
+              emptyLabel={previewRunsLoaded ? "No preview runs recorded yet." : "Loading preview runs…"}
+              items={runs.slice(0, 10).map((run) => ({
+                title: `Run #${run.previewRunId}`,
+                subtitle: `${run.status} · ${run.deckKey}`,
+                body: (
+                  <div className="action-strip">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        props.onSelectPreviewRun(run.previewRunId);
+                        void props.onSurfaceCardSignal("preview", `run:${run.previewRunId}`);
+                      }}
+                    >
+                      Inspect
+                    </button>
+                    <StatusPill status={statusToneForPreviewRun(run.status)}>{run.status}</StatusPill>
+                  </div>
+                )
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "evidence",
+      label: "Evidence",
+      eyebrow: "Inspector",
+      summary: "Source bullets, evidence, slide screenshots, and supervised feedback stay on one bounded page.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-evidence">
+          <Panel title="Slides" eyebrow="Manifest">
+            <ListBlock
+              emptyLabel={selectedRun ? "No slides found in the manifest." : "Select a preview run first."}
+              items={slides.map((slide) => ({
+                title: slide.title,
+                subtitle: slide.slideId,
+                body: (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedSlideId(slide.slideId);
+                      void props.onSurfaceCardSignal("preview", `slide:${slide.slideId}`);
+                    }}
                   >
+                    Focus slide
+                  </button>
+                )
+              }))}
+            />
+          </Panel>
+          <Panel title="Selected Slide" eyebrow="Source">
+            {selectedSlide ? (
+              <div className="detail-stack">
+                <FactGrid
+                  entries={[
+                    { label: "Slide", value: selectedSlide.slideId },
+                    { label: "Audience goal", value: selectedSlide.audienceGoal || "Not specified" },
+                    { label: "Media", value: String(selectedSlide.media.length) },
+                    { label: "Evidence", value: String(selectedSlide.evidencePaths.length) }
+                  ]}
+                />
+                <StructuredValue
+                  value={{
+                    bullets: selectedSlide.bullets,
+                    visualGuidance: selectedSlide.visualGuidance,
+                    speakerNotes: selectedSlide.speakerNotes,
+                    evidencePaths: selectedSlide.evidencePaths
+                  }}
+                />
+              </div>
+            ) : (
+              <p className="empty-copy">No slide selected.</p>
+            )}
+          </Panel>
+          <Panel title="Feedback Thread" eyebrow="Supervised">
+            {selectedRun ? (
+              <div className="detail-stack">
+                <label className="preview-field">
+                  <span>Scope</span>
+                  <select value={feedbackScope} onChange={(event) => setFeedbackScope(event.target.value)} style={inputStyle}>
                     <option value="">Entire run</option>
                     {slides.map((slide) => (
-                      <option key={slide.slideId} value={slide.slideId}>
-                        {slide.title}
-                      </option>
+                      <option key={slide.slideId} value={slide.slideId}>{slide.title}</option>
                     ))}
                   </select>
                 </label>
@@ -1803,327 +2568,680 @@ function PreviewPanel(props: {
                     onChange={(event) => setFeedbackComment(event.target.value)}
                     rows={4}
                     style={inputStyle}
-                    placeholder="What should change, what was accepted, or what evidence is missing?"
+                    placeholder="Record the supervised review outcome."
                   />
                 </label>
-                <div className="preview-feedback-actions">
-                  <button onClick={() => submitFeedback("comment")}>Comment</button>
-                  <button onClick={() => submitFeedback("requested_changes")}>Request changes</button>
-                  <button onClick={() => submitFeedback("approved")}>Approve</button>
-                  <button onClick={() => submitFeedback("rejected")}>Reject</button>
+                <div className="action-strip">
+                  <button type="button" onClick={() => submitFeedback("comment")}>Comment</button>
+                  <button type="button" onClick={() => submitFeedback("requested_changes")}>Request Changes</button>
+                  <button type="button" onClick={() => submitFeedback("approved")}>Approve</button>
+                  <button type="button" onClick={() => submitFeedback("rejected")}>Reject</button>
                 </div>
+                <StatusRing value={feedbackSummary.approvedCount} total={Math.max(feedbackSummary.totalCount, 1)} label="Approval ratio" />
+                <ListBlock
+                  emptyLabel="No feedback recorded yet."
+                  items={feedbackItems.slice(0, 8).map((item) => ({
+                    title: item.feedbackKind,
+                    subtitle: `${item.slideId ?? "Entire run"} · ${formatTimestamp(item.createdAt)}`,
+                    body: <p className="detail-copy">{item.comment || "No comment provided."}</p>
+                  }))}
+                />
+                <VisualAlertStrip items={previewAnalysis.warnings} />
               </div>
             ) : (
-              <p className="preview-empty-state">Select a preview run before leaving feedback.</p>
+              <p className="empty-copy">Select a preview run before leaving feedback.</p>
             )}
-
-            {communicationItems.length ? (
-              <div className="preview-feedback-summary">
-                <StatusPill status="neutral">
-                  {selectedSlide ? `${slideFeedbackItems.length} slide-scoped` : "run-scoped"}
-                </StatusPill>
-                <StatusPill status="ok">{communicationSummary.approvedCount} approved</StatusPill>
-                <StatusPill status="neutral">
-                  {communicationSummary.requestedChangesCount} requested changes
-                </StatusPill>
-                <StatusPill status="degraded">{communicationSummary.rejectedCount} rejected</StatusPill>
-              </div>
-            ) : null}
-
-            <div className="preview-feedback-list">
-              {feedbackItems.length ? (
-                feedbackItems.map((item) => (
-                  <div key={item.previewFeedbackId} className="preview-feedback-item">
-                    <div className="preview-run-heading">
-                      <strong>{item.feedbackKind}</strong>
-                      <span>{formatTimestamp(item.createdAt)}</span>
-                    </div>
-                    <div className="preview-feedback-target">
-                      {item.slideId ? `Slide ${item.slideId}` : "Entire run"}
-                    </div>
-                    <p>{item.comment || "No comment provided."}</p>
-                  </div>
-                ))
-              ) : (
-                <p className="preview-empty-state">
-                  {selectedRun ? "No feedback recorded for this run yet." : "Feedback history appears once a run is selected."}
-                </p>
-              )}
-            </div>
-          </section>
-        </aside>
-      </div>
-    </Panel>
-  );
-}
-
-function OverviewPanel(props: { overview: WorkspaceOverview | null; loading: boolean }) {
-  return (
-    <Panel title="Workspace Overview" eyebrow="Health">
-      {props.loading && !props.overview ? <p>Loading workspace status…</p> : null}
-      {props.overview ? (
-        <div style={{ display: "grid", gap: tokens.space.lg }}>
-          <div style={gridStyle}>
-            <InfoCard
-              label="PostgreSQL"
-              value={`${props.overview.postgres.host}:${props.overview.postgres.port}`}
-              detail={props.overview.postgres.source}
-            />
-            <InfoCard
-              label="Reachability"
-              value={props.overview.postgres.reachable ? "reachable" : "unreachable"}
-              detail={props.overview.status}
-            />
-            <InfoCard
-              label="Latest backup"
-              value={props.overview.backup?.latestBackupKind ?? "none"}
-              detail={props.overview.backup?.latestBackupDir ?? "no local backup found"}
-            />
-          </div>
-          <div style={{ display: "grid", gap: tokens.space.sm }}>
-            {props.overview.services.map((service) => (
-              <div key={service.service} style={rowStyle}>
-                <div>
-                  <strong>{service.service}</strong>
-                  <div style={{ color: tokens.color.muted }}>{service.url}</div>
-                </div>
-                <StatusPill status={service.status}>{service.status}</StatusPill>
-              </div>
-            ))}
-          </div>
+          </Panel>
         </div>
-      ) : null}
-    </Panel>
+      )
+    },
+    {
+      key: "questions",
+      label: "Questions",
+      eyebrow: "Supervision",
+      summary: "Chronological, multiple-choice supervision for the preview lane.",
+      content: (
+        <QuestionnairePage
+          panelKey="preview"
+          questionnaireKey="preview-console"
+          title="Preview supervision"
+          description="Confirm the desired outcome, the next priority, and the immediate follow-up action."
+          steps={SURFACE_QUESTIONNAIRES.preview}
+          onEvent={props.onQuestionnaireEvent}
+          onExit={() => changePage(returnPage, "button")}
+        />
+      )
+    }
+  ];
+
+  return (
+    <SurfaceCarousel
+      panelKey="preview"
+      title="Preview"
+      summary="Slide-style previews, run history, and evidence-first feedback."
+      pages={pages}
+      activePage={page}
+      onPageChange={changePage}
+    />
   );
 }
 
-function CoordinationPanel(props: {
+function CoordinationSurface(props: {
   tasks: AgentTaskCollection | null;
   runs: AgentRunCollection | null;
   runDetail: AgentRunDetail | null;
   loading: boolean;
-  onSelectRun: (agentRunId: number) => void;
-  onRetrySelectedTask: () => void;
-  onEnqueue: (taskKind: string) => void;
-  onSupervision: (decisionKind: "accepted" | "rejected" | "overridden", subjectKey: string, chosenValue?: string) => void;
+  onSelectRun: (agentRunId: number) => Promise<void>;
+  onRetrySelectedTask: () => Promise<void>;
+  onEnqueue: (taskKind: string) => Promise<void>;
+  onSupervision: (decisionKind: "accepted" | "rejected" | "overridden", subjectKey: string, chosenValue?: string) => Promise<void>;
+  onSurfacePageChange: (panelKey: PanelKey, pageKey: string, origin: SurfacePageOrigin) => Promise<void>;
+  onSurfaceCardSignal: (panelKey: PanelKey, cardKey: string) => Promise<void>;
+  onQuestionnaireEvent: (
+    panelKey: PanelKey,
+    questionnaireKey: string,
+    questionKey: string | null,
+    optionKey: string | null,
+    eventKind: "started" | "answered" | "completed"
+  ) => Promise<void>;
 }) {
+  const [page, setPage] = React.useState("controls");
+  const [returnPage, setReturnPage] = React.useState("controls");
   const queues = props.tasks?.queues ?? [];
-  const tasks = props.tasks?.items.slice(0, 12) ?? [];
-  const runs = props.runs?.items.slice(0, 8) ?? [];
-  const selectedTask = props.runDetail?.task ?? null;
+  const runs = props.runs?.items ?? [];
+  const selectedRun = props.runDetail?.run ?? runs[0] ?? null;
+  const queueSummary = summarizeQueueHealth(queues);
 
-  return (
-    <div className="surface-stack">
-      <Panel title="Safe Controls" eyebrow="Actions">
-        <div className="card-list">
-          <ActionRow
-            label="Refresh embeddings"
-            taskKind="memory.run_embeddings"
-            onEnqueue={props.onEnqueue}
-            onSupervision={props.onSupervision}
-          />
-          <ActionRow
-            label="Refresh evaluations"
-            taskKind="memory.run_evaluations"
-            onEnqueue={props.onEnqueue}
-            onSupervision={props.onSupervision}
-          />
-          <ActionRow
-            label="Refresh doc catalog summary"
-            taskKind="catalog.refresh_doc_catalog"
-            onEnqueue={props.onEnqueue}
-            onSupervision={props.onSupervision}
-          />
-          <ActionRow
-            label="Refresh skill catalog summary"
-            taskKind="catalog.refresh_skill_catalog"
-            onEnqueue={props.onEnqueue}
-            onSupervision={props.onSupervision}
-          />
-        </div>
-      </Panel>
+  React.useEffect(() => {
+    void props.onSurfacePageChange("coordination", page, "auto");
+  }, [page, props]);
 
-      <Panel title="Queue Lanes" eyebrow="Coordination">
-        {queues.length ? (
-          <div className="queue-grid">
-            {queues.map((queue) => (
-              <div key={queue.queueName} className={`queue-card${queue.failedCount > 0 ? " is-danger" : ""}`}>
-                <div className="record-header">
-                  <div className="queue-title">
-                    <strong>{queue.queueName}</strong>
-                    <p className="record-subtitle">
-                      {queue.succeededCount} succeeded overall
-                    </p>
-                  </div>
-                  <StatusPill status={queue.failedCount > 0 ? "degraded" : queue.queuedCount > 0 || queue.leasedCount > 0 ? "neutral" : "ok"}>
-                    {queue.failedCount > 0 ? "attention" : queue.queuedCount > 0 || queue.leasedCount > 0 ? "active" : "clear"}
-                  </StatusPill>
-                </div>
-                <div className="queue-meta">
-                  <span className="token-chip">queued {queue.queuedCount}</span>
-                  <span className="token-chip">leased {queue.leasedCount}</span>
-                  <span className="token-chip">failed {queue.failedCount}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : props.loading ? <p className="empty-copy">Loading queue lanes…</p> : <p className="empty-copy">No queue data available.</p>}
-      </Panel>
+  function changePage(pageKey: string, origin: SurfacePageOrigin) {
+    if (pageKey === "questions") {
+      setReturnPage(page);
+    }
+    setPage(pageKey);
+    void props.onSurfacePageChange("coordination", pageKey, origin);
+  }
 
-      <div className="surface-split">
-        <Panel title="Recent Tasks" eyebrow="Queue History">
-          {tasks.length ? (
-            <div className="card-list">
-              {tasks.map((task) => (
-                <div
-                  key={task.agentTaskId}
-                  className={`record-card${task.status === "failed" ? " is-danger" : task.status === "queued" || task.status === "leased" ? " is-warning" : ""}`}
-                >
-                  <div className="record-header">
-                    <div className="record-title">
-                      <strong>{task.taskKind}</strong>
-                      <p className="record-subtitle">
-                        Task #{task.agentTaskId} in {task.queueName}
-                      </p>
-                    </div>
-                    <StatusPill status={task.status === "succeeded" ? "ok" : task.status === "failed" ? "degraded" : "neutral"}>
-                      {task.status}
-                    </StatusPill>
-                  </div>
-                  <div className="record-meta">
-                    <span className="token-chip">
-                      attempts {task.attemptCount}/{task.maxAttempts}
-                    </span>
-                    <span className="token-chip">updated {formatTimestamp(task.updatedAt)}</span>
-                    {task.completedAt ? <span className="token-chip">completed {formatTimestamp(task.completedAt)}</span> : null}
-                  </div>
-                  {task.lastError ? <p className="record-copy">{task.lastError}</p> : null}
-                </div>
+  const pages: SurfacePageDefinition[] = [
+    {
+      key: "controls",
+      label: "Controls",
+      eyebrow: "Dispatch",
+      summary: "Safe queue actions and retry controls stay on the first tray.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Quick Actions" eyebrow="Queue">
+            <div className="surface-page-grid">
+              {[
+                ["catalog.refresh_docs_catalog", "Refresh docs catalog"],
+                ["catalog.refresh_source_documents", "Refresh source documents"],
+                ["memory.run_embeddings", "Run embeddings"],
+                ["memory.run_evaluations", "Run evaluations"]
+              ].map(([taskKind, label]) => (
+                <ActionRow
+                  key={taskKind}
+                  label={label}
+                  taskKind={taskKind}
+                  onEnqueue={(value) => { void props.onEnqueue(value); }}
+                  onSupervision={(decisionKind, subjectKey, chosenValue) => {
+                    void props.onSupervision(decisionKind, subjectKey, chosenValue);
+                  }}
+                />
               ))}
             </div>
-          ) : props.loading ? <p className="empty-copy">Loading task history…</p> : <p className="empty-copy">No recent tasks available.</p>}
-        </Panel>
-
-        <Panel title="Run Detail" eyebrow="Timeline">
-          {props.runDetail ? (
-            <div className="surface-stack">
-              <div className={`record-card${props.runDetail.run.status === "failed" ? " is-danger" : ""}`}>
-                <div className="record-header">
-                  <div className="record-title">
-                    <strong>{props.runDetail.run.taskSlug}</strong>
-                    <p className="record-subtitle">
-                      Run #{props.runDetail.run.agentRunId} by {props.runDetail.run.agentName}
-                    </p>
-                  </div>
-                  <StatusPill status={props.runDetail.run.status === "succeeded" ? "ok" : props.runDetail.run.status === "failed" ? "degraded" : "neutral"}>
-                    {props.runDetail.run.status}
-                  </StatusPill>
-                </div>
+            <div className="action-strip">
+              <button type="button" onClick={() => void props.onRetrySelectedTask()} disabled={!props.runDetail?.task}>
+                Retry Selected Task
+              </button>
+            </div>
+          </Panel>
+          <Panel title="Queue Health" eyebrow="Telemetry">
+            <FactGrid
+              entries={[
+                { label: "Queued", value: queueSummary.queuedCount },
+                { label: "Leased", value: queueSummary.leasedCount },
+                { label: "Failed", value: queueSummary.failedCount },
+                { label: "State", value: queueSummary.statusLabel }
+              ]}
+            />
+            <QueuePulseBars queues={queues} />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "queues",
+      label: "Queues",
+      eyebrow: "Backlog",
+      summary: "Queue pressure and recent agent runs without long-form scroll.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Queue Snapshot" eyebrow="Current">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading task queues…" : "No queue data available."}
+              items={queues.map((queue) => ({
+                title: queue.queueName,
+                subtitle: `${queue.queuedCount} queued · ${queue.leasedCount} leased · ${queue.failedCount} failed`,
+                body: <p className="detail-copy">{queue.recentTasks.length} recent tasks tracked.</p>
+              }))}
+            />
+          </Panel>
+          <Panel title="Recent Runs" eyebrow="Selection">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading agent runs…" : "No agent runs recorded."}
+              items={runs.slice(0, 12).map((run) => ({
+                title: `#${run.agentRunId} · ${run.taskSlug}`,
+                subtitle: `${run.status} · ${run.agentName}`,
+                body: (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void props.onSelectRun(run.agentRunId);
+                      void props.onSurfaceCardSignal("coordination", `run:${run.agentRunId}`);
+                    }}
+                  >
+                    Inspect run
+                  </button>
+                )
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "run-detail",
+      label: "Run Detail",
+      eyebrow: "Timeline",
+      summary: "Selected run, task, events, and artifacts on one tray.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-wide">
+          <Panel title="Selected Run" eyebrow="Context">
+            {selectedRun ? (
+              <div className="detail-stack">
                 <FactGrid
                   entries={[
-                    { label: "Started", value: formatTimestamp(props.runDetail.run.startedAt) },
-                    { label: "Finished", value: props.runDetail.run.finishedAt ? formatTimestamp(props.runDetail.run.finishedAt) : "Still running" },
-                    { label: "Task queue", value: selectedTask?.queueName ?? "Detached from task row" },
-                    { label: "Attempts", value: selectedTask ? `${selectedTask.attemptCount}/${selectedTask.maxAttempts}` : "n/a" }
+                    { label: "Run", value: `#${selectedRun.agentRunId}` },
+                    { label: "Task", value: selectedRun.taskSlug },
+                    { label: "Status", value: selectedRun.status },
+                    { label: "Agent", value: selectedRun.agentName }
                   ]}
                 />
-                {selectedTask ? (
-                  <div className="action-strip">
-                    <button onClick={() => void props.onRetrySelectedTask()}>Retry selected task</button>
-                    <span className="token-chip">Task #{selectedTask.agentTaskId}</span>
-                    <span className="token-chip">{selectedTask.status}</span>
-                  </div>
-                ) : null}
-                {selectedTask?.lastError ? (
-                  <div className="detail-card is-danger">
-                    <div className="section-heading">
-                      <h4>Latest failure detail</h4>
-                    </div>
-                    <p className="detail-copy">{selectedTask.lastError}</p>
-                  </div>
-                ) : null}
+                <StructuredValue value={props.runDetail?.task ?? null} emptyLabel="No task detail loaded." />
               </div>
-
-              <div className="surface-split">
-                <div className="detail-stack">
-                  <div className="section-heading">
-                    <h3>Execution timeline</h3>
-                    <p>Recent event payloads are summarized by field instead of raw JSON.</p>
-                  </div>
-                  <div className="timeline-list">
-                    {props.runDetail.events.slice(0, 8).map((event) => (
-                      <div key={event.agentEventId} className="timeline-item">
-                        <div className="record-header">
-                          <div className="record-title">
-                            <strong>{event.eventType}</strong>
-                            <p className="record-subtitle">{formatTimestamp(event.createdAt)}</p>
-                          </div>
-                        </div>
-                        <StructuredValue value={event.payload} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="detail-stack">
-                  <div className="section-heading">
-                    <h3>Artifacts</h3>
-                    <p>Captured outputs and metadata linked from the dev plane.</p>
-                  </div>
-                  <div className="artifact-list">
-                    {props.runDetail.artifacts.length ? (
-                      props.runDetail.artifacts.slice(0, 6).map((artifact) => (
-                        <div key={artifact.artifactId} className="artifact-card">
-                          <div className="record-header">
-                            <div className="record-title">
-                              <strong>{artifact.artifactKind}</strong>
-                              <p className="record-subtitle">Artifact #{artifact.artifactId}</p>
-                            </div>
-                          </div>
-                          <ResourceLink uri={artifact.uri} />
-                          {artifact.metadata && Object.keys(artifact.metadata).length ? (
-                            <StructuredValue value={artifact.metadata} />
-                          ) : (
-                            <p className="empty-copy">No artifact metadata recorded.</p>
-                          )}
-                        </div>
-                      ))
-                    ) : (
-                      <p className="empty-copy">No artifacts linked to this run.</p>
-                    )}
-                  </div>
-                </div>
-              </div>
+            ) : (
+              <p className="empty-copy">No coordination run selected.</p>
+            )}
+          </Panel>
+          <Panel title="Events And Artifacts" eyebrow="Evidence">
+            <div className="surface-page-grid surface-page-grid-2">
+              <ListBlock
+                emptyLabel="No linked events."
+                items={(props.runDetail?.events ?? []).slice(0, 8).map((event) => ({
+                  title: event.eventType,
+                  subtitle: formatTimestamp(event.createdAt),
+                  body: <StructuredValue value={event.payload} emptyLabel="No event payload." />
+                }))}
+              />
+              <ListBlock
+                emptyLabel="No linked artifacts."
+                items={(props.runDetail?.artifacts ?? []).slice(0, 8).map((artifact) => ({
+                  title: artifact.artifactKind,
+                  subtitle: artifact.uri,
+                  body: <ResourceLink uri={artifact.uri} />
+                }))}
+              />
             </div>
-          ) : props.loading ? <p className="empty-copy">Loading run detail…</p> : <p className="empty-copy">No agent runs available yet.</p>}
-        </Panel>
-      </div>
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "questions",
+      label: "Questions",
+      eyebrow: "Supervision",
+      summary: "Chronological queue and ownership decisions.",
+      content: (
+        <QuestionnairePage
+          panelKey="coordination"
+          questionnaireKey="coordination-console"
+          title="Coordination supervision"
+          description="Confirm queue action, ownership scope, and urgency in order."
+          steps={SURFACE_QUESTIONNAIRES.coordination}
+          onEvent={props.onQuestionnaireEvent}
+          onExit={() => changePage(returnPage, "button")}
+        />
+      )
+    }
+  ];
 
-      <Panel title="Recent Runs" eyebrow="Selection">
-        {runs.length ? (
-          <div className="card-list">
-            {runs.map((run) => (
-              <button
-                key={`run-link-${run.agentRunId}`}
-                className="selection-button"
-                onClick={() => void props.onSelectRun(run.agentRunId)}
-              >
-                <strong>
-                  #{run.agentRunId} · {run.taskSlug}
-                </strong>
-                <span className="console-nav-description">
-                  {run.agentName} · started {formatTimestamp(run.startedAt)}
-                  {run.finishedAt ? ` · finished ${formatTimestamp(run.finishedAt)}` : ""}
-                </span>
-                <StatusPill status={run.status === "succeeded" ? "ok" : run.status === "failed" ? "degraded" : "neutral"}>
-                  {run.status}
-                </StatusPill>
-              </button>
-            ))}
-          </div>
-        ) : <p className="empty-copy">Use the queue and safe controls above to seed new runs.</p>}
-      </Panel>
-    </div>
+  return (
+    <SurfaceCarousel
+      panelKey="coordination"
+      title="Coordination"
+      summary="Agent queue health, safe controls, and selected run evidence."
+      pages={pages}
+      activePage={page}
+      onPageChange={changePage}
+    />
+  );
+}
+
+function ReviewSurface(props: {
+  reviewRuns: UiReviewRunCollection | null;
+  selectedReviewRun: UiReviewRun | null;
+  reviewFindings: UiReviewFindingCollection | null;
+  reviewBaselines: UiReviewBaselineCollection | null;
+  detailDepth: "compact" | "expanded";
+  loading: boolean;
+  onStartReview: () => Promise<void>;
+  onSelectReviewRun: (uiReviewRunId: number) => Promise<void>;
+  onReviewFinding: (findingId: number, status: "accepted" | "rejected") => Promise<void>;
+  onPromoteBaseline: () => Promise<void>;
+  onSurfacePageChange: (panelKey: PanelKey, pageKey: string, origin: SurfacePageOrigin) => Promise<void>;
+  onSurfaceCardSignal: (panelKey: PanelKey, cardKey: string) => Promise<void>;
+  onQuestionnaireEvent: (
+    panelKey: PanelKey,
+    questionnaireKey: string,
+    questionKey: string | null,
+    optionKey: string | null,
+    eventKind: "started" | "answered" | "completed"
+  ) => Promise<void>;
+}) {
+  const [page, setPage] = React.useState("runs");
+  const [returnPage, setReturnPage] = React.useState("runs");
+  const runs = props.reviewRuns?.runs ?? [];
+  const findings = props.reviewFindings?.findings ?? [];
+  const baselines = props.reviewBaselines?.baselines ?? [];
+  const selectedRun = props.selectedReviewRun ?? runs[0] ?? null;
+  const reviewSummary = selectedRun ? summarizeReviewSummary(selectedRun.analysisSummaryJson) : {};
+
+  React.useEffect(() => {
+    void props.onSurfacePageChange("review", page, "auto");
+  }, [page, props]);
+
+  function changePage(pageKey: string, origin: SurfacePageOrigin) {
+    if (pageKey === "questions") {
+      setReturnPage(page);
+    }
+    setPage(pageKey);
+    void props.onSurfacePageChange("review", pageKey, origin);
+  }
+
+  const pages: SurfacePageDefinition[] = [
+    {
+      key: "runs",
+      label: "Runs",
+      eyebrow: "Capture",
+      summary: "Start new review runs and inspect recent evidence captures.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Review Control" eyebrow="Dispatch">
+            <div className="detail-stack">
+              <button type="button" onClick={() => void props.onStartReview()}>Start UI review</button>
+              <StatusRing value={runs.length} total={Math.max(runs.length, 1)} label="Stored runs" />
+            </div>
+          </Panel>
+          <Panel title="Recent Runs" eyebrow="Selection">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading review runs…" : "No review runs recorded yet."}
+              items={runs.slice(0, 10).map((run) => ({
+                title: `Review #${run.uiReviewRunId}`,
+                subtitle: `${run.status} · ${formatTimestamp(run.updatedAt)}`,
+                body: (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void props.onSelectReviewRun(run.uiReviewRunId);
+                      void props.onSurfaceCardSignal("review", `run:${run.uiReviewRunId}`);
+                    }}
+                  >
+                    Inspect review
+                  </button>
+                )
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "findings",
+      label: "Findings",
+      eyebrow: "Deterministic",
+      summary: "Deterministic findings remain the approval gate; ML stays advisory only.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-wide">
+          <Panel title="Finding Queue" eyebrow="Evidence">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading findings…" : "No findings recorded."}
+              items={findings.slice(0, 12).map((finding) => ({
+                title: `${finding.title} · ${finding.severity}`,
+                subtitle: `${finding.category}${finding.checkpointName ? ` · ${finding.checkpointName}` : ""}`,
+                body: (
+                  <div className="detail-stack">
+                    <p className="detail-copy">{finding.summary}</p>
+                    <div className="action-strip">
+                      <button type="button" onClick={() => void props.onReviewFinding(finding.uiReviewFindingId, "accepted")}>Accept</button>
+                      <button type="button" onClick={() => void props.onReviewFinding(finding.uiReviewFindingId, "rejected")}>Reject</button>
+                    </div>
+                  </div>
+                )
+              }))}
+            />
+          </Panel>
+          <Panel title="Review Snapshot" eyebrow="Summary">
+            {selectedRun ? (
+              <div className="detail-stack">
+                <FactGrid
+                  entries={[
+                    { label: "Run", value: `#${selectedRun.uiReviewRunId}` },
+                    { label: "Status", value: selectedRun.status },
+                    { label: "Scenario set", value: selectedRun.scenarioSet },
+                    { label: "Viewport", value: formatViewport(selectedRun.viewportJson) }
+                  ]}
+                />
+                <StructuredValue value={reviewSummary} emptyLabel="No analysis summary." />
+                <VisualAlertStrip items={collectVisualAlerts(null, selectedRun)} />
+              </div>
+            ) : (
+              <p className="empty-copy">Select a review run to inspect summary data.</p>
+            )}
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "evidence",
+      label: "Evidence",
+      eyebrow: "Artifacts",
+      summary: "Baselines, screenshots, and analysis detail stay visible on one page.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Selected Run Evidence" eyebrow="Artifacts">
+            {selectedRun ? (
+              <div className="detail-stack">
+                <StructuredValue
+                  value={{
+                    manifest: selectedRun.manifestJson,
+                    capture: selectedRun.captureSummaryJson,
+                    analysis: selectedRun.analysisSummaryJson
+                  }}
+                />
+                <button type="button" onClick={() => void props.onPromoteBaseline()}>
+                  Promote Baseline
+                </button>
+              </div>
+            ) : (
+              <p className="empty-copy">Select a review run first.</p>
+            )}
+          </Panel>
+          <Panel title="Approved Baselines" eyebrow="Reference">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading baselines…" : "No approved baselines yet."}
+              items={baselines.slice(0, props.detailDepth === "compact" ? 6 : 10).map((baseline) => ({
+                title: baseline.checkpointName,
+                subtitle: `${baseline.browser} · ${baseline.viewportKey}`,
+                body: <ReviewImagePreview relativePath={baseline.relativePath} alt={`${baseline.scenarioName} baseline`} />
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "questions",
+      label: "Questions",
+      eyebrow: "Supervision",
+      summary: "Chronological multiple-choice review decisions.",
+      content: (
+        <QuestionnairePage
+          panelKey="review"
+          questionnaireKey="review-console"
+          title="Review supervision"
+          description="Record finding disposition, baseline intent, and the next supervised action."
+          steps={SURFACE_QUESTIONNAIRES.review}
+          onEvent={props.onQuestionnaireEvent}
+          onExit={() => changePage(returnPage, "button")}
+        />
+      )
+    }
+  ];
+
+  return (
+    <SurfaceCarousel
+      panelKey="review"
+      title="Review"
+      summary="UI review runs, deterministic findings, and baseline evidence."
+      pages={pages}
+      activePage={page}
+      onPageChange={changePage}
+    />
+  );
+}
+
+function PreferencesSurface(props: {
+  me: AuthenticatedMe | null;
+  devProfile: DevPreferenceProfile | null;
+  onSupervision: (decisionKind: "accepted" | "rejected" | "overridden", subjectKey: string, chosenValue?: string) => Promise<void>;
+  onSurfacePageChange: (panelKey: PanelKey, pageKey: string, origin: SurfacePageOrigin) => Promise<void>;
+  onQuestionnaireEvent: (
+    panelKey: PanelKey,
+    questionnaireKey: string,
+    questionKey: string | null,
+    optionKey: string | null,
+    eventKind: "started" | "answered" | "completed"
+  ) => Promise<void>;
+}) {
+  const [page, setPage] = React.useState("runtime");
+  const [returnPage, setReturnPage] = React.useState("runtime");
+  const scorecard = asRecord(props.devProfile?.score?.scorecard ?? null);
+
+  React.useEffect(() => {
+    void props.onSurfacePageChange("preferences", page, "auto");
+  }, [page, props]);
+
+  function changePage(pageKey: string, origin: SurfacePageOrigin) {
+    if (pageKey === "questions") {
+      setReturnPage(page);
+    }
+    setPage(pageKey);
+    void props.onSurfacePageChange("preferences", pageKey, origin);
+  }
+
+  const numericTrend = Object.values(scorecard ?? {}).flatMap((value) => typeof value === "number" ? [value] : []);
+  const pages: SurfacePageDefinition[] = [
+    {
+      key: "runtime",
+      label: "Runtime",
+      eyebrow: "Defaults",
+      summary: "Learned HUD defaults and manual override shortcuts.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Derived Defaults" eyebrow="Profile">
+            <StructuredValue value={scorecard} emptyLabel="No derived scorecard yet." />
+          </Panel>
+          <Panel title="Manual Overrides" eyebrow="Supervised">
+            <div className="surface-page-grid">
+              <ActionRow
+                label="Prefer Compact HUD"
+                taskKind="hud_layout.compact"
+                onEnqueue={() => {}}
+                onSupervision={(decisionKind, subjectKey, chosenValue) => {
+                  void props.onSupervision(decisionKind, subjectKey, chosenValue);
+                }}
+              />
+              <ActionRow
+                label="Prefer Reduced Motion"
+                taskKind="hud_layout.reduced_motion"
+                onEnqueue={() => {}}
+                onSupervision={(decisionKind, subjectKey, chosenValue) => {
+                  void props.onSupervision(decisionKind, subjectKey, chosenValue);
+                }}
+              />
+            </div>
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "scorecard",
+      label: "Scorecard",
+      eyebrow: "Telemetry",
+      summary: "Derived preference telemetry and trend summaries from supervised signals only.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Scorecard" eyebrow="JSON">
+            <StructuredValue value={scorecard} emptyLabel="No scorecard data." />
+          </Panel>
+          <Panel title="Trend" eyebrow="Signals">
+            {numericTrend.length ? <SparkBars values={numericTrend.slice(0, 12)} /> : <p className="empty-copy">No numeric trend values yet.</p>}
+            <StatusRing value={props.devProfile?.recentSignals.length ?? 0} total={Math.max(props.devProfile?.recentSignals.length ?? 0, 1)} label="Recent signals" />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "history",
+      label: "History",
+      eyebrow: "Audit",
+      summary: "Recent signals and decisions remain readable without opening another surface.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Recent Signals" eyebrow="Observed">
+            <ListBlock
+              emptyLabel="No recent signals."
+              items={(props.devProfile?.recentSignals ?? []).slice(0, 12).map((signal) => ({
+                title: signal.signalKind,
+                subtitle: `${signal.surface}${signal.panelKey ? ` · ${signal.panelKey}` : ""}`,
+                body: <StructuredValue value={signal.payload} emptyLabel="No signal payload." />
+              }))}
+            />
+          </Panel>
+          <Panel title="Recent Decisions" eyebrow="Supervised">
+            <ListBlock
+              emptyLabel="No recent decisions."
+              items={(props.devProfile?.recentDecisions ?? []).slice(0, 12).map((decision) => ({
+                title: `${decision.decisionKind} · ${decision.subjectKey}`,
+                subtitle: decision.subjectKind,
+                body: <StructuredValue value={decision.payload} emptyLabel="No decision payload." />
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "questions",
+      label: "Questions",
+      eyebrow: "Supervision",
+      summary: "Chronological multiple-choice preference capture.",
+      content: (
+        <QuestionnairePage
+          panelKey="preferences"
+          questionnaireKey="preferences-console"
+          title="Preference supervision"
+          description="Select HUD density, motion mode, and telemetry visibility."
+          steps={SURFACE_QUESTIONNAIRES.preferences}
+          onEvent={props.onQuestionnaireEvent}
+          onExit={() => changePage(returnPage, "button")}
+        />
+      )
+    }
+  ];
+
+  return (
+    <SurfaceCarousel
+      panelKey="preferences"
+      title="Preferences"
+      summary="Learned defaults, derived scorecards, and supervised decisions."
+      pages={pages}
+      activePage={page}
+      onPageChange={changePage}
+    />
+  );
+}
+
+function IndexSurface(props: {
+  overview: WorkspaceOverview | null;
+  loading: boolean;
+  sourceDocuments: ResourceCollection<SourceDocumentRecord> | null;
+  claims: ResourceCollection<KnowledgeClaimRecord> | null;
+  evaluations: ResourceCollection<EvaluationResultRecord> | null;
+  docs: DocsCatalogResponse | null;
+  skills: SkillCatalogResponse | null;
+  detailDepth: "compact" | "expanded";
+  onSurfacePageChange: (panelKey: PanelKey, pageKey: string, origin: SurfacePageOrigin) => Promise<void>;
+}) {
+  const [page, setPage] = React.useState("overview");
+
+  React.useEffect(() => {
+    void props.onSurfacePageChange("index", page, "auto");
+  }, [page, props]);
+
+  function changePage(pageKey: string, origin: SurfacePageOrigin) {
+    setPage(pageKey);
+    void props.onSurfacePageChange("index", pageKey, origin);
+  }
+
+  const pages: SurfacePageDefinition[] = [
+    {
+      key: "overview",
+      label: "Overview",
+      eyebrow: "Workspace",
+      summary: "Resolved endpoints, service health, and backup state in one archive page.",
+      content: (
+        <div className="surface-page-grid surface-page-grid-2">
+          <Panel title="Workspace Status" eyebrow="Health">
+            <FactGrid
+              entries={[
+                { label: "Status", value: props.overview?.status ?? "unknown" },
+                { label: "Postgres host", value: props.overview?.postgres.host ?? "n/a" },
+                { label: "Postgres port", value: props.overview?.postgres.port ?? "n/a" },
+                { label: "Reachable", value: props.overview?.postgres.reachable ? "yes" : "no" }
+              ]}
+            />
+          </Panel>
+          <Panel title="Services" eyebrow="Telemetry">
+            <ListBlock
+              emptyLabel={props.loading ? "Loading workspace overview…" : "No services reported."}
+              items={(props.overview?.services ?? []).map((service) => ({
+                title: service.service,
+                subtitle: `${service.status} · ${service.url}`,
+                body: <StructuredValue value={service.detail} emptyLabel="No additional detail." />
+              }))}
+            />
+          </Panel>
+        </div>
+      )
+    },
+    {
+      key: "knowledge",
+      label: "Knowledge",
+      eyebrow: "Dev Memory",
+      summary: "Source documents, claims, and evaluations stay in the archive surface.",
+      content: <KnowledgePanel sourceDocuments={props.sourceDocuments} claims={props.claims} evaluations={props.evaluations} detailDepth={props.detailDepth} />
+    },
+    {
+      key: "docs",
+      label: "Docs",
+      eyebrow: "Filesystem",
+      summary: "Documentation and skill catalog without another rail button.",
+      content: <DocsPanel docs={props.docs} skills={props.skills} detailDepth={props.detailDepth} />
+    }
+  ];
+
+  return (
+    <SurfaceCarousel
+      panelKey="index"
+      title="Index"
+      summary="Workspace archive, knowledge plane, and docs catalog."
+      pages={pages}
+      activePage={page}
+      onPageChange={changePage}
+    />
   );
 }
 
@@ -2381,17 +3499,21 @@ function KnowledgePanel(props: {
   evaluations: ResourceCollection<EvaluationResultRecord> | null;
   detailDepth: "compact" | "expanded";
 }) {
+  const sourceDocumentsLoaded = props.sourceDocuments !== null;
+  const claimsLoaded = props.claims !== null;
+  const evaluationsLoaded = props.evaluations !== null;
   return (
     <div className="surface-stack">
       <Panel title="Knowledge Stores" eyebrow="Dev Memory">
         <div className="summary-grid">
-          <InfoCard label="Source documents" value={String(props.sourceDocuments?.items.length ?? 0)} />
-          <InfoCard label="Claims" value={String(props.claims?.items.length ?? 0)} />
-          <InfoCard label="Evaluations" value={String(props.evaluations?.items.length ?? 0)} />
+          <InfoCard label="Source documents" value={sourceDocumentsLoaded ? String(props.sourceDocuments?.items.length ?? 0) : "…"} />
+          <InfoCard label="Claims" value={claimsLoaded ? String(props.claims?.items.length ?? 0) : "…"} />
+          <InfoCard label="Evaluations" value={evaluationsLoaded ? String(props.evaluations?.items.length ?? 0) : "…"} />
         </div>
       </Panel>
       <Panel title="Recent Documents" eyebrow="Source">
         <ListBlock
+          emptyLabel={sourceDocumentsLoaded ? "No items available." : "Loading source documents…"}
           items={(props.sourceDocuments?.items ?? []).slice(0, props.detailDepth === "compact" ? 4 : 8).map((item) => ({
             title: item.title ?? item.uri,
             subtitle: `${item.sourceKind} · ${item.uri}`,
@@ -2405,6 +3527,7 @@ function KnowledgePanel(props: {
       </Panel>
       <Panel title="Recent Claims" eyebrow="Assertions">
         <ListBlock
+          emptyLabel={claimsLoaded ? "No items available." : "Loading claims…"}
           items={(props.claims?.items ?? []).slice(0, props.detailDepth === "compact" ? 4 : 8).map((item) => ({
             title: item.summary,
             subtitle: item.status,
@@ -2418,6 +3541,7 @@ function KnowledgePanel(props: {
       </Panel>
       <Panel title="Recent Evaluations" eyebrow="Scores">
         <ListBlock
+          emptyLabel={evaluationsLoaded ? "No items available." : "Loading evaluations…"}
           items={(props.evaluations?.items ?? []).slice(0, props.detailDepth === "compact" ? 4 : 8).map((item) => ({
             title: item.subject,
             subtitle: item.outcome,
@@ -2440,6 +3564,8 @@ function DocsPanel(props: {
   detailDepth: "compact" | "expanded";
 }) {
   const allDocs = props.docs?.items ?? [];
+  const docsLoaded = props.docs !== null;
+  const skillsLoaded = props.skills !== null;
   const presentationDocs = allDocs.filter((item) => item.kind === "presentation");
   const otherDocs = allDocs.filter((item) => item.kind !== "presentation");
   const presentationLimit = props.detailDepth === "compact" ? 4 : 8;
@@ -2450,6 +3576,7 @@ function DocsPanel(props: {
       <div className="surface-stack">
         <Panel title="Presentations" eyebrow="R&D">
           <ListBlock
+            emptyLabel={docsLoaded ? "No items available." : "Loading presentations…"}
             items={presentationDocs.slice(0, presentationLimit).map((item) => ({
               title: item.title,
               subtitle: `${item.path}${item.tags.includes("canva") ? " · Canva brief" : ""}`,
@@ -2459,6 +3586,7 @@ function DocsPanel(props: {
         </Panel>
         <Panel title="Documentation Catalog" eyebrow="Filesystem">
           <ListBlock
+            emptyLabel={docsLoaded ? "No items available." : "Loading documentation…"}
             items={otherDocs.slice(0, docsLimit).map((item) => ({
               title: item.title,
               subtitle: `${item.kind} · ${item.path}`,
@@ -2469,6 +3597,7 @@ function DocsPanel(props: {
       </div>
       <Panel title="Skills Catalog" eyebrow="Verified">
         <ListBlock
+          emptyLabel={skillsLoaded ? "No items available." : "Loading skills…"}
           items={(props.skills?.items ?? []).slice(0, props.detailDepth === "compact" ? 8 : 16).map((item) => ({
             title: item.name,
             subtitle: `${item.source} · ${item.path}`,
@@ -3020,7 +4149,10 @@ function ResourceLink(props: { uri: string }) {
   return <p className="detail-copy">{props.uri}</p>;
 }
 
-function ListBlock(props: { items: Array<{ title: string; subtitle?: string; body?: React.ReactNode }> }) {
+function ListBlock(props: {
+  items: Array<{ title: string; subtitle?: string; body?: React.ReactNode }>;
+  emptyLabel?: string;
+}) {
   return props.items.length ? (
     <div className="list-block">
       {props.items.map((item, index) => (
@@ -3032,8 +4164,71 @@ function ListBlock(props: { items: Array<{ title: string; subtitle?: string; bod
       ))}
     </div>
   ) : (
-    <p className="empty-copy">No items available.</p>
+    <p className="empty-copy">{props.emptyLabel ?? "No items available."}</p>
   );
+}
+
+function summarizeQueueHealth(queues: AgentTaskCollection["queues"]) {
+  const queuedCount = queues.reduce((sum, queue) => sum + queue.queuedCount, 0);
+  const leasedCount = queues.reduce((sum, queue) => sum + queue.leasedCount, 0);
+  const failedCount = queues.reduce((sum, queue) => sum + queue.failedCount, 0);
+  const statusLabel =
+    failedCount > 0 ? "attention" : queuedCount > 0 || leasedCount > 0 ? "active" : "clear";
+  const detail = `${queuedCount} queued · ${leasedCount} leased · ${failedCount} failed`;
+  return {
+    queuedCount,
+    leasedCount,
+    failedCount,
+    statusLabel,
+    detail
+  };
+}
+
+function summarizeLearningStats(profile: DevPreferenceProfile | null) {
+  const signals = profile?.recentSignals ?? [];
+  const decisions = profile?.recentDecisions ?? [];
+  const acceptedCount = decisions.filter((item) => item.decisionKind === "accepted").length;
+  const rejectedCount = decisions.filter((item) => item.decisionKind === "rejected").length;
+  const overriddenCount = decisions.filter((item) => item.decisionKind === "overridden").length;
+  return {
+    signalCount: signals.length,
+    decisionCount: decisions.length,
+    acceptedCount,
+    rejectedCount,
+    overriddenCount,
+    signalLabel: String(signals.length),
+    decisionLabel: `${decisions.length} decisions`,
+    sparkValues: [
+      signals.length,
+      decisions.length,
+      acceptedCount,
+      rejectedCount,
+      overriddenCount
+    ]
+  };
+}
+
+function collectVisualAlerts(
+  previewRun: PreviewRun | null,
+  reviewRun: UiReviewRun | null
+): string[] {
+  const alerts: string[] = [];
+  const previewSummary = asRecord(previewRun?.analysisSummaryJson ?? null);
+  const reviewSummary = asRecord(reviewRun?.analysisSummaryJson ?? null);
+  for (const warning of asStringArray(previewSummary?.warnings).slice(0, 2)) {
+    alerts.push(`preview: ${warning}`);
+  }
+  for (const error of asStringArray(previewSummary?.consoleErrors).slice(0, 1)) {
+    alerts.push(`preview console: ${error}`);
+  }
+  const reviewMl = asRecord(reviewSummary?.ml);
+  if (typeof reviewMl?.status === "string" && reviewMl.status !== "ready") {
+    alerts.push(`review ml: ${reviewMl.status}`);
+  }
+  if (!alerts.length && reviewRun?.status === "failed") {
+    alerts.push("review: failed");
+  }
+  return alerts;
 }
 
 function Message(props: { tone: "ok" | "error"; children: React.ReactNode }) {
@@ -3228,6 +4423,38 @@ function summarizePreviewFeedback(items: PreviewFeedbackCollection["items"]) {
       rejectedCount: 0
     }
   );
+}
+
+function pickPreferredPreviewRun(
+  previewRuns: PreviewRunCollection | null,
+  selectedPreviewRunId: number | null
+): PreviewRun | null {
+  const runs = previewRuns?.runs ?? [];
+  if (selectedPreviewRunId !== null) {
+    const selectedRun = runs.find((run) => run.previewRunId === selectedPreviewRunId);
+    if (selectedRun) {
+      return selectedRun;
+    }
+  }
+
+  const renderedRun = runs.find((run) => {
+    const manifest = asRecord(run.manifestJson ?? null);
+    const renderSummary = asRecord(run.renderSummaryJson ?? null);
+    return (
+      typeof renderSummary?.htmlPath === "string" ||
+      typeof manifest?.entryRelativePath === "string"
+    );
+  });
+  if (renderedRun) {
+    return renderedRun;
+  }
+
+  const activeRun = runs.find((run) => run.status !== "planned");
+  if (activeRun) {
+    return activeRun;
+  }
+
+  return runs[0] ?? null;
 }
 
 interface PreviewManifestSlide {

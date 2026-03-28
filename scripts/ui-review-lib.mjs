@@ -278,6 +278,39 @@ async function capturePanelScreenshot(page, screenshotPath) {
   await fs.unlink(rawScreenshotPath).catch(() => {});
 }
 
+async function collectPreviewRunStatus(page) {
+  return page.evaluate(async () => {
+    const previewRunsSection =
+      document.querySelectorAll(".preview-section")[1] ?? document.querySelector(".preview-section");
+    const renderedRunCount = previewRunsSection
+      ? previewRunsSection.querySelectorAll(".preview-list-item").length
+      : 0;
+    const selectedRunHeading =
+      document.querySelector(".preview-stage-toolbar h3")?.textContent?.trim() ?? "";
+
+    let apiRunCount = 0;
+    try {
+      const previewRunsUrl = new URL(
+        "/v1/previews/runs?limit=1",
+        `${window.location.protocol}//${window.location.hostname}:3300`
+      );
+      const response = await fetch(previewRunsUrl.toString(), { credentials: "include" });
+      if (response.ok) {
+        const payload = await response.json();
+        apiRunCount = Array.isArray(payload?.runs) ? payload.runs.length : 0;
+      }
+    } catch {
+      apiRunCount = 0;
+    }
+
+    return {
+      apiRunCount,
+      renderedRunCount,
+      selectedRunHeading
+    };
+  });
+}
+
 async function loginIfNeeded(page, email, password) {
   if (await page.getByText("Console Surface").isVisible().catch(() => false)) {
     return;
@@ -305,7 +338,19 @@ async function waitForScenarioSettled(page, scenario, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   let snapshot = await collectPanelSnapshot(page, scenario.expectedTexts);
   while (Date.now() < deadline) {
-    if (snapshot.visibleLoadingTexts.length === 0 && snapshot.missingTexts.length === 0) {
+    let previewReady = true;
+    if (scenario.panelKey === "preview") {
+      const previewStatus = await collectPreviewRunStatus(page);
+      previewReady =
+        previewStatus.apiRunCount === 0 ||
+        previewStatus.renderedRunCount > 0 ||
+        previewStatus.selectedRunHeading !== "Select a preview run";
+    }
+    if (
+      snapshot.visibleLoadingTexts.length === 0 &&
+      snapshot.missingTexts.length === 0 &&
+      previewReady
+    ) {
       return snapshot;
     }
     await page.waitForTimeout(250);

@@ -118,6 +118,25 @@
 - Improved incomplete-manifest handling by synthesizing slide entries from analyzed screenshot artifacts when the render/analyze stages produced screenshots but not full manifest slide metadata.
 - The result is that preview runs can now support slide-scoped human/agent review even when only partial render-analysis output is available.
 
+## Preview Reload Fix 2026-03-28
+
+- Fixed a client-side hydration bug in `apps/dev-console-web` where the preview panel could cancel its own delayed preview-run reload on rerender, then refuse to reschedule it.
+- Stabilized the preview hydration callback so reloads now restore existing preview runs and the selected run state after sign-in or page refresh.
+- Changed reload-default preview-run selection to prefer the newest run with rendered deck data or manifest-backed slide metadata instead of always choosing the newest `planned` run.
+- Committed preview-run collections into UI state before follow-up detail and feedback fetches complete so the workspace no longer stays stuck in `Loading preview runs...` when the detail path is slower than the list path.
+- Tightened the Playwright review harness for the preview panel so it now waits for rendered preview-run state when the broker already reports stored runs, preventing false green captures of an empty preview workspace.
+
+## Panel Settle Refactor 2026-03-28
+
+- Investigated the remaining slow-settle path with live dev-console API request logs and browser capture artifacts.
+- Identified the root cause in `apps/dev-console-web`: `loadConsoleData()` serialized unrelated panel data behind the slowest coordination requests, so preview, knowledge, docs, and preferences often stayed in loading states even though their own broker routes were already independent.
+- Refactored the console load pipeline so:
+  - preview deck loading starts immediately instead of waiting on coordination task/run fetches
+  - preview run loading starts immediately instead of waiting on coordination task/run fetches
+  - supplemental docs, knowledge, review, and preference loading starts immediately instead of waiting on coordination task/run fetches
+  - supplemental state is committed incrementally before slower review-detail fetches complete
+- The result is that the dev-console capture path now reaches a fully settled state across preview, overview, coordination, knowledge, docs, and preferences without residual loading text in the captured panel snapshots.
+
 ## HUD and Local Vision Update 2026-03-27
 
 - Reworked `apps/dev-console-web` into a military-ops HUD shell while keeping the preview lane as the dominant surface:
@@ -136,6 +155,37 @@
   - local contrast and flat-region heuristics
   - advisory ML signals persisted as linked JSON artifacts
 - Extracted the Chromium shared-library bootstrap into a reusable script so both preview analysis and UI review use the same local Playwright runtime preparation.
+
+## Carousel HUD Refactor 2026-03-28
+
+- Refactored `apps/dev-console-web` into a carousel-first console so the primary workflows no longer depend on long stacked pages.
+- Added explicit page trays for:
+  - `Preview`: `launch`, `stage`, `evidence`, `questions`
+  - `Coordination`: `controls`, `queues`, `run-detail`, `questions`
+  - `Review`: `runs`, `findings`, `evidence`, `questions`
+  - `Preferences`: `runtime`, `scorecard`, `history`, `questions`
+  - `Index`: `overview`, `knowledge`, `docs`
+- Added dedicated multiple-choice questionnaire pages per core workflow so supervised learning stays chronological and auditable.
+- Added repo-local HUD widgets for run-health rings, learning pulse bars, queue pulse bars, questionnaire progress, and visual alert strips.
+- Extended `services/agent-memory` scorecard derivation for the new carousel/HUD telemetry vocabulary:
+  - `surface_carousel_page_selected`
+  - `surface_card_selected`
+  - `telemetry_drawer_opened`
+  - `questionnaire_started`
+  - `questionnaire_step_answered`
+  - `questionnaire_completed`
+- Added derived scorecard fields for:
+  - `preferredPageByPanel`
+  - `preferredQuestionnaireSurface`
+  - `preferredTelemetryMode`
+  - `questionnaireCompletionRate`
+  - `reviewAcceptanceRatio`
+  - `previewApprovalRatio`
+  - `evidenceEngagement`
+- Added durable workflow guidance in:
+  - `docs/adr/ADR-011-carousel-first-dev-console-interaction-model.md`
+  - `docs/operations/dev-console-carousel-workflow.md`
+  - `.agents/skills/dev-console-hud-supervisor/SKILL.md`
 
 ## Verification Notes
 
