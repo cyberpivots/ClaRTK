@@ -23,6 +23,8 @@
   - knowledge
   - docs
   - preferences
+- Uses Playwright-native Chromium launch when the local Linux browser runtime is available.
+- Falls back to Windows Edge over local CDP on this WSL host when the bundled Linux Chromium cannot start because of missing shared libraries.
 - Records a Playwright trace on every run.
 - Records named checkpoint screenshots for each reviewed panel.
 - Keeps video as secondary evidence only:
@@ -64,6 +66,8 @@
   stored under the run artifact directory and linked from both the capture summary and `agent.artifact`
 - Failure video:
   stored only on capture failure or explicit request
+- WSL Edge/CDP fallback:
+  keeps trace and screenshot capture enabled, but does not currently retain Playwright video artifacts because the run is attached to a persistent external browser session
 - Analysis diffs:
   stored only when a baseline comparison exceeds the configured threshold
 - Approved baselines:

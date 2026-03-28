@@ -26,9 +26,12 @@
 - The Docker-backed PostgreSQL bring-up path already resolves a reachable host endpoint instead of assuming `127.0.0.1:5432`, and the new DB ops surface now needs to build on that resolved-endpoint contract rather than bypassing it.
 - The local dev stack now includes a dedicated dev-console API and web app entrypoint, both with explicit ports and status reporting alongside the runtime dashboard.
 - `scripts/dev-db-init.sh` now applies the dev-console preference migration and `scripts/dev-db-smoke.sh` verifies the `agent.dev_preference_signal` and `agent.dev_preference_score` tables so the brokered dev-profile path is part of baseline DB readiness.
+- Browser-level dev-console verification is no longer limited to root-page availability:
+  - the repo now includes a Playwright-driven UI review lane with stored trace and screenshot evidence under `.clartk/dev/ui-review/`
+  - the review flow is brokered through `clartk_dev` and the dev-console Review panel instead of ad hoc shell-only smoke output
 
 ## Remaining Gaps
 
 - The local DB lifecycle still needs verification that logical backup, logical restore, soft reset, hard reset, and optional volume recovery work on both directly published and proxy-resolved Docker Desktop ports.
 - The gateway and native lanes still rely on host prerequisites that are documented only partially through the current degraded-mode scripts and task notes.
-- The new dev-console lane still needs fuller browser-level interaction coverage; the current verification is broker/API heavy with root-page availability checks for the Vite app.
+- The new UI review lane now closes the prior browser-level verification gap for the dev-console, but broader DB lifecycle and host-prerequisite verification work in this task still remains.

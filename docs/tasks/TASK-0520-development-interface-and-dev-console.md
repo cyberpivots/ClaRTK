@@ -51,6 +51,31 @@
 - Extended the dev-console docs catalog so `docs/presentations/*` is classified as `presentation`.
 - Updated the docs panel in `apps/dev-console-web` to surface presentation artifacts separately from generic docs.
 
+## Implementation Update 2026-03-28
+
+- Added a local-only automated UI review lane for `apps/dev-console-web` with:
+  - proto-backed UI review DTOs
+  - `review.ui_run`, `review.ui_finding`, and `review.ui_baseline` tables in `clartk_dev`
+  - queue-backed task kinds for capture, analysis, fix-draft generation, and baseline promotion
+  - broker endpoints in `services/dev-console-api`
+  - API-client exports and a first-class Review panel in the dev-console UI
+- Added Playwright review harness scripts under `scripts/`:
+  - fixed signed-in scenario set
+  - trace capture on every run
+  - deterministic screenshot/DOM/network analysis
+  - structured remediation drafts with evidence links
+- Added repo-local supervision support for this lane:
+  - `.agents/skills/ui-review-supervisor/SKILL.md`
+  - `.codex/agents/ui_review_reviewer.toml`
+  - `docs/operations/dev-console-ui-review.md`
+- Hardened browser launch for this workspace:
+  - native Playwright Chromium launch remains the default
+  - WSL hosts now fall back to Windows Edge over local CDP when bundled Linux Chromium cannot start because of missing shared libraries
+- Stabilized screenshot evidence for baseline review:
+  - the harness now waits for the initial console load to settle before scoring panels
+  - panel screenshots are cropped to a stable visible-console region so list-heavy panels do not churn baseline dimensions across runs
+- Live broker-backed review run `uiReviewRunId=3` now proves the full capture -> analyze -> fix_draft -> review path against the current dev-console.
+
 ## Verification Notes
 
 - Current change set verification is recorded here after checks run so presentation artifacts can link to a durable repo source instead of transient chat output.
@@ -73,3 +98,21 @@
     were all classified as `presentation`.
   - `python3` requests against `http://127.0.0.1:4301/v1/skills` confirmed `research-to-deck` appears as an available repo skill.
 - Browser-rendered dev-console visual smoke — not run
+- `node scripts/generate-contracts.mjs --check` — passed
+- `python3 -m py_compile services/agent-memory/src/agent_memory/service.py` — passed
+- `bash scripts/dev-db-init.sh` — passed
+- `bash scripts/dev-db-smoke.sh` — passed
+- `node scripts/ui-review-smoke.mjs` — passed for capture and artifact generation
+  - wrote trace zip plus checkpoint screenshots under `.clartk/dev/ui-review/manual-smoke/...`
+  - deterministic analysis passed after the harness was corrected to wait for the initial console load to settle before scoring panels
+- Broker/API UI review smoke — passed
+  - `POST /v1/reviews/ui/runs` created review runs and queued the capture/analyze/fix-draft chain
+  - worker execution on queue `ui-review-smoke` completed a clean run (`uiReviewRunId=4`) to `ready_for_review`
+  - `GET /v1/reviews/ui/runs`, `GET /v1/reviews/ui/findings`, and `GET /v1/reviews/ui/assets` returned stored review state and evidence successfully
+- Finding review smoke — passed
+  - one UI finding was accepted and one was rejected through the broker review endpoints to validate supervised review-state transitions
+- Baseline promotion smoke — passed
+  - the clean review run was promoted on `ui-review-smoke`
+  - `GET /v1/reviews/ui/baselines?surface=dev-console-web` returned six active baseline records
+- Baseline comparison rerun — passed
+  - `node scripts/ui-review-smoke.mjs` passed after the promoted baselines were refreshed from the stabilized capture geometry
