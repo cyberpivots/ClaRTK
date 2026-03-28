@@ -268,6 +268,78 @@ message InventoryEventCollection {
   int32 total = 3;
 }
 
+message PresentationDeckSource {
+  string deck_key = 1;
+  string title = 2;
+  string markdown_path = 3;
+  string companion_path = 4;
+  string summary = 5;
+  bool has_preview_companion = 6;
+  int32 slide_count = 7;
+  string updated_at = 8;
+  repeated string tags = 9;
+}
+
+message PresentationDeckSourceCollection {
+  repeated PresentationDeckSource items = 1;
+  string source = 2;
+  int32 total = 3;
+}
+
+message PresentationSlide {
+  string slide_id = 1;
+  string title = 2;
+  string audience_goal = 3;
+  repeated string bullets = 4;
+  string visual_guidance = 5;
+  repeated string evidence_paths = 6;
+  bool has_preview_override = 7;
+  string media_json = 8;
+}
+
+message PreviewRun {
+  int64 preview_run_id = 1;
+  string deck_key = 2;
+  string title = 3;
+  string markdown_path = 4;
+  string companion_path = 5;
+  string status = 6;
+  string browser = 7;
+  string viewport_json = 8;
+  int64 current_task_id = 9;
+  int64 render_task_id = 10;
+  int64 analyze_task_id = 11;
+  string manifest_json = 12;
+  string render_summary_json = 13;
+  string analysis_summary_json = 14;
+  string created_at = 15;
+  string updated_at = 16;
+  string completed_at = 17;
+}
+
+message PreviewRunCollection {
+  repeated PreviewRun runs = 1;
+  string source = 2;
+  int32 total = 3;
+}
+
+message PreviewFeedback {
+  int64 preview_feedback_id = 1;
+  int64 preview_run_id = 2;
+  string slide_id = 3;
+  string feedback_kind = 4;
+  string comment = 5;
+  string payload_json = 6;
+  string created_by_account_id = 7;
+  string created_at = 8;
+}
+
+message PreviewFeedbackCollection {
+  repeated PreviewFeedback items = 1;
+  string source = 2;
+  int32 total = 3;
+}
+
 message UiReviewRun {
   int64 ui_review_run_id = 1;
   string surface = 2;
@@ -359,6 +431,21 @@ message ReviewUiFindingRequest {
 message PromoteUiReviewBaselineRequest {
   string queue_name = 1;
   int32 priority = 2;
+}
+
+message StartPreviewRunRequest {
+  string deck_key = 1;
+  string queue_name = 2;
+  int32 priority = 3;
+  string viewport_json = 4;
+}
+
+message CreatePreviewFeedbackRequest {
+  int64 preview_run_id = 1;
+  string slide_id = 2;
+  string feedback_kind = 3;
+  string comment = 4;
+  string payload_json = 5;
 }
 
 message StartHardwareBuildRequest {

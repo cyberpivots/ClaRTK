@@ -31,11 +31,18 @@
 - `services/agent-memory` now supports worker leasing with `FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY` wakeups, and transaction-scoped advisory locks for scheduler and lease-repair duties.
 - `agent.run`, `agent.event`, and `agent.artifact` are now used as execution history for queued embedding and evaluation jobs.
 - The queue now also carries development-interface preference score recompute tasks plus bounded doc and skill catalog refresh jobs, keeping that transient coordination state inside `clartk_dev` rather than in more task files.
+- The repo now includes coordinator-facing development artifacts for the parallel planning loop:
+  - `.codex/config.toml` explicitly pins high plan-mode reasoning
+  - `.codex/agents/cli_coordinator.toml` defines a read-only coordination role
+  - `.agents/skills/cli-coordinator/SKILL.md` defines the reusable coordinator workflow
+  - `docs/operations/cli-coordinator-workflow.md` records the durable process
+  - `scripts/dev-coordinator-status.mjs` exposes a compact live snapshot from the dev-plane broker
 
 ## Remaining Gaps
 
 - The current queue handles embeddings and evaluations only; broader multi-agent scheduling, dependency release, and richer retry policy still remain to be implemented.
 - The worker currently uses periodic maintenance scheduling inside the Python process; there is not yet a separate reconciler or dependency-release service.
+- The coordinator status script is a broker-backed read surface only; it does not yet claim tasks, lease work, or annotate worktree ownership directly in `clartk_dev`.
 
 ## Initial Plan
 

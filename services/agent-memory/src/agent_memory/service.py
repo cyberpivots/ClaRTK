@@ -70,6 +70,8 @@ UI_REVIEW_CAPTURE_TASK_KIND = "ui.review.capture"
 UI_REVIEW_ANALYZE_TASK_KIND = "ui.review.analyze"
 UI_REVIEW_FIX_DRAFT_TASK_KIND = "ui.review.fix_draft"
 UI_REVIEW_PROMOTE_BASELINE_TASK_KIND = "ui.review.promote_baseline"
+PREVIEW_RENDER_TASK_KIND = "preview.render"
+PREVIEW_ANALYZE_TASK_KIND = "preview.analyze"
 UI_REVIEW_DEFAULT_SURFACE = "dev-console-web"
 UI_REVIEW_DEFAULT_SCENARIO_SET = "default"
 UI_REVIEW_DEFAULT_BROWSER = "chromium"
@@ -90,6 +92,14 @@ UI_REVIEW_FINDING_STATUS_ACCEPTED = "accepted"
 UI_REVIEW_FINDING_STATUS_REJECTED = "rejected"
 UI_REVIEW_BASELINE_STATUS_ACTIVE = "active"
 UI_REVIEW_BASELINE_STATUS_SUPERSEDED = "superseded"
+PREVIEW_DEFAULT_BROWSER = "chromium"
+PREVIEW_DEFAULT_VIEWPORT = {"width": 1440, "height": 900}
+PREVIEW_STATUS_PLANNED = "planned"
+PREVIEW_STATUS_RENDER_RUNNING = "render_running"
+PREVIEW_STATUS_RENDERED = "rendered"
+PREVIEW_STATUS_ANALYSIS_RUNNING = "analysis_running"
+PREVIEW_STATUS_READY_FOR_REVIEW = "ready_for_review"
+PREVIEW_STATUS_FAILED = "failed"
 UI_REVIEW_NODE_BINARY = os.environ.get("CLARTK_UI_REVIEW_NODE_BINARY", "node")
 UI_REVIEW_COMMAND_TIMEOUT_SECONDS = max(
     30,
@@ -97,6 +107,8 @@ UI_REVIEW_COMMAND_TIMEOUT_SECONDS = max(
 )
 UI_REVIEW_CAPTURE_SCRIPT = REPO_ROOT / "scripts" / "ui-review-capture.mjs"
 UI_REVIEW_ANALYZE_SCRIPT = REPO_ROOT / "scripts" / "ui-review-analyze.mjs"
+PREVIEW_RENDER_SCRIPT = REPO_ROOT / "scripts" / "preview-render.mjs"
+PREVIEW_ANALYZE_SCRIPT = REPO_ROOT / "scripts" / "preview-analyze.mjs"
 
 
 @dataclass(frozen=True)
@@ -303,6 +315,29 @@ def as_int(value: Any) -> int | None:
 def sanitize_identifier(value: Any) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(value)).strip("-")
     return sanitized or "item"
+
+
+def parse_markdown_title(markdown_path: Path) -> str:
+    for line in markdown_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return markdown_path.stem
+
+
+def resolve_preview_source(deck_key: str) -> tuple[Path, Path | None, str]:
+    markdown_path = REPO_ROOT / "docs" / "presentations" / f"{deck_key}.md"
+    if not markdown_path.exists():
+        raise FileNotFoundError(f"presentation deck not found: {deck_key}")
+
+    if deck_key == "index" or deck_key.endswith("-canva-brief"):
+        raise ValueError(f"presentation deck is not previewable: {deck_key}")
+
+    companion_path = markdown_path.with_suffix(".preview.json")
+    return (
+        markdown_path,
+        companion_path if companion_path.exists() else None,
+        parse_markdown_title(markdown_path),
+    )
 
 
 def parse_inventory_manifest(manifest_path: str) -> dict[str, list[dict[str, Any]]]:
@@ -1006,6 +1041,14 @@ class MemoryRepository:
             else self._ui_review_root() / "baselines"
         )
 
+    def _preview_root(self) -> Path:
+        configured_root = os.environ.get("CLARTK_PREVIEW_ROOT")
+        return (
+            Path(configured_root).resolve()
+            if configured_root
+            else REPO_ROOT / ".clartk" / "dev" / "presentation-preview"
+        )
+
     def _build_ui_review_artifact_dir(
         self,
         ui_review_run_id: int,
@@ -1034,6 +1077,16 @@ class MemoryRepository:
             / sanitize_identifier(browser)
             / sanitize_identifier(viewport_key)
             / f"{sanitize_identifier(scenario_name)}-{sanitize_identifier(checkpoint_name)}.png"
+        )
+
+    def _build_preview_artifact_dir(
+        self,
+        preview_run_id: int,
+        *,
+        deck_key: str,
+    ) -> Path:
+        return self._preview_root() / "runs" / (
+            f"{preview_run_id:06d}-{sanitize_identifier(deck_key)}"
         )
 
     def _relative_repo_path(self, target: Path) -> str:
@@ -1120,6 +1173,37 @@ class MemoryRepository:
                     "relativePath": relative_path,
                     "mediaType": descriptor.get("mediaType"),
                 },
+            )
+
+    def _record_preview_artifacts(
+        self,
+        connection: psycopg.Connection[Any],
+        agent_run_id: int,
+        descriptors: list[dict[str, Any]],
+    ) -> None:
+        seen: set[tuple[str, str]] = set()
+        for descriptor in descriptors:
+            kind = str(descriptor.get("kind", "")).strip()
+            relative_path = str(descriptor.get("relativePath", "")).strip()
+            if not kind or not relative_path:
+                continue
+            dedupe_key = (kind, relative_path)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            metadata: dict[str, Any] = {
+                "relativePath": relative_path,
+                "mediaType": descriptor.get("mediaType"),
+            }
+            slide_id = extract_string(descriptor, "slideId")
+            if slide_id:
+                metadata["slideId"] = slide_id
+            self._record_agent_artifact(
+                connection,
+                agent_run_id,
+                artifact_kind=kind,
+                uri=f"clartk://workspace/{relative_path}",
+                metadata=metadata,
             )
 
     def start_ui_review(
@@ -1432,6 +1516,308 @@ class MemoryRepository:
                 (surface, surface, status, status, limit),
             ).fetchall()
         return [map_ui_review_baseline(row) for row in rows]
+
+    def start_preview_run(
+        self,
+        payload: dict[str, Any],
+        *,
+        requested_by_account_id: str | None = None,
+    ) -> dict[str, Any]:
+        deck_key = str(payload.get("deckKey") or "").strip()
+        if not deck_key:
+            raise ValueError("deckKey is required")
+
+        markdown_path, companion_path, title = resolve_preview_source(deck_key)
+        queue_name = (
+            str(payload.get("queueName")).strip()
+            if isinstance(payload.get("queueName"), str) and str(payload.get("queueName")).strip()
+            else DEFAULT_AGENT_TASK_QUEUE
+        )
+        priority = int(payload.get("priority", 0))
+        viewport_json = ensure_dict(payload.get("viewportJson")) or dict(PREVIEW_DEFAULT_VIEWPORT)
+        manifest_json = {
+            "deckKey": deck_key,
+            "markdownPath": self._relative_repo_path(markdown_path),
+            "companionPath": self._relative_repo_path(companion_path) if companion_path else None,
+            "viewport": viewport_json,
+            "localOnly": True,
+        }
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                INSERT INTO review.preview_run (
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  requested_by_account_id,
+                  manifest_json
+                )
+                VALUES (%s, %s, %s, %s, %s::review.preview_run_status, %s, %s, %s, %s)
+                RETURNING
+                  preview_run_id,
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  render_task_id,
+                  analyze_task_id,
+                  manifest_json,
+                  render_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                """,
+                (
+                    deck_key,
+                    title,
+                    self._relative_repo_path(markdown_path),
+                    self._relative_repo_path(companion_path) if companion_path else None,
+                    PREVIEW_STATUS_PLANNED,
+                    PREVIEW_DEFAULT_BROWSER,
+                    Jsonb(viewport_json),
+                    requested_by_account_id,
+                    Jsonb(manifest_json),
+                ),
+            ).fetchone()
+            if run_row is None:
+                raise RuntimeError("failed to create preview run")
+
+            preview_run_id = int(run_row["preview_run_id"])
+            artifact_dir = self._build_preview_artifact_dir(preview_run_id, deck_key=deck_key)
+            render_summary_path = artifact_dir / "render-summary.json"
+            analysis_summary_path = artifact_dir / "analysis-summary.json"
+            manifest_patch = {
+                **manifest_json,
+                "artifactDir": self._relative_repo_path(artifact_dir),
+                "renderSummaryPath": self._relative_repo_path(render_summary_path),
+                "analysisSummaryPath": self._relative_repo_path(analysis_summary_path),
+                "title": title,
+            }
+            render_task = self._create_review_task(
+                connection,
+                task_kind=PREVIEW_RENDER_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={
+                    "previewRunId": preview_run_id,
+                    "deckKey": deck_key,
+                    "markdownPath": self._relative_repo_path(markdown_path),
+                    "companionPath": self._relative_repo_path(companion_path) if companion_path else None,
+                    "viewportJson": viewport_json,
+                    "manifestJson": manifest_patch,
+                    "requestedByAccountId": requested_by_account_id,
+                },
+            )
+            analyze_task = self._create_review_task(
+                connection,
+                task_kind=PREVIEW_ANALYZE_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={"previewRunId": preview_run_id},
+            )
+            self._ensure_task_dependency(
+                connection,
+                int(analyze_task["agentTaskId"]),
+                int(render_task["agentTaskId"]),
+            )
+            connection.execute(
+                """
+                UPDATE review.preview_run
+                SET
+                  current_task_id = %s,
+                  render_task_id = %s,
+                  analyze_task_id = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW()
+                WHERE preview_run_id = %s
+                """,
+                (
+                    int(render_task["agentTaskId"]),
+                    int(render_task["agentTaskId"]),
+                    int(analyze_task["agentTaskId"]),
+                    Jsonb(manifest_patch),
+                    preview_run_id,
+                ),
+            )
+            for task in (render_task, analyze_task):
+                self._notify_task_ready(
+                    connection,
+                    queue_name=queue_name,
+                    task_kind=str(task["taskKind"]),
+                )
+            connection.commit()
+
+        created = self.get_preview_run(preview_run_id)
+        if created is None:
+            raise LookupError("preview run not found after creation")
+        return created
+
+    def list_preview_runs(
+        self,
+        *,
+        deck_key: str | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  preview_run_id,
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  render_task_id,
+                  analyze_task_id,
+                  manifest_json,
+                  render_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM review.preview_run
+                WHERE (%s::TEXT IS NULL OR deck_key = %s::TEXT)
+                ORDER BY created_at DESC, preview_run_id DESC
+                LIMIT %s
+                """,
+                (deck_key, deck_key, limit),
+            ).fetchall()
+        return [map_preview_run(row) for row in rows]
+
+    def get_preview_run(self, preview_run_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  preview_run_id,
+                  deck_key,
+                  title,
+                  markdown_path,
+                  companion_path,
+                  status,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  render_task_id,
+                  analyze_task_id,
+                  manifest_json,
+                  render_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM review.preview_run
+                WHERE preview_run_id = %s
+                """,
+                (preview_run_id,),
+            ).fetchone()
+        return map_preview_run(row) if row is not None else None
+
+    def list_preview_feedback(
+        self,
+        *,
+        preview_run_id: int,
+        slide_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  preview_feedback_id,
+                  preview_run_id,
+                  slide_id,
+                  feedback_kind,
+                  comment,
+                  payload_json,
+                  created_by_account_id,
+                  created_at
+                FROM review.preview_feedback
+                WHERE preview_run_id = %s
+                  AND (%s::TEXT IS NULL OR slide_id = %s::TEXT)
+                ORDER BY created_at DESC, preview_feedback_id DESC
+                LIMIT %s
+                """,
+                (preview_run_id, slide_id, slide_id, limit),
+            ).fetchall()
+        return [map_preview_feedback(row) for row in rows]
+
+    def create_preview_feedback(
+        self,
+        *,
+        preview_run_id: int,
+        feedback_kind: str,
+        comment: str,
+        payload: dict[str, Any] | None,
+        created_by_account_id: str | None,
+        slide_id: str | None = None,
+    ) -> dict[str, Any]:
+        if feedback_kind not in {"comment", "requested_changes", "approved", "rejected"}:
+            raise ValueError("unsupported preview feedback kind")
+
+        with self.connect() as connection:
+            run_exists = connection.execute(
+                "SELECT 1 FROM review.preview_run WHERE preview_run_id = %s",
+                (preview_run_id,),
+            ).fetchone()
+            if run_exists is None:
+                raise LookupError("preview run not found")
+
+            row = connection.execute(
+                """
+                INSERT INTO review.preview_feedback (
+                  preview_run_id,
+                  slide_id,
+                  feedback_kind,
+                  comment,
+                  payload_json,
+                  created_by_account_id
+                )
+                VALUES (%s, %s, %s::review.preview_feedback_kind, %s, %s, %s)
+                RETURNING
+                  preview_feedback_id,
+                  preview_run_id,
+                  slide_id,
+                  feedback_kind,
+                  comment,
+                  payload_json,
+                  created_by_account_id,
+                  created_at
+                """,
+                (
+                    preview_run_id,
+                    slide_id,
+                    feedback_kind,
+                    comment,
+                    Jsonb(payload or {}),
+                    created_by_account_id,
+                ),
+            ).fetchone()
+            connection.commit()
+        return map_preview_feedback(row)
 
     def review_ui_finding(
         self,

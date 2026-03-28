@@ -58,10 +58,12 @@
 
 - Keep the default ClaRTK agent workflow single-owner and bounded by write set.
 - Keep `max_depth = 1` until ClaRTK-specific evals justify deeper delegation.
+- Pin ClaRTK plan-mode coordination to high reasoning effort for complex planning slices.
 - Keep research parallelism bounded and read-only by default.
 - Expand multi-agent specialization only when evals show a measurable gain.
 - Track benchmark freshness and contamination risk in docs before making capability claims.
 - Keep the repo deck canonical and treat Canva output as a derived publication artifact.
+- Keep long-running external OpenAI research flows on background-mode style infrastructure rather than stretching local interactive coordination loops.
 
 ## Planned self-improvement direction
 
@@ -93,4 +95,3 @@
   https://arxiv.org/abs/2404.07972
 - OSWorld project site:
   https://os-world.github.io/
-

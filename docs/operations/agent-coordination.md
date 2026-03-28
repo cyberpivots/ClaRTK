@@ -6,6 +6,7 @@
 - One write-capable agent owns one path set.
 - Overlapping write sets must be serialized.
 - Use a dedicated Git worktree for each concurrent write task.
+- For a plan-mode root coordinator or coordination-first terminal session, use [`cli-coordinator-workflow.md`](./cli-coordinator-workflow.md) and `node scripts/dev-coordinator-status.mjs` before assigning work.
 
 ## Task Files
 
@@ -35,6 +36,12 @@
   - `LISTEN` and `NOTIFY` for low-latency worker wakeups
   - advisory locks for singleton schedulers, reconcilers, and requeue loops
 - Keep ML-oriented workers in Python and store their artifacts in `clartk_dev`; treat PostgreSQL as the control plane and memory store, not as the model-runtime host.
+
+## Queue Naming
+
+- Avoid `default` for feature-specific work when a dedicated queue improves isolation or reviewability.
+- Prefer queue names in the form `<domain>.<feature>` or `<domain>.<feature>.<phase>`.
+- Keep queue choice in the task handoff so retries and worker ownership stay auditable.
 
 ## Escalation
 
