@@ -367,6 +367,34 @@ assert_query_equals \
   "clartk_dev" \
   "SELECT (to_regtype('inventory.build_status')::text IS NOT NULL)::int;"
 
+assert_query_equals \
+  "ui review run table present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regclass('review.ui_run') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "ui review finding table present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regclass('review.ui_finding') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "ui review baseline table present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regclass('review.ui_baseline') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "ui review run status enum present" \
+  "1" \
+  "$dev_url" \
+  "clartk_dev" \
+  "SELECT (to_regtype('review.run_status')::text IS NOT NULL)::int;"
+
 if [[ "${CLARTK_HARDWARE_TASK_SMOKE:-0}" == "1" ]]; then
   run_hardware_task_smoke
 fi

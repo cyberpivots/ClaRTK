@@ -285,6 +285,99 @@ class InventoryEventCollection:
     total: int
 
 @dataclass(slots=True, kw_only=True)
+class UiReviewRun:
+    ui_review_run_id: int
+    surface: str
+    scenario_set: str
+    status: str
+    base_url: str
+    browser: str
+    viewport_json: str
+    current_task_id: int
+    capture_task_id: int
+    analyze_task_id: int
+    fix_draft_task_id: int
+    manifest_json: str
+    capture_summary_json: str
+    analysis_summary_json: str
+    created_at: str
+    updated_at: str
+    completed_at: str
+
+@dataclass(slots=True, kw_only=True)
+class UiReviewRunCollection:
+    runs: List[UiReviewRun] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class UiReviewFinding:
+    ui_review_finding_id: int
+    ui_review_run_id: int
+    category: str
+    severity: str
+    status: str
+    title: str
+    summary: str
+    scenario_name: str
+    checkpoint_name: str
+    evidence_json: str
+    analyzer_json: str
+    fix_draft_json: str
+    reviewed_by_account_id: str
+    reviewed_at: str
+    created_at: str
+
+@dataclass(slots=True, kw_only=True)
+class UiReviewFindingCollection:
+    findings: List[UiReviewFinding] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class UiReviewBaseline:
+    ui_review_baseline_id: int
+    surface: str
+    scenario_name: str
+    checkpoint_name: str
+    browser: str
+    viewport_key: str
+    relative_path: str
+    status: str
+    source_run_id: int
+    approved_by_account_id: str
+    metadata_json: str
+    created_at: str
+    superseded_at: str
+
+@dataclass(slots=True, kw_only=True)
+class UiReviewBaselineCollection:
+    baselines: List[UiReviewBaseline] = field(default_factory=list)
+    source: str
+    total: int
+
+@dataclass(slots=True, kw_only=True)
+class StartUiReviewRequest:
+    surface: str
+    scenario_set: str
+    base_url: str
+    record_video: bool
+    queue_name: str
+    priority: int
+    viewport_json: str
+    manifest_json: str
+
+@dataclass(slots=True, kw_only=True)
+class ReviewUiFindingRequest:
+    status: str
+    review_payload_json: str
+
+@dataclass(slots=True, kw_only=True)
+class PromoteUiReviewBaselineRequest:
+    queue_name: str
+    priority: int
+
+@dataclass(slots=True, kw_only=True)
 class StartHardwareBuildRequest:
     build_name: str
     build_kind: str

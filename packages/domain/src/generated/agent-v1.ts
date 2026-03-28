@@ -284,6 +284,99 @@ export interface InventoryEventCollection {
   total: number;
 }
 
+export interface UiReviewRun {
+  uiReviewRunId: number;
+  surface: string;
+  scenarioSet: string;
+  status: string;
+  baseUrl: string;
+  browser: string;
+  viewportJson: string;
+  currentTaskId: number;
+  captureTaskId: number;
+  analyzeTaskId: number;
+  fixDraftTaskId: number;
+  manifestJson: string;
+  captureSummaryJson: string;
+  analysisSummaryJson: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+}
+
+export interface UiReviewRunCollection {
+  runs: UiReviewRun[];
+  source: string;
+  total: number;
+}
+
+export interface UiReviewFinding {
+  uiReviewFindingId: number;
+  uiReviewRunId: number;
+  category: string;
+  severity: string;
+  status: string;
+  title: string;
+  summary: string;
+  scenarioName: string;
+  checkpointName: string;
+  evidenceJson: string;
+  analyzerJson: string;
+  fixDraftJson: string;
+  reviewedByAccountId: string;
+  reviewedAt: string;
+  createdAt: string;
+}
+
+export interface UiReviewFindingCollection {
+  findings: UiReviewFinding[];
+  source: string;
+  total: number;
+}
+
+export interface UiReviewBaseline {
+  uiReviewBaselineId: number;
+  surface: string;
+  scenarioName: string;
+  checkpointName: string;
+  browser: string;
+  viewportKey: string;
+  relativePath: string;
+  status: string;
+  sourceRunId: number;
+  approvedByAccountId: string;
+  metadataJson: string;
+  createdAt: string;
+  supersededAt: string;
+}
+
+export interface UiReviewBaselineCollection {
+  baselines: UiReviewBaseline[];
+  source: string;
+  total: number;
+}
+
+export interface StartUiReviewRequest {
+  surface: string;
+  scenarioSet: string;
+  baseUrl: string;
+  recordVideo: boolean;
+  queueName: string;
+  priority: number;
+  viewportJson: string;
+  manifestJson: string;
+}
+
+export interface ReviewUiFindingRequest {
+  status: string;
+  reviewPayloadJson: string;
+}
+
+export interface PromoteUiReviewBaselineRequest {
+  queueName: string;
+  priority: number;
+}
+
 export interface StartHardwareBuildRequest {
   buildName: string;
   buildKind: string;

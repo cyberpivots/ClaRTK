@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,11 @@ import type {
   InventoryItemCollection,
   InventoryUnit,
   InventoryUnitCollection,
+  UiReviewBaselineCollection,
+  UiReviewFinding,
+  UiReviewFindingCollection,
+  UiReviewRun,
+  UiReviewRunCollection,
   SeedInventoryResponse,
   DocsCatalogItem,
   DocsCatalogResponse,
@@ -39,6 +44,7 @@ import type {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");
+const uiReviewRoot = path.resolve(repoRoot, ".clartk/dev/ui-review");
 
 const config = {
   host: process.env.CLARTK_DEV_CONSOLE_API_HOST ?? "0.0.0.0",
@@ -60,6 +66,10 @@ const allowedTaskKinds = new Set([
   "preferences.compute_dev_preference_scores",
   "catalog.refresh_doc_catalog",
   "catalog.refresh_skill_catalog",
+  "ui.review.capture",
+  "ui.review.analyze",
+  "ui.review.fix_draft",
+  "ui.review.promote_baseline",
   "hardware.prepare",
   "hardware.reserve_parts",
   "hardware.build",
@@ -169,6 +179,128 @@ app.get("/v1/coordination/runs/:runId", async (request): Promise<AgentRunDetail>
   await requireAdmin(request.headers);
   const runId = requireInteger((request.params as Record<string, unknown>).runId, "runId");
   return agentMemoryInternalRequest<AgentRunDetail>(`/v1/internal/coordination/runs/${runId}`);
+});
+
+app.get("/v1/reviews/ui/runs", async (request): Promise<UiReviewRunCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const route = suffix ? `/v1/internal/reviews/ui/runs?${suffix}` : "/v1/internal/reviews/ui/runs";
+  return agentMemoryInternalRequest<UiReviewRunCollection>(route);
+});
+
+app.get("/v1/reviews/ui/runs/:uiReviewRunId", async (request): Promise<UiReviewRun> => {
+  await requireAdmin(request.headers);
+  const uiReviewRunId = requireInteger(
+    (request.params as Record<string, unknown>).uiReviewRunId,
+    "uiReviewRunId"
+  );
+  return agentMemoryInternalRequest<UiReviewRun>(`/v1/internal/reviews/ui/runs/${uiReviewRunId}`);
+});
+
+app.post("/v1/reviews/ui/runs", async (request): Promise<UiReviewRun> => {
+  const me = await requireAdmin(request.headers);
+  const body = asBody(request.body);
+  return agentMemoryInternalRequest<UiReviewRun>("/v1/internal/reviews/ui/runs", {
+    method: "POST",
+    body: {
+      surface: typeof body.surface === "string" ? body.surface : "dev-console-web",
+      scenarioSet: typeof body.scenarioSet === "string" ? body.scenarioSet : "default",
+      baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
+      recordVideo: body.recordVideo === true,
+      queueName: typeof body.queueName === "string" ? body.queueName : undefined,
+      priority: typeof body.priority === "number" ? body.priority : 0,
+      viewportJson: ensureJsonObject(body.viewportJson),
+      manifestJson: ensureJsonObject(body.manifestJson),
+      requestedByAccountId: me.account.accountId
+    }
+  });
+});
+
+app.get("/v1/reviews/ui/findings", async (request): Promise<UiReviewFindingCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const route = suffix
+    ? `/v1/internal/reviews/ui/findings?${suffix}`
+    : "/v1/internal/reviews/ui/findings";
+  return agentMemoryInternalRequest<UiReviewFindingCollection>(route);
+});
+
+app.get("/v1/reviews/ui/baselines", async (request): Promise<UiReviewBaselineCollection> => {
+  await requireAdmin(request.headers);
+  const query = request.query as Record<string, string | undefined>;
+  const suffix = buildQueryString(query);
+  const route = suffix
+    ? `/v1/internal/reviews/ui/baselines?${suffix}`
+    : "/v1/internal/reviews/ui/baselines";
+  return agentMemoryInternalRequest<UiReviewBaselineCollection>(route);
+});
+
+app.post("/v1/reviews/ui/findings/:findingId/review", async (request): Promise<UiReviewFinding> => {
+  const me = await requireAdmin(request.headers);
+  const findingId = requireInteger((request.params as Record<string, unknown>).findingId, "findingId");
+  const body = asBody(request.body);
+  return agentMemoryInternalRequest<UiReviewFinding>(
+    `/v1/internal/reviews/ui/findings/${findingId}/review`,
+    {
+      method: "POST",
+      body: {
+        status: requireString(body.status, "status"),
+        reviewPayload: ensureJsonObject(body.reviewPayload),
+        reviewedByAccountId: me.account.accountId
+      }
+    }
+  );
+});
+
+app.post(
+  "/v1/reviews/ui/runs/:uiReviewRunId/promote-baseline",
+  async (request): Promise<UiReviewRun> => {
+    const me = await requireAdmin(request.headers);
+    const uiReviewRunId = requireInteger(
+      (request.params as Record<string, unknown>).uiReviewRunId,
+      "uiReviewRunId"
+    );
+    const body = asBody(request.body);
+    return agentMemoryInternalRequest<UiReviewRun>(
+      `/v1/internal/reviews/ui/runs/${uiReviewRunId}/promote-baseline`,
+      {
+        method: "POST",
+        body: {
+          queueName: typeof body.queueName === "string" ? body.queueName : undefined,
+          priority: typeof body.priority === "number" ? body.priority : 0,
+          approvedByAccountId: me.account.accountId
+        }
+      }
+    );
+  }
+);
+
+app.get("/v1/reviews/ui/assets", async (request, reply) => {
+  await requireAdmin(request.headers);
+  const relativePath = requireString((request.query as Record<string, unknown>).path, "path");
+  const resolvedPath = path.resolve(repoRoot, relativePath);
+  const normalizedRoot = uiReviewRoot.endsWith(path.sep) ? uiReviewRoot : `${uiReviewRoot}${path.sep}`;
+  if (resolvedPath !== uiReviewRoot && !resolvedPath.startsWith(normalizedRoot)) {
+    throw new ApiError(403, "asset path must stay within .clartk/dev/ui-review");
+  }
+
+  try {
+    const stats = await fs.stat(resolvedPath);
+    if (!stats.isFile()) {
+      throw new ApiError(404, "asset not found");
+    }
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    throw new ApiError(404, "asset not found");
+  }
+
+  reply.header("Cache-Control", "no-store");
+  reply.type(mediaTypeForAsset(resolvedPath));
+  return reply.send(createReadStream(resolvedPath));
 });
 
 app.get("/v1/inventory/items", async (request): Promise<InventoryItemCollection> => {
@@ -452,6 +584,22 @@ function buildQueryString(query: Record<string, string | undefined>): string {
     }
   }
   return params.toString();
+}
+
+function mediaTypeForAsset(assetPath: string): string {
+  if (assetPath.endsWith(".png")) {
+    return "image/png";
+  }
+  if (assetPath.endsWith(".webm")) {
+    return "video/webm";
+  }
+  if (assetPath.endsWith(".zip")) {
+    return "application/zip";
+  }
+  if (assetPath.endsWith(".json")) {
+    return "application/json";
+  }
+  return "application/octet-stream";
 }
 
 function expandLoopbackOrigins(origin: string): string[] {

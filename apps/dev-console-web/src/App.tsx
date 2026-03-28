@@ -13,6 +13,10 @@ import type {
   ResourceCollection,
   SkillCatalogResponse,
   SourceDocumentRecord,
+  UiReviewBaselineCollection,
+  UiReviewFindingCollection,
+  UiReviewRun,
+  UiReviewRunCollection,
   WorkspaceOverview
 } from "@clartk/domain";
 import { AppFrame, Panel, StatusPill } from "@clartk/ui-web";
@@ -31,7 +35,14 @@ const devConsoleApi = new DevConsoleClient({
   baseUrl: import.meta.env.VITE_CLARTK_DEV_CONSOLE_API_BASE_URL ?? browserBaseUrl(3300)
 });
 
-type PanelKey = "preview" | "overview" | "coordination" | "knowledge" | "docs" | "preferences";
+type PanelKey =
+  | "preview"
+  | "overview"
+  | "coordination"
+  | "review"
+  | "knowledge"
+  | "docs"
+  | "preferences";
 
 const panelDefinitions: Array<{
   key: PanelKey;
@@ -56,6 +67,12 @@ const panelDefinitions: Array<{
     label: "Coordination",
     eyebrow: "Queues",
     description: "Task queues, safe control actions, and run inspection."
+  },
+  {
+    key: "review",
+    label: "Review",
+    eyebrow: "Evidence",
+    description: "Playwright capture, deterministic analysis, and baseline supervision."
   },
   {
     key: "knowledge",
@@ -89,6 +106,11 @@ interface ConsoleState {
   docs: DocsCatalogResponse | null;
   skills: SkillCatalogResponse | null;
   devProfile: DevPreferenceProfile | null;
+  reviewRuns: UiReviewRunCollection | null;
+  selectedReviewRunId: number | null;
+  selectedReviewRun: UiReviewRun | null;
+  reviewFindings: UiReviewFindingCollection | null;
+  reviewBaselines: UiReviewBaselineCollection | null;
   selectedPanel: PanelKey;
   detailDepth: "compact" | "expanded";
   selectedRunId: number | null;
@@ -110,6 +132,11 @@ export function App() {
     docs: null,
     skills: null,
     devProfile: null,
+    reviewRuns: null,
+    selectedReviewRunId: null,
+    selectedReviewRun: null,
+    reviewFindings: null,
+    reviewBaselines: null,
     selectedPanel: "preview",
     detailDepth: "expanded",
     selectedRunId: null,
@@ -238,6 +265,8 @@ export function App() {
         devConsoleApi.getWorkspaceOverview(),
         devConsoleApi.listTasks(),
         devConsoleApi.listRuns(),
+        devConsoleApi.listUiReviewRuns({ surface: "dev-console-web", limit: 12 }),
+        devConsoleApi.listUiReviewBaselines({ surface: "dev-console-web", limit: 24 }),
         devConsoleApi.listDocsCatalog(),
         devConsoleApi.listSkills()
       ]);
@@ -256,8 +285,20 @@ export function App() {
       );
       const tasks = resolveSettledResult(primaryResults[1], previousState.tasks, "coordination tasks", warnings);
       const runs = resolveSettledResult(primaryResults[2], previousState.runs, "coordination runs", warnings);
-      const docs = resolveSettledResult(primaryResults[3], previousState.docs, "docs catalog", warnings);
-      const skills = resolveSettledResult(primaryResults[4], previousState.skills, "skills catalog", warnings);
+      const reviewRuns = resolveSettledResult(
+        primaryResults[3],
+        previousState.reviewRuns,
+        "ui review runs",
+        warnings
+      );
+      const reviewBaselines = resolveSettledResult(
+        primaryResults[4],
+        previousState.reviewBaselines,
+        "ui review baselines",
+        warnings
+      );
+      const docs = resolveSettledResult(primaryResults[5], previousState.docs, "docs catalog", warnings);
+      const skills = resolveSettledResult(primaryResults[6], previousState.skills, "skills catalog", warnings);
       const sourceDocuments = resolveSettledResult(
         secondaryResults[0],
         previousState.sourceDocuments,
@@ -288,6 +329,26 @@ export function App() {
         }
       }
 
+      const nextReviewRunId =
+        previousState.selectedReviewRunId ?? reviewRuns?.runs[0]?.uiReviewRunId ?? null;
+      let selectedReviewRun = nextReviewRunId === null ? null : previousState.selectedReviewRun;
+      let reviewFindings = previousState.reviewFindings;
+      if (nextReviewRunId !== null) {
+        try {
+          selectedReviewRun = await devConsoleApi.getUiReviewRun(nextReviewRunId);
+        } catch {
+          warnings.push("ui review detail");
+        }
+        try {
+          reviewFindings = await devConsoleApi.listUiReviewFindings({
+            uiReviewRunId: nextReviewRunId,
+            limit: 200
+          });
+        } catch {
+          warnings.push("ui review findings");
+        }
+      }
+
       const nextNotice =
         warnings.length > 0
           ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
@@ -305,6 +366,11 @@ export function App() {
         docs,
         skills,
         devProfile,
+        reviewRuns,
+        selectedReviewRunId: nextReviewRunId,
+        selectedReviewRun,
+        reviewFindings,
+        reviewBaselines,
         runs,
         selectedRunId: nextRunId,
         notice: nextNotice,
@@ -361,6 +427,11 @@ export function App() {
       docs: null,
       skills: null,
       devProfile: null,
+      reviewRuns: null,
+      selectedReviewRunId: null,
+      selectedReviewRun: null,
+      reviewFindings: null,
+      reviewBaselines: null,
       notice: "Signed out.",
       error: null
     }));
@@ -447,6 +518,102 @@ export function App() {
     }
   }
 
+  async function handleUiReviewStart() {
+    try {
+      const run = await devConsoleApi.startUiReview({
+        surface: "dev-console-web",
+        scenarioSet: "default",
+        baseUrl: window.location.origin,
+        viewportJson: { width: 1440, height: 900 },
+        manifestJson: {
+          initiatedFromPanel: state.selectedPanel,
+          detailDepth: state.detailDepth
+        }
+      });
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        selectedPanel: "review",
+        selectedReviewRunId: run.uiReviewRunId,
+        selectedReviewRun: run,
+        reviewFindings: { findings: [], source: "dev-memory", total: 0 },
+        notice: `Started UI review run #${run.uiReviewRunId}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleUiReviewSelection(uiReviewRunId: number) {
+    try {
+      const [run, findings] = await Promise.all([
+        devConsoleApi.getUiReviewRun(uiReviewRunId),
+        devConsoleApi.listUiReviewFindings({ uiReviewRunId, limit: 200 })
+      ]);
+      setState((current) => ({
+        ...current,
+        selectedReviewRunId: uiReviewRunId,
+        selectedReviewRun: run,
+        reviewFindings: findings
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleUiReviewFindingReview(findingId: number, status: "accepted" | "rejected") {
+    try {
+      await devConsoleApi.reviewUiFinding({
+        findingId,
+        status,
+        reviewPayload: {
+          selectedPanel: state.selectedPanel,
+          detailDepth: state.detailDepth
+        }
+      });
+      if (state.selectedReviewRunId !== null) {
+        await handleUiReviewSelection(state.selectedReviewRunId);
+      }
+      setState((current) => ({
+        ...current,
+        notice: `${status} UI review finding #${findingId}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function handleUiReviewPromoteBaseline() {
+    if (state.selectedReviewRunId === null) {
+      return;
+    }
+    try {
+      const run = await devConsoleApi.promoteUiReviewBaseline({
+        uiReviewRunId: state.selectedReviewRunId
+      });
+      await loadConsoleData(state.selectedRunId ?? undefined);
+      setState((current) => ({
+        ...current,
+        selectedReviewRunId: run.uiReviewRunId,
+        notice: `Queued baseline promotion for UI review run #${run.uiReviewRunId}.`
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
   const isAdmin = state.me?.account.role === "admin";
   const activePanel =
     panelDefinitions.find((panel) => panel.key === state.selectedPanel) ?? panelDefinitions[0];
@@ -483,6 +650,21 @@ export function App() {
         onRetrySelectedTask={handleRetrySelectedTask}
         onEnqueue={handleEnqueue}
         onSupervision={handleSupervision}
+      />
+    );
+  } else if (state.selectedPanel === "review") {
+    selectedPanelContent = (
+      <ReviewPanel
+        reviewRuns={state.reviewRuns}
+        selectedReviewRun={state.selectedReviewRun}
+        reviewFindings={state.reviewFindings}
+        reviewBaselines={state.reviewBaselines}
+        detailDepth={state.detailDepth}
+        loading={state.loading}
+        onStartReview={handleUiReviewStart}
+        onSelectReviewRun={handleUiReviewSelection}
+        onReviewFinding={handleUiReviewFindingReview}
+        onPromoteBaseline={handleUiReviewPromoteBaseline}
       />
     );
   } else if (state.selectedPanel === "knowledge") {
@@ -997,6 +1179,205 @@ function CoordinationPanel(props: {
   );
 }
 
+function ReviewPanel(props: {
+  reviewRuns: UiReviewRunCollection | null;
+  selectedReviewRun: UiReviewRun | null;
+  reviewFindings: UiReviewFindingCollection | null;
+  reviewBaselines: UiReviewBaselineCollection | null;
+  detailDepth: "compact" | "expanded";
+  loading: boolean;
+  onStartReview: () => void;
+  onSelectReviewRun: (uiReviewRunId: number) => void;
+  onReviewFinding: (findingId: number, status: "accepted" | "rejected") => void;
+  onPromoteBaseline: () => void;
+}) {
+  const runs = props.reviewRuns?.runs ?? [];
+  const findings = props.reviewFindings?.findings ?? [];
+  const baselines = props.reviewBaselines?.baselines ?? [];
+  const proposedFindings = findings.filter((finding) => finding.status === "proposed").length;
+  const captureSteps = extractCaptureSteps(props.selectedReviewRun);
+  const screenshotLimit = props.detailDepth === "compact" ? 3 : 6;
+  const baselineLimit = props.detailDepth === "compact" ? 4 : 8;
+
+  return (
+    <div style={{ display: "grid", gap: tokens.space.lg }}>
+      <Panel title="Review Automation" eyebrow="Local Only">
+        <div style={{ display: "grid", gap: tokens.space.md }}>
+          <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap" }}>
+            <button onClick={() => void props.onStartReview()}>Start new UI review</button>
+            <button
+              onClick={() => void props.onPromoteBaseline()}
+              disabled={!props.selectedReviewRun || captureSteps.length === 0}
+            >
+              Promote selected run baselines
+            </button>
+          </div>
+          <div style={gridStyle}>
+            <InfoCard
+              label="Runs"
+              value={String(runs.length)}
+              detail={props.selectedReviewRun ? `selected #${props.selectedReviewRun.uiReviewRunId}` : "No review run selected."}
+            />
+            <InfoCard
+              label="Findings"
+              value={String(findings.length)}
+              detail={`${proposedFindings} awaiting supervised review`}
+            />
+            <InfoCard
+              label="Baselines"
+              value={String(baselines.length)}
+              detail="Approved screenshot references stored under .clartk/dev/ui-review."
+            />
+          </div>
+        </div>
+      </Panel>
+
+      <div style={splitGridStyle}>
+        <Panel title="Recent Review Runs" eyebrow="Selection">
+          {runs.length ? (
+            <div style={{ display: "grid", gap: tokens.space.sm }}>
+              {runs.map((run) => (
+                <button key={run.uiReviewRunId} onClick={() => void props.onSelectReviewRun(run.uiReviewRunId)}>
+                  Inspect review #{run.uiReviewRunId} · {run.status}
+                </button>
+              ))}
+            </div>
+          ) : props.loading ? (
+            <p>Loading UI review runs…</p>
+          ) : (
+            <p>No UI review runs yet.</p>
+          )}
+        </Panel>
+
+        <Panel title="Selected Review Run" eyebrow="Status">
+          {props.selectedReviewRun ? (
+            <div style={{ display: "grid", gap: tokens.space.md }}>
+              <div style={rowStyle}>
+                <div>
+                  <strong>
+                    Review #{props.selectedReviewRun.uiReviewRunId} · {props.selectedReviewRun.surface}
+                  </strong>
+                  <div style={{ color: tokens.color.muted }}>
+                    {props.selectedReviewRun.browser} · {props.selectedReviewRun.baseUrl}
+                  </div>
+                </div>
+                <StatusPill status={statusToneForReviewRun(props.selectedReviewRun.status)}>
+                  {props.selectedReviewRun.status}
+                </StatusPill>
+              </div>
+              <pre style={preStyle}>
+                {JSON.stringify(
+                  {
+                    viewport: props.selectedReviewRun.viewportJson,
+                    manifest: props.selectedReviewRun.manifestJson,
+                    captureSummary: summarizeReviewSummary(props.selectedReviewRun.captureSummaryJson),
+                    analysisSummary: summarizeReviewSummary(props.selectedReviewRun.analysisSummaryJson)
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            </div>
+          ) : props.loading ? (
+            <p>Loading selected UI review run…</p>
+          ) : (
+            <p>Select a review run to inspect its evidence and findings.</p>
+          )}
+        </Panel>
+      </div>
+
+      <div style={splitGridStyle}>
+        <Panel title="Findings" eyebrow="Deterministic Analysis">
+          {findings.length ? (
+            <div style={{ display: "grid", gap: tokens.space.md }}>
+              {findings.map((finding) => (
+                <div key={finding.uiReviewFindingId} style={eventStyle}>
+                  <div style={rowStyle}>
+                    <div>
+                      <strong>{finding.title}</strong>
+                      <div style={{ color: tokens.color.muted }}>
+                        {finding.category} · {finding.severity}
+                        {finding.scenarioName ? ` · ${finding.scenarioName}` : ""}
+                      </div>
+                    </div>
+                    <StatusPill status={statusToneForFinding(finding.severity)}>
+                      {finding.status}
+                    </StatusPill>
+                  </div>
+                  <p style={{ marginBottom: tokens.space.sm }}>{finding.summary}</p>
+                  {finding.fixDraftJson && Object.keys(finding.fixDraftJson).length ? (
+                    <pre style={preStyle}>{JSON.stringify(finding.fixDraftJson, null, 2)}</pre>
+                  ) : null}
+                  <div style={{ display: "flex", gap: tokens.space.sm, flexWrap: "wrap", marginTop: tokens.space.sm }}>
+                    <button onClick={() => void props.onReviewFinding(finding.uiReviewFindingId, "accepted")}>
+                      Accept
+                    </button>
+                    <button onClick={() => void props.onReviewFinding(finding.uiReviewFindingId, "rejected")}>
+                      Reject
+                    </button>
+                  </div>
+                  <ReviewEvidenceRow finding={finding} />
+                </div>
+              ))}
+            </div>
+          ) : props.loading ? (
+            <p>Loading UI review findings…</p>
+          ) : (
+            <p>No findings recorded for the selected run.</p>
+          )}
+        </Panel>
+
+        <Panel title="Approved Baselines" eyebrow="Reference Images">
+          {baselines.length ? (
+            <div style={{ display: "grid", gap: tokens.space.md }}>
+              {baselines.slice(0, baselineLimit).map((baseline) => (
+                <div key={baseline.uiReviewBaselineId} style={eventStyle}>
+                  <strong>
+                    {baseline.scenarioName} · {baseline.checkpointName}
+                  </strong>
+                  <div style={{ color: tokens.color.muted }}>
+                    {baseline.browser} · {baseline.viewportKey}
+                  </div>
+                  <ReviewImagePreview relativePath={baseline.relativePath} alt={`${baseline.scenarioName} baseline`} />
+                </div>
+              ))}
+            </div>
+          ) : props.loading ? (
+            <p>Loading baselines…</p>
+          ) : (
+            <p>No approved baselines yet.</p>
+          )}
+        </Panel>
+      </div>
+
+      <Panel title="Checkpoint Screenshots" eyebrow="Capture Evidence">
+        {captureSteps.length ? (
+          <div style={splitGridStyle}>
+            {captureSteps.slice(0, screenshotLimit).map((step, index) => (
+              <div key={`${step.scenarioName ?? "step"}-${index}`} style={eventStyle}>
+                <strong>
+                  {step.scenarioName ?? "scenario"} · {step.checkpointName ?? "loaded"}
+                </strong>
+                <div style={{ color: tokens.color.muted }}>
+                  {Array.isArray(step.expectedTexts) ? `${step.expectedTexts.length} expected markers` : "stable checkpoint"}
+                </div>
+                <ReviewImagePreview
+                  relativePath={step.screenshot?.relativePath ?? null}
+                  alt={`${step.scenarioName ?? "scenario"} screenshot`}
+                />
+              </div>
+            ))}
+          </div>
+        ) : props.loading ? (
+          <p>Loading review capture evidence…</p>
+        ) : (
+          <p>No checkpoint screenshots captured yet.</p>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
 function KnowledgePanel(props: {
   sourceDocuments: ResourceCollection<SourceDocumentRecord> | null;
   claims: ResourceCollection<KnowledgeClaimRecord> | null;
@@ -1143,6 +1524,50 @@ function PreferencesPanel(props: {
   );
 }
 
+function ReviewEvidenceRow(props: { finding: UiReviewFindingCollection["findings"][number] }) {
+  const descriptors = extractEvidenceDescriptors(props.finding.evidenceJson);
+  if (!descriptors.length) {
+    return null;
+  }
+
+  return (
+    <div style={{ display: "grid", gap: tokens.space.sm, marginTop: tokens.space.md }}>
+      {descriptors.slice(0, 3).map((descriptor, index) => (
+        <div key={`${descriptor.relativePath}-${index}`}>
+          <div style={{ color: tokens.color.muted, marginBottom: tokens.space.xs }}>{descriptor.label}</div>
+          <ReviewImagePreview relativePath={descriptor.relativePath} alt={descriptor.label} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReviewImagePreview(props: { relativePath: string | null; alt: string }) {
+  if (!props.relativePath) {
+    return <p style={{ marginTop: tokens.space.sm }}>No image artifact linked.</p>;
+  }
+  return (
+    <a
+      href={devConsoleApi.uiReviewAssetUrl(props.relativePath)}
+      target="_blank"
+      rel="noreferrer"
+      style={{ display: "grid", gap: tokens.space.sm, marginTop: tokens.space.sm }}
+    >
+      <img
+        src={devConsoleApi.uiReviewAssetUrl(props.relativePath)}
+        alt={props.alt}
+        style={{
+          width: "100%",
+          borderRadius: tokens.radius.md,
+          border: `1px solid ${tokens.color.line}`,
+          background: "#ffffff"
+        }}
+      />
+      <span style={{ color: tokens.color.muted, fontSize: 12 }}>{props.relativePath}</span>
+    </a>
+  );
+}
+
 function PreviewCard(props: {
   tone: "forest" | "sand" | "ink";
   label: string;
@@ -1265,6 +1690,90 @@ function Message(props: { tone: "ok" | "error"; children: React.ReactNode }) {
       {props.children}
     </div>
   );
+}
+
+function statusToneForReviewRun(status: string): "ok" | "neutral" | "degraded" {
+  if (status === "baseline_promoted" || status === "ready_for_review") {
+    return "ok";
+  }
+  if (status === "failed") {
+    return "degraded";
+  }
+  return "neutral";
+}
+
+function statusToneForFinding(severity: string): "ok" | "neutral" | "degraded" {
+  if (severity === "critical" || severity === "error") {
+    return "degraded";
+  }
+  if (severity === "warning") {
+    return "neutral";
+  }
+  return "ok";
+}
+
+function summarizeReviewSummary(summary: Record<string, unknown>): Record<string, unknown> {
+  return {
+    status: summary.status,
+    stepCount: Array.isArray(summary.steps) ? summary.steps.length : 0,
+    artifactCount: Array.isArray(summary.artifacts) ? summary.artifacts.length : 0,
+    threshold: summary.threshold,
+    completedAt: summary.completedAt
+  };
+}
+
+function extractCaptureSteps(run: UiReviewRun | null): Array<{
+  scenarioName: string | null;
+  checkpointName: string | null;
+  expectedTexts: string[];
+  screenshot: { relativePath: string | null };
+}> {
+  const rawSteps = run?.captureSummaryJson.steps;
+  if (!Array.isArray(rawSteps)) {
+    return [];
+  }
+
+  return rawSteps.flatMap((step) => {
+    if (typeof step !== "object" || step === null || Array.isArray(step)) {
+      return [];
+    }
+    const stepRecord = step as Record<string, unknown>;
+    const screenshot =
+      typeof stepRecord.screenshot === "object" &&
+      stepRecord.screenshot !== null &&
+      !Array.isArray(stepRecord.screenshot)
+        ? (stepRecord.screenshot as Record<string, unknown>)
+          : {};
+      const expectedTexts = Array.isArray(stepRecord.expectedTexts)
+        ? stepRecord.expectedTexts.filter((value: unknown): value is string => typeof value === "string")
+        : [];
+      return [{
+        scenarioName: typeof stepRecord.scenarioName === "string" ? stepRecord.scenarioName : null,
+        checkpointName: typeof stepRecord.checkpointName === "string" ? stepRecord.checkpointName : null,
+        expectedTexts,
+        screenshot: {
+          relativePath: typeof screenshot.relativePath === "string" ? screenshot.relativePath : null
+        }
+      }];
+    });
+}
+
+function extractEvidenceDescriptors(evidenceJson: Record<string, unknown>): Array<{
+  label: string;
+  relativePath: string;
+}> {
+  const descriptors: Array<{ label: string; relativePath: string }> = [];
+  for (const [label, value] of Object.entries(evidenceJson)) {
+    if (typeof value !== "object" || value === null) {
+      continue;
+    }
+    const descriptor = value as Record<string, unknown>;
+    if (typeof descriptor.relativePath !== "string" || !descriptor.relativePath.endsWith(".png")) {
+      continue;
+    }
+    descriptors.push({ label, relativePath: descriptor.relativePath });
+  }
+  return descriptors;
 }
 
 function serviceStatusLabel(overview: WorkspaceOverview | null, serviceName: string) {

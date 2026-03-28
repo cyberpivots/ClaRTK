@@ -5,7 +5,10 @@ import hashlib
 import json
 import math
 import os
+import re
+import shutil
 import socket
+import subprocess
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -63,6 +66,37 @@ HARDWARE_STATUS_BUILD_RUNTIME_PUBLISHED = "runtime_published"
 HARDWARE_STATUS_BUILD_RUNTIME_REGISTRATION_FAILED = "runtime_registration_failed"
 HARDWARE_STATUS_BUILD_FAILED = "failed"
 HARDWARE_STATUS_BUILD_CANCELLED = "cancelled"
+UI_REVIEW_CAPTURE_TASK_KIND = "ui.review.capture"
+UI_REVIEW_ANALYZE_TASK_KIND = "ui.review.analyze"
+UI_REVIEW_FIX_DRAFT_TASK_KIND = "ui.review.fix_draft"
+UI_REVIEW_PROMOTE_BASELINE_TASK_KIND = "ui.review.promote_baseline"
+UI_REVIEW_DEFAULT_SURFACE = "dev-console-web"
+UI_REVIEW_DEFAULT_SCENARIO_SET = "default"
+UI_REVIEW_DEFAULT_BROWSER = "chromium"
+UI_REVIEW_DEFAULT_BASE_URL = "http://127.0.0.1:5180"
+UI_REVIEW_DEFAULT_VIEWPORT = {"width": 1440, "height": 900}
+UI_REVIEW_STATUS_PLANNED = "planned"
+UI_REVIEW_STATUS_CAPTURE_RUNNING = "capture_running"
+UI_REVIEW_STATUS_CAPTURED = "captured"
+UI_REVIEW_STATUS_ANALYSIS_RUNNING = "analysis_running"
+UI_REVIEW_STATUS_ANALYZED = "analyzed"
+UI_REVIEW_STATUS_FIX_DRAFT_RUNNING = "fix_draft_running"
+UI_REVIEW_STATUS_READY_FOR_REVIEW = "ready_for_review"
+UI_REVIEW_STATUS_BASELINE_PROMOTION_RUNNING = "baseline_promotion_running"
+UI_REVIEW_STATUS_BASELINE_PROMOTED = "baseline_promoted"
+UI_REVIEW_STATUS_FAILED = "failed"
+UI_REVIEW_FINDING_STATUS_PROPOSED = "proposed"
+UI_REVIEW_FINDING_STATUS_ACCEPTED = "accepted"
+UI_REVIEW_FINDING_STATUS_REJECTED = "rejected"
+UI_REVIEW_BASELINE_STATUS_ACTIVE = "active"
+UI_REVIEW_BASELINE_STATUS_SUPERSEDED = "superseded"
+UI_REVIEW_NODE_BINARY = os.environ.get("CLARTK_UI_REVIEW_NODE_BINARY", "node")
+UI_REVIEW_COMMAND_TIMEOUT_SECONDS = max(
+    30,
+    int(os.environ.get("CLARTK_UI_REVIEW_TASK_TIMEOUT_SECONDS", "300")),
+)
+UI_REVIEW_CAPTURE_SCRIPT = REPO_ROOT / "scripts" / "ui-review-capture.mjs"
+UI_REVIEW_ANALYZE_SCRIPT = REPO_ROOT / "scripts" / "ui-review-analyze.mjs"
 
 
 @dataclass(frozen=True)
@@ -264,6 +298,11 @@ def as_int(value: Any) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def sanitize_identifier(value: Any) -> str:
+    sanitized = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(value)).strip("-")
+    return sanitized or "item"
 
 
 def parse_inventory_manifest(manifest_path: str) -> dict[str, list[dict[str, Any]]]:
@@ -950,6 +989,596 @@ class MemoryRepository:
                 (build_id,),
             ).fetchone()
         return map_inventory_build(row) if row is not None else None
+
+    def _ui_review_root(self) -> Path:
+        configured_root = os.environ.get("CLARTK_UI_REVIEW_ROOT")
+        return (
+            Path(configured_root).resolve()
+            if configured_root
+            else REPO_ROOT / ".clartk" / "dev" / "ui-review"
+        )
+
+    def _ui_review_baseline_root(self) -> Path:
+        configured_root = os.environ.get("CLARTK_UI_REVIEW_BASELINE_ROOT")
+        return (
+            Path(configured_root).resolve()
+            if configured_root
+            else self._ui_review_root() / "baselines"
+        )
+
+    def _build_ui_review_artifact_dir(
+        self,
+        ui_review_run_id: int,
+        *,
+        surface: str,
+        scenario_set: str,
+    ) -> Path:
+        return self._ui_review_root() / "runs" / (
+            f"{ui_review_run_id:06d}-"
+            f"{sanitize_identifier(surface)}-"
+            f"{sanitize_identifier(scenario_set)}"
+        )
+
+    def _build_ui_review_baseline_path(
+        self,
+        *,
+        surface: str,
+        browser: str,
+        viewport_key: str,
+        scenario_name: str,
+        checkpoint_name: str,
+    ) -> Path:
+        return (
+            self._ui_review_baseline_root()
+            / sanitize_identifier(surface)
+            / sanitize_identifier(browser)
+            / sanitize_identifier(viewport_key)
+            / f"{sanitize_identifier(scenario_name)}-{sanitize_identifier(checkpoint_name)}.png"
+        )
+
+    def _relative_repo_path(self, target: Path) -> str:
+        return target.resolve().relative_to(REPO_ROOT).as_posix()
+
+    def _run_json_command(self, args: list[str]) -> dict[str, Any]:
+        completed = subprocess.run(
+            args,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=UI_REVIEW_COMMAND_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip() or "command failed"
+            raise RuntimeError(detail)
+
+        stdout = completed.stdout.strip()
+        if not stdout:
+            raise RuntimeError("review command returned no json payload")
+
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"review command returned invalid json: {error}") from error
+
+    def _create_review_task(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        task_kind: str,
+        queue_name: str,
+        priority: int,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            INSERT INTO agent.task (task_kind, queue_name, priority, payload)
+            VALUES (%s, %s, %s, %s)
+            RETURNING
+              agent_task_id,
+              task_kind,
+              queue_name,
+              status,
+              priority,
+              payload,
+              available_at,
+              lease_owner,
+              lease_expires_at,
+              attempt_count,
+              max_attempts,
+              last_error,
+              created_at,
+              updated_at,
+              completed_at
+            """,
+            (task_kind, queue_name, priority, Jsonb(payload)),
+        ).fetchone()
+        return map_agent_task(row)
+
+    def _record_ui_review_artifacts(
+        self,
+        connection: psycopg.Connection[Any],
+        agent_run_id: int,
+        descriptors: list[dict[str, Any]],
+    ) -> None:
+        seen: set[tuple[str, str]] = set()
+        for descriptor in descriptors:
+            kind = str(descriptor.get("kind", "")).strip()
+            relative_path = str(descriptor.get("relativePath", "")).strip()
+            if not kind or not relative_path:
+                continue
+            dedupe_key = (kind, relative_path)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            self._record_agent_artifact(
+                connection,
+                agent_run_id,
+                artifact_kind=kind,
+                uri=f"clartk://workspace/{relative_path}",
+                metadata={
+                    "relativePath": relative_path,
+                    "mediaType": descriptor.get("mediaType"),
+                },
+            )
+
+    def start_ui_review(
+        self,
+        payload: dict[str, Any],
+        *,
+        requested_by_account_id: str | None = None,
+    ) -> dict[str, Any]:
+        surface = str(payload.get("surface") or UI_REVIEW_DEFAULT_SURFACE).strip()
+        scenario_set = str(payload.get("scenarioSet") or UI_REVIEW_DEFAULT_SCENARIO_SET).strip()
+        base_url = str(payload.get("baseUrl") or UI_REVIEW_DEFAULT_BASE_URL).strip()
+        queue_name = (
+            str(payload.get("queueName")).strip()
+            if isinstance(payload.get("queueName"), str) and str(payload.get("queueName")).strip()
+            else DEFAULT_AGENT_TASK_QUEUE
+        )
+        priority = int(payload.get("priority", 0))
+        viewport_json = ensure_dict(payload.get("viewportJson")) or dict(UI_REVIEW_DEFAULT_VIEWPORT)
+        manifest_json = ensure_dict(payload.get("manifestJson"))
+        manifest_json.update(
+            {
+                "localOnly": True,
+                "grader": {"enabled": False, "mode": "reserved"},
+                "recordVideo": bool(payload.get("recordVideo", False)),
+            }
+        )
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                INSERT INTO review.ui_run (
+                  surface,
+                  scenario_set,
+                  status,
+                  base_url,
+                  browser,
+                  viewport_json,
+                  requested_by_account_id,
+                  manifest_json
+                )
+                VALUES (%s, %s, %s::review.run_status, %s, %s, %s, %s, %s)
+                RETURNING
+                  ui_review_run_id,
+                  surface,
+                  scenario_set,
+                  status,
+                  base_url,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  capture_task_id,
+                  analyze_task_id,
+                  fix_draft_task_id,
+                  manifest_json,
+                  capture_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                """,
+                (
+                    surface,
+                    scenario_set,
+                    UI_REVIEW_STATUS_PLANNED,
+                    base_url,
+                    UI_REVIEW_DEFAULT_BROWSER,
+                    Jsonb(viewport_json),
+                    requested_by_account_id,
+                    Jsonb(manifest_json),
+                ),
+            ).fetchone()
+            if run_row is None:
+                raise RuntimeError("failed to create ui review run")
+
+            ui_review_run_id = int(run_row["ui_review_run_id"])
+            artifact_dir = self._build_ui_review_artifact_dir(
+                ui_review_run_id,
+                surface=surface,
+                scenario_set=scenario_set,
+            )
+            capture_summary_path = artifact_dir / "capture" / "capture-summary.json"
+            analysis_summary_path = artifact_dir / "analysis" / "analysis-summary.json"
+            manifest_patch = {
+                "artifactDir": self._relative_repo_path(artifact_dir),
+                "captureSummaryPath": self._relative_repo_path(capture_summary_path),
+                "analysisSummaryPath": self._relative_repo_path(analysis_summary_path),
+                "surface": surface,
+                "scenarioSet": scenario_set,
+                "baseUrl": base_url,
+                "viewport": viewport_json,
+            }
+            task_payload = {
+                "uiReviewRunId": ui_review_run_id,
+                "surface": surface,
+                "scenarioSet": scenario_set,
+                "baseUrl": base_url,
+                "viewportJson": viewport_json,
+                "recordVideo": bool(payload.get("recordVideo", False)),
+                "manifestJson": manifest_patch,
+                "requestedByAccountId": requested_by_account_id,
+            }
+            capture_task = self._create_review_task(
+                connection,
+                task_kind=UI_REVIEW_CAPTURE_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload=task_payload,
+            )
+            analyze_task = self._create_review_task(
+                connection,
+                task_kind=UI_REVIEW_ANALYZE_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={"uiReviewRunId": ui_review_run_id},
+            )
+            fix_task = self._create_review_task(
+                connection,
+                task_kind=UI_REVIEW_FIX_DRAFT_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={"uiReviewRunId": ui_review_run_id},
+            )
+            self._ensure_task_dependency(
+                connection,
+                int(analyze_task["agentTaskId"]),
+                int(capture_task["agentTaskId"]),
+            )
+            self._ensure_task_dependency(
+                connection,
+                int(fix_task["agentTaskId"]),
+                int(analyze_task["agentTaskId"]),
+            )
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  current_task_id = %s,
+                  capture_task_id = %s,
+                  analyze_task_id = %s,
+                  fix_draft_task_id = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    int(capture_task["agentTaskId"]),
+                    int(capture_task["agentTaskId"]),
+                    int(analyze_task["agentTaskId"]),
+                    int(fix_task["agentTaskId"]),
+                    Jsonb(manifest_patch),
+                    ui_review_run_id,
+                ),
+            )
+            for task in (capture_task, analyze_task, fix_task):
+                self._notify_task_ready(
+                    connection,
+                    queue_name=queue_name,
+                    task_kind=str(task["taskKind"]),
+                )
+            connection.commit()
+
+        created = self.get_ui_review_run(ui_review_run_id)
+        if created is None:
+            raise LookupError("ui review run not found after creation")
+        return created
+
+    def list_ui_review_runs(
+        self,
+        *,
+        surface: str | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  ui_review_run_id,
+                  surface,
+                  scenario_set,
+                  status,
+                  base_url,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  capture_task_id,
+                  analyze_task_id,
+                  fix_draft_task_id,
+                  manifest_json,
+                  capture_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM review.ui_run
+                WHERE (%s::TEXT IS NULL OR surface = %s::TEXT)
+                ORDER BY created_at DESC, ui_review_run_id DESC
+                LIMIT %s
+                """,
+                (surface, surface, limit),
+            ).fetchall()
+        return [map_ui_review_run(row) for row in rows]
+
+    def get_ui_review_run(self, ui_review_run_id: int) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  ui_review_run_id,
+                  surface,
+                  scenario_set,
+                  status,
+                  base_url,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  capture_task_id,
+                  analyze_task_id,
+                  fix_draft_task_id,
+                  manifest_json,
+                  capture_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM review.ui_run
+                WHERE ui_review_run_id = %s
+                """,
+                (ui_review_run_id,),
+            ).fetchone()
+        return map_ui_review_run(row) if row is not None else None
+
+    def list_ui_review_findings(
+        self,
+        *,
+        ui_review_run_id: int | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  ui_review_finding_id,
+                  ui_review_run_id,
+                  category,
+                  severity,
+                  status,
+                  title,
+                  summary,
+                  scenario_name,
+                  checkpoint_name,
+                  evidence_json,
+                  analyzer_json,
+                  fix_draft_json,
+                  reviewed_by_account_id,
+                  reviewed_at,
+                  created_at
+                FROM review.ui_finding
+                WHERE (%s::BIGINT IS NULL OR ui_review_run_id = %s::BIGINT)
+                  AND (%s::TEXT IS NULL OR status = %s::review.finding_status)
+                ORDER BY created_at DESC, ui_review_finding_id DESC
+                LIMIT %s
+                """,
+                (ui_review_run_id, ui_review_run_id, status, status, limit),
+            ).fetchall()
+        return [map_ui_review_finding(row) for row in rows]
+
+    def list_ui_review_baselines(
+        self,
+        *,
+        surface: str | None = None,
+        status: str | None = UI_REVIEW_BASELINE_STATUS_ACTIVE,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                  ui_review_baseline_id,
+                  surface,
+                  scenario_name,
+                  checkpoint_name,
+                  browser,
+                  viewport_key,
+                  relative_path,
+                  status,
+                  source_run_id,
+                  approved_by_account_id,
+                  metadata_json,
+                  created_at,
+                  superseded_at
+                FROM review.ui_baseline
+                WHERE (%s::TEXT IS NULL OR surface = %s::TEXT)
+                  AND (%s::TEXT IS NULL OR status = %s::review.baseline_status)
+                ORDER BY created_at DESC, ui_review_baseline_id DESC
+                LIMIT %s
+                """,
+                (surface, surface, status, status, limit),
+            ).fetchall()
+        return [map_ui_review_baseline(row) for row in rows]
+
+    def review_ui_finding(
+        self,
+        ui_review_finding_id: int,
+        *,
+        status: str,
+        reviewed_by_account_id: str,
+        review_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if status not in {UI_REVIEW_FINDING_STATUS_ACCEPTED, UI_REVIEW_FINDING_STATUS_REJECTED}:
+            raise ValueError("status must be accepted or rejected")
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  ui_review_finding_id,
+                  ui_review_run_id,
+                  category,
+                  severity,
+                  status,
+                  title,
+                  summary,
+                  scenario_name,
+                  checkpoint_name,
+                  evidence_json,
+                  analyzer_json,
+                  fix_draft_json,
+                  reviewed_by_account_id,
+                  reviewed_at,
+                  created_at
+                FROM review.ui_finding
+                WHERE ui_review_finding_id = %s
+                FOR UPDATE
+                """,
+                (ui_review_finding_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("ui review finding not found")
+
+            fix_draft_json = dict(row["fix_draft_json"] or {})
+            fix_draft_json["review"] = {
+                "status": status,
+                "reviewedByAccountId": reviewed_by_account_id,
+                "payload": review_payload or {},
+                "reviewedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            updated = connection.execute(
+                """
+                UPDATE review.ui_finding
+                SET
+                  status = %s::review.finding_status,
+                  fix_draft_json = %s,
+                  reviewed_by_account_id = %s,
+                  reviewed_at = NOW()
+                WHERE ui_review_finding_id = %s
+                RETURNING
+                  ui_review_finding_id,
+                  ui_review_run_id,
+                  category,
+                  severity,
+                  status,
+                  title,
+                  summary,
+                  scenario_name,
+                  checkpoint_name,
+                  evidence_json,
+                  analyzer_json,
+                  fix_draft_json,
+                  reviewed_by_account_id,
+                  reviewed_at,
+                  created_at
+                """,
+                (
+                    status,
+                    Jsonb(fix_draft_json),
+                    reviewed_by_account_id,
+                    ui_review_finding_id,
+                ),
+            ).fetchone()
+            connection.commit()
+
+        return map_ui_review_finding(updated)
+
+    def trigger_ui_review_baseline_promotion(
+        self,
+        ui_review_run_id: int,
+        *,
+        approved_by_account_id: str,
+        queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
+        priority: int = 0,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT ui_review_run_id, status, fix_draft_task_id
+                FROM review.ui_run
+                WHERE ui_review_run_id = %s
+                FOR UPDATE
+                """,
+                (ui_review_run_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("ui review run not found")
+            if row["status"] not in {
+                UI_REVIEW_STATUS_ANALYZED,
+                UI_REVIEW_STATUS_READY_FOR_REVIEW,
+                UI_REVIEW_STATUS_BASELINE_PROMOTED,
+            }:
+                raise ValueError("ui review run must be analyzed before baseline promotion")
+
+            task = self._create_review_task(
+                connection,
+                task_kind=UI_REVIEW_PROMOTE_BASELINE_TASK_KIND,
+                queue_name=queue_name,
+                priority=priority,
+                payload={
+                    "uiReviewRunId": ui_review_run_id,
+                    "approvedByAccountId": approved_by_account_id,
+                },
+            )
+            depends_on_task_id = as_int(row["fix_draft_task_id"])
+            if depends_on_task_id is not None:
+                self._ensure_task_dependency(
+                    connection,
+                    int(task["agentTaskId"]),
+                    depends_on_task_id,
+                )
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET current_task_id = %s, updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (int(task["agentTaskId"]), ui_review_run_id),
+            )
+            self._notify_task_ready(
+                connection,
+                queue_name=queue_name,
+                task_kind=UI_REVIEW_PROMOTE_BASELINE_TASK_KIND,
+            )
+            connection.commit()
+
+        refreshed = self.get_ui_review_run(ui_review_run_id)
+        if refreshed is None:
+            raise LookupError("ui review run not found after baseline promotion request")
+        return refreshed
 
     def enqueue_agent_task(
         self,
@@ -2316,7 +2945,7 @@ class MemoryRepository:
         run_id = self._start_agent_run(worker_name, task)
 
         try:
-            result = self._execute_task(task, chunk_size=chunk_size)
+            result = self._execute_task(task, run_id=run_id, chunk_size=chunk_size)
         except Exception as error:
             return self._record_failed_task(
                 task,
@@ -2577,6 +3206,7 @@ class MemoryRepository:
         self,
         task: dict[str, Any],
         *,
+        run_id: int,
         chunk_size: int,
     ) -> dict[str, Any]:
         task_kind = str(task["taskKind"])
@@ -2614,6 +3244,14 @@ class MemoryRepository:
             return self._run_hardware_bench_validate(payload)
         if task_kind == HARDWARE_RUNTIME_REGISTER_TASK_KIND:
             return self._run_hardware_runtime_register(payload)
+        if task_kind == UI_REVIEW_CAPTURE_TASK_KIND:
+            return self._run_ui_review_capture(payload, run_id=run_id, task=task)
+        if task_kind == UI_REVIEW_ANALYZE_TASK_KIND:
+            return self._run_ui_review_analyze(payload, run_id=run_id, task=task)
+        if task_kind == UI_REVIEW_FIX_DRAFT_TASK_KIND:
+            return self._run_ui_review_fix_draft(payload, run_id=run_id, task=task)
+        if task_kind == UI_REVIEW_PROMOTE_BASELINE_TASK_KIND:
+            return self._run_ui_review_promote_baseline(payload, run_id=run_id, task=task)
 
         raise ValueError(f"unsupported task kind: {task_kind}")
 
@@ -2792,6 +3430,690 @@ class MemoryRepository:
             "step": "runtime_register",
             "status": HARDWARE_STATUS_BUILD_RUNTIME_PENDING,
             "runtimeDeviceId": resolved_runtime_device_id,
+        }
+
+    def _build_ui_fix_draft(
+        self,
+        finding: dict[str, Any],
+        run: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        category = str(finding["category"])
+        scenario_name = finding.get("scenarioName")
+        checkpoint_name = finding.get("checkpointName")
+        severity = str(finding["severity"])
+        evidence_json = dict(finding.get("evidenceJson") or {})
+
+        likely_paths = ["apps/dev-console-web/src/App.tsx"]
+        regression_class = "frontend_regression"
+        validation = [
+            "Run `corepack yarn typecheck`.",
+            "Run `node scripts/ui-review-smoke.mjs` against the same browser and viewport.",
+        ]
+
+        if category in {"api_error", "request_failure"}:
+            likely_paths = [
+                "apps/dev-console-web/src/App.tsx",
+                "services/dev-console-api/src/index.ts",
+                "services/agent-memory/src/agent_memory/service.py",
+            ]
+            regression_class = "frontend_backend_contract_regression"
+            validation.append("Confirm the affected `/v1/*` route returns 2xx in the browser trace.")
+        elif category in {"console_error", "page_error", "loading_stall", "missing_content"}:
+            likely_paths = [
+                "apps/dev-console-web/src/App.tsx",
+                "packages/ui-web/src/index.ts",
+            ]
+            regression_class = "frontend_render_regression"
+            validation.append("Reload the failing panel and confirm expected marker text is present.")
+        elif category in {"layout_overflow", "visual_diff"}:
+            likely_paths = [
+                "apps/dev-console-web/src/App.tsx",
+                "packages/design-tokens/src/index.ts",
+                "packages/ui-web/src/index.ts",
+            ]
+            regression_class = "visual_layout_regression"
+            validation.append("Compare the regenerated screenshot with the approved baseline.")
+
+        evidence_links: list[str] = []
+        for key in ("screenshot", "baseline", "diff"):
+            descriptor = evidence_json.get(key)
+            if isinstance(descriptor, dict):
+                relative_path = descriptor.get("relativePath")
+                if isinstance(relative_path, str) and relative_path:
+                    evidence_links.append(relative_path)
+
+        return {
+            "draftVersion": 1,
+            "failingScenario": scenario_name,
+            "checkpoint": checkpoint_name,
+            "regressionClass": regression_class,
+            "severity": severity,
+            "surface": run["surface"] if run is not None else UI_REVIEW_DEFAULT_SURFACE,
+            "likelyAffectedPaths": likely_paths,
+            "requiredValidation": validation,
+            "evidenceLinks": sorted(set(evidence_links)),
+            "operatorAction": "Create a bounded remediation task after reviewing the linked evidence.",
+        }
+
+    def _run_ui_review_capture(
+        self,
+        payload: dict[str, Any],
+        *,
+        run_id: int,
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        ui_review_run_id = as_int(payload.get("uiReviewRunId"))
+        if ui_review_run_id is None:
+            raise ValueError("uiReviewRunId is required for ui.review.capture")
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT ui_review_run_id, surface, scenario_set, base_url, viewport_json, manifest_json
+                FROM review.ui_run
+                WHERE ui_review_run_id = %s
+                FOR UPDATE
+                """,
+                (ui_review_run_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("ui review run not found")
+
+            surface = str(row["surface"])
+            scenario_set = str(row["scenario_set"])
+            base_url = str(row["base_url"])
+            viewport_json = dict(row["viewport_json"] or {})
+            artifact_dir = self._build_ui_review_artifact_dir(
+                ui_review_run_id,
+                surface=surface,
+                scenario_set=scenario_set,
+            )
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            manifest_patch = {
+                "artifactDir": self._relative_repo_path(artifact_dir),
+                "captureSummaryPath": self._relative_repo_path(artifact_dir / "capture" / "capture-summary.json"),
+            }
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_CAPTURE_RUNNING,
+                    task["agentTaskId"],
+                    Jsonb(manifest_patch),
+                    ui_review_run_id,
+                ),
+            )
+            connection.commit()
+
+        command = [
+            UI_REVIEW_NODE_BINARY,
+            str(UI_REVIEW_CAPTURE_SCRIPT),
+            "--artifact-dir",
+            str(artifact_dir),
+            "--base-url",
+            base_url,
+            "--viewport",
+            json.dumps(viewport_json or UI_REVIEW_DEFAULT_VIEWPORT),
+        ]
+        if payload.get("recordVideo"):
+            command.extend(["--record-video", "true"])
+        result = self._run_json_command(command)
+
+        summary_path = REPO_ROOT / str(result["summaryPath"])
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        artifacts = [descriptor for descriptor in summary.get("artifacts", []) if isinstance(descriptor, dict)]
+        artifacts.append(
+            {
+                "kind": "ui.review.capture_summary",
+                "relativePath": self._relative_repo_path(summary_path),
+                "mediaType": "application/json",
+            }
+        )
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  capture_summary_json = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_CAPTURED,
+                    task["agentTaskId"],
+                    Jsonb(summary),
+                    Jsonb({"captureSummaryPath": self._relative_repo_path(summary_path)}),
+                    ui_review_run_id,
+                ),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "ui_review_capture_completed",
+                {
+                    "uiReviewRunId": ui_review_run_id,
+                    "stepCount": len(summary.get("steps", [])),
+                    "artifactCount": len(artifacts),
+                },
+            )
+            self._record_ui_review_artifacts(connection, run_id, artifacts)
+            connection.commit()
+
+        return {
+            "uiReviewRunId": ui_review_run_id,
+            "status": summary.get("status", UI_REVIEW_STATUS_CAPTURED),
+            "stepCount": len(summary.get("steps", [])),
+            "artifactCount": len(artifacts),
+            "summaryPath": self._relative_repo_path(summary_path),
+        }
+
+    def _run_ui_review_analyze(
+        self,
+        payload: dict[str, Any],
+        *,
+        run_id: int,
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        ui_review_run_id = as_int(payload.get("uiReviewRunId"))
+        if ui_review_run_id is None:
+            raise ValueError("uiReviewRunId is required for ui.review.analyze")
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT manifest_json
+                FROM review.ui_run
+                WHERE ui_review_run_id = %s
+                FOR UPDATE
+                """,
+                (ui_review_run_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("ui review run not found")
+            manifest_json = dict(row["manifest_json"] or {})
+            capture_summary_path = manifest_json.get("captureSummaryPath")
+            if not isinstance(capture_summary_path, str) or not capture_summary_path:
+                raise ValueError("capture summary path is not available for ui.review.analyze")
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_ANALYSIS_RUNNING,
+                    task["agentTaskId"],
+                    ui_review_run_id,
+                ),
+            )
+            connection.commit()
+
+        summary_path = REPO_ROOT / capture_summary_path
+        result = self._run_json_command(
+            [
+                UI_REVIEW_NODE_BINARY,
+                str(UI_REVIEW_ANALYZE_SCRIPT),
+                "--summary-path",
+                str(summary_path),
+                "--baseline-root",
+                str(self._ui_review_baseline_root()),
+            ]
+        )
+        analysis_summary_path = REPO_ROOT / str(result["analysisSummaryPath"])
+        analysis_summary = json.loads(analysis_summary_path.read_text(encoding="utf-8"))
+        findings = [finding for finding in analysis_summary.get("findings", []) if isinstance(finding, dict)]
+        artifacts = [descriptor for descriptor in analysis_summary.get("artifacts", []) if isinstance(descriptor, dict)]
+        artifacts.append(
+            {
+                "kind": "ui.review.analysis_summary",
+                "relativePath": self._relative_repo_path(analysis_summary_path),
+                "mediaType": "application/json",
+            }
+        )
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT surface, scenario_set, capture_summary_json
+                FROM review.ui_run
+                WHERE ui_review_run_id = %s
+                FOR UPDATE
+                """,
+                (ui_review_run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise LookupError("ui review run not found")
+            capture_summary_json = dict(run_row["capture_summary_json"] or {})
+            if capture_summary_json.get("error"):
+                findings.append(
+                    {
+                        "category": "capture_error",
+                        "severity": "critical",
+                        "title": "Capture stage reported an execution error",
+                        "summary": str(capture_summary_json["error"].get("message", "capture failed")),
+                        "scenarioName": None,
+                        "checkpointName": None,
+                        "evidenceJson": {
+                            "captureSummaryPath": capture_summary_path,
+                            "error": capture_summary_json["error"],
+                        },
+                    }
+                )
+
+            connection.execute(
+                "DELETE FROM review.ui_finding WHERE ui_review_run_id = %s",
+                (ui_review_run_id,),
+            )
+            inserted_findings = 0
+            for finding in findings:
+                connection.execute(
+                    """
+                    INSERT INTO review.ui_finding (
+                      ui_review_run_id,
+                      category,
+                      severity,
+                      status,
+                      title,
+                      summary,
+                      scenario_name,
+                      checkpoint_name,
+                      evidence_json,
+                      analyzer_json
+                    )
+                    VALUES (%s, %s, %s::review.finding_severity, %s::review.finding_status, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        ui_review_run_id,
+                        str(finding.get("category", "unknown")),
+                        str(finding.get("severity", "warning")),
+                        UI_REVIEW_FINDING_STATUS_PROPOSED,
+                        str(finding.get("title", "Untitled finding")),
+                        str(finding.get("summary", "")),
+                        finding.get("scenarioName"),
+                        finding.get("checkpointName"),
+                        Jsonb(ensure_dict(finding.get("evidenceJson"))),
+                        Jsonb(
+                            {
+                                "source": "deterministic-local-analyzer",
+                                "threshold": analysis_summary.get("threshold"),
+                            }
+                        ),
+                    ),
+                )
+                inserted_findings += 1
+
+            outcome = (
+                "failed"
+                if any(str(finding.get("severity")) in {"error", "critical"} for finding in findings)
+                else "passed"
+            )
+            connection.execute(
+                """
+                INSERT INTO eval.evaluation_result (subject, outcome, detail)
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    f"dev-console-ui-review:{ui_review_run_id}",
+                    outcome,
+                    Jsonb(
+                        {
+                            "uiReviewRunId": ui_review_run_id,
+                            "findingCount": inserted_findings,
+                            "artifactCount": len(artifacts),
+                            "surface": run_row["surface"],
+                            "scenarioSet": run_row["scenario_set"],
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  analysis_summary_json = %s,
+                  manifest_json = manifest_json || %s,
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_ANALYZED,
+                    task["agentTaskId"],
+                    Jsonb(analysis_summary),
+                    Jsonb({"analysisSummaryPath": self._relative_repo_path(analysis_summary_path)}),
+                    ui_review_run_id,
+                ),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "ui_review_analysis_completed",
+                {
+                    "uiReviewRunId": ui_review_run_id,
+                    "findingCount": inserted_findings,
+                    "outcome": outcome,
+                },
+            )
+            self._record_ui_review_artifacts(connection, run_id, artifacts)
+            connection.commit()
+
+        return {
+            "uiReviewRunId": ui_review_run_id,
+            "status": analysis_summary.get("status", "passed"),
+            "findingCount": len(findings),
+            "analysisSummaryPath": self._relative_repo_path(analysis_summary_path),
+        }
+
+    def _run_ui_review_fix_draft(
+        self,
+        payload: dict[str, Any],
+        *,
+        run_id: int,
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        ui_review_run_id = as_int(payload.get("uiReviewRunId"))
+        if ui_review_run_id is None:
+            raise ValueError("uiReviewRunId is required for ui.review.fix_draft")
+
+        with self.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT
+                  ui_review_run_id,
+                  surface,
+                  scenario_set,
+                  status,
+                  base_url,
+                  browser,
+                  viewport_json,
+                  current_task_id,
+                  capture_task_id,
+                  analyze_task_id,
+                  fix_draft_task_id,
+                  manifest_json,
+                  capture_summary_json,
+                  analysis_summary_json,
+                  created_at,
+                  updated_at,
+                  completed_at
+                FROM review.ui_run
+                WHERE ui_review_run_id = %s
+                FOR UPDATE
+                """,
+                (ui_review_run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise LookupError("ui review run not found")
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_FIX_DRAFT_RUNNING,
+                    task["agentTaskId"],
+                    ui_review_run_id,
+                ),
+            )
+
+            finding_rows = connection.execute(
+                """
+                SELECT
+                  ui_review_finding_id,
+                  ui_review_run_id,
+                  category,
+                  severity,
+                  status,
+                  title,
+                  summary,
+                  scenario_name,
+                  checkpoint_name,
+                  evidence_json,
+                  analyzer_json,
+                  fix_draft_json,
+                  reviewed_by_account_id,
+                  reviewed_at,
+                  created_at
+                FROM review.ui_finding
+                WHERE ui_review_run_id = %s
+                ORDER BY created_at ASC, ui_review_finding_id ASC
+                """,
+                (ui_review_run_id,),
+            ).fetchall()
+
+            drafted_count = 0
+            run_payload = map_ui_review_run(run_row)
+            for finding_row in finding_rows:
+                mapped_finding = map_ui_review_finding(finding_row)
+                fix_draft = self._build_ui_fix_draft(mapped_finding, run_payload)
+                connection.execute(
+                    """
+                    UPDATE review.ui_finding
+                    SET fix_draft_json = %s
+                    WHERE ui_review_finding_id = %s
+                    """,
+                    (Jsonb(fix_draft), mapped_finding["uiReviewFindingId"]),
+                )
+                drafted_count += 1
+
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  completed_at = NOW(),
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_READY_FOR_REVIEW,
+                    task["agentTaskId"],
+                    ui_review_run_id,
+                ),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "ui_review_fix_drafts_completed",
+                {
+                    "uiReviewRunId": ui_review_run_id,
+                    "draftedCount": drafted_count,
+                },
+            )
+            connection.commit()
+
+        return {
+            "uiReviewRunId": ui_review_run_id,
+            "status": UI_REVIEW_STATUS_READY_FOR_REVIEW,
+            "draftedCount": drafted_count,
+        }
+
+    def _run_ui_review_promote_baseline(
+        self,
+        payload: dict[str, Any],
+        *,
+        run_id: int,
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        ui_review_run_id = as_int(payload.get("uiReviewRunId"))
+        if ui_review_run_id is None:
+            raise ValueError("uiReviewRunId is required for ui.review.promote_baseline")
+
+        approved_by_account_id = str(payload.get("approvedByAccountId", "")).strip() or None
+        if approved_by_account_id is None:
+            raise ValueError("approvedByAccountId is required for ui.review.promote_baseline")
+
+        promoted_descriptors: list[dict[str, Any]] = []
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT surface, browser, capture_summary_json
+                FROM review.ui_run
+                WHERE ui_review_run_id = %s
+                FOR UPDATE
+                """,
+                (ui_review_run_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("ui review run not found")
+            capture_summary_json = dict(row["capture_summary_json"] or {})
+            steps = capture_summary_json.get("steps", [])
+            if not isinstance(steps, list) or not steps:
+                raise ValueError("capture summary is required before baseline promotion")
+            browser = str(capture_summary_json.get("browser") or row["browser"] or UI_REVIEW_DEFAULT_BROWSER)
+            viewport_key = str(capture_summary_json.get("viewportKey") or "unknown")
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  updated_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_BASELINE_PROMOTION_RUNNING,
+                    task["agentTaskId"],
+                    ui_review_run_id,
+                ),
+            )
+
+            promoted_count = 0
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                screenshot = step.get("screenshot")
+                if not isinstance(screenshot, dict):
+                    continue
+                relative_path = screenshot.get("relativePath")
+                if not isinstance(relative_path, str) or not relative_path:
+                    continue
+                scenario_name = str(step.get("scenarioName") or step.get("panelKey") or "scenario")
+                checkpoint_name = str(step.get("checkpointName") or "loaded")
+                source_path = REPO_ROOT / relative_path
+                if not source_path.exists():
+                    continue
+                baseline_path = self._build_ui_review_baseline_path(
+                    surface=str(row["surface"]),
+                    browser=browser,
+                    viewport_key=viewport_key,
+                    scenario_name=scenario_name,
+                    checkpoint_name=checkpoint_name,
+                )
+                baseline_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, baseline_path)
+                baseline_relative_path = self._relative_repo_path(baseline_path)
+                connection.execute(
+                    """
+                    UPDATE review.ui_baseline
+                    SET status = %s::review.baseline_status, superseded_at = NOW()
+                    WHERE surface = %s
+                      AND scenario_name = %s
+                      AND checkpoint_name = %s
+                      AND browser = %s
+                      AND viewport_key = %s
+                      AND status = %s::review.baseline_status
+                    """,
+                    (
+                        UI_REVIEW_BASELINE_STATUS_SUPERSEDED,
+                        str(row["surface"]),
+                        scenario_name,
+                        checkpoint_name,
+                        browser,
+                        viewport_key,
+                        UI_REVIEW_BASELINE_STATUS_ACTIVE,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO review.ui_baseline (
+                      surface,
+                      scenario_name,
+                      checkpoint_name,
+                      browser,
+                      viewport_key,
+                      relative_path,
+                      status,
+                      source_run_id,
+                      approved_by_account_id,
+                      metadata_json
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::review.baseline_status, %s, %s, %s)
+                    """,
+                    (
+                        str(row["surface"]),
+                        scenario_name,
+                        checkpoint_name,
+                        browser,
+                        viewport_key,
+                        baseline_relative_path,
+                        UI_REVIEW_BASELINE_STATUS_ACTIVE,
+                        ui_review_run_id,
+                        approved_by_account_id,
+                        Jsonb({"sourceScreenshotPath": relative_path}),
+                    ),
+                )
+                promoted_descriptors.append(
+                    {
+                        "kind": "ui.review.baseline",
+                        "relativePath": baseline_relative_path,
+                        "mediaType": "image/png",
+                    }
+                )
+                promoted_count += 1
+
+            connection.execute(
+                """
+                UPDATE review.ui_run
+                SET
+                  status = %s::review.run_status,
+                  current_task_id = %s,
+                  updated_at = NOW(),
+                  completed_at = NOW()
+                WHERE ui_review_run_id = %s
+                """,
+                (
+                    UI_REVIEW_STATUS_BASELINE_PROMOTED,
+                    task["agentTaskId"],
+                    ui_review_run_id,
+                ),
+            )
+            self._record_agent_event(
+                connection,
+                run_id,
+                "ui_review_baselines_promoted",
+                {
+                    "uiReviewRunId": ui_review_run_id,
+                    "promotedCount": promoted_count,
+                },
+            )
+            self._record_ui_review_artifacts(connection, run_id, promoted_descriptors)
+            connection.commit()
+
+        return {
+            "uiReviewRunId": ui_review_run_id,
+            "status": UI_REVIEW_STATUS_BASELINE_PROMOTED,
+            "promotedCount": len(promoted_descriptors),
         }
 
     def compute_dev_preference_scores(
@@ -3086,6 +4408,51 @@ class MemoryRepository:
             ),
         )
 
+    def _apply_ui_review_task_side_effects(
+        self,
+        connection: psycopg.Connection[Any],
+        *,
+        task: dict[str, Any],
+        result: dict[str, Any],
+        success: bool,
+    ) -> None:
+        task_kind = str(task["taskKind"])
+        if task_kind not in {
+            UI_REVIEW_CAPTURE_TASK_KIND,
+            UI_REVIEW_ANALYZE_TASK_KIND,
+            UI_REVIEW_FIX_DRAFT_TASK_KIND,
+            UI_REVIEW_PROMOTE_BASELINE_TASK_KIND,
+        }:
+            return
+
+        ui_review_run_id = as_int(dict(task["payload"] or {}).get("uiReviewRunId"))
+        if ui_review_run_id is None or success:
+            return
+
+        connection.execute(
+            """
+            UPDATE review.ui_run
+            SET
+              status = %s::review.run_status,
+              current_task_id = %s,
+              manifest_json = manifest_json || %s,
+              updated_at = NOW(),
+              completed_at = NOW()
+            WHERE ui_review_run_id = %s
+            """,
+            (
+                UI_REVIEW_STATUS_FAILED,
+                task.get("agentTaskId"),
+                Jsonb(
+                    {
+                        "lastError": result.get("error"),
+                        "failedTaskKind": task_kind,
+                    }
+                ),
+                ui_review_run_id,
+            ),
+        )
+
     def _record_failed_task(
         self,
         task: dict[str, Any],
@@ -3103,6 +4470,12 @@ class MemoryRepository:
             if exhausted:
                 payload = dict(task["payload"] or {})
                 self._apply_hardware_task_side_effects(
+                    connection,
+                    task=task,
+                    result={"error": str(error)},
+                    success=False,
+                )
+                self._apply_ui_review_task_side_effects(
                     connection,
                     task=task,
                     result={"error": str(error)},
@@ -3668,6 +5041,66 @@ def map_inventory_event(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def map_ui_review_run(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "uiReviewRunId": int(row["ui_review_run_id"]),
+        "surface": row["surface"],
+        "scenarioSet": row["scenario_set"],
+        "status": row["status"],
+        "baseUrl": row["base_url"],
+        "browser": row["browser"],
+        "viewportJson": row["viewport_json"] or {},
+        "currentTaskId": int(row["current_task_id"]) if row["current_task_id"] is not None else None,
+        "captureTaskId": int(row["capture_task_id"]) if row["capture_task_id"] is not None else None,
+        "analyzeTaskId": int(row["analyze_task_id"]) if row["analyze_task_id"] is not None else None,
+        "fixDraftTaskId": int(row["fix_draft_task_id"]) if row["fix_draft_task_id"] is not None else None,
+        "manifestJson": row["manifest_json"] or {},
+        "captureSummaryJson": row["capture_summary_json"] or {},
+        "analysisSummaryJson": row["analysis_summary_json"] or {},
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+        "completedAt": row["completed_at"].isoformat() if row["completed_at"] is not None else None,
+    }
+
+
+def map_ui_review_finding(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "uiReviewFindingId": int(row["ui_review_finding_id"]),
+        "uiReviewRunId": int(row["ui_review_run_id"]),
+        "category": row["category"],
+        "severity": row["severity"],
+        "status": row["status"],
+        "title": row["title"],
+        "summary": row["summary"],
+        "scenarioName": row["scenario_name"],
+        "checkpointName": row["checkpoint_name"],
+        "evidenceJson": row["evidence_json"] or {},
+        "analyzerJson": row["analyzer_json"] or {},
+        "fixDraftJson": row["fix_draft_json"] or {},
+        "reviewedByAccountId": row["reviewed_by_account_id"],
+        "reviewedAt": row["reviewed_at"].isoformat() if row["reviewed_at"] is not None else None,
+        "createdAt": row["created_at"].isoformat(),
+    }
+
+
+def map_ui_review_baseline(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "uiReviewBaselineId": int(row["ui_review_baseline_id"]),
+        "surface": row["surface"],
+        "scenarioName": row["scenario_name"],
+        "checkpointName": row["checkpoint_name"],
+        "browser": row["browser"],
+        "viewportKey": row["viewport_key"],
+        "relativePath": row["relative_path"],
+        "status": row["status"],
+        "sourceRunId": int(row["source_run_id"]) if row["source_run_id"] is not None else None,
+        "approvedByAccountId": row["approved_by_account_id"],
+        "metadataJson": row["metadata_json"] or {},
+        "createdAt": row["created_at"].isoformat(),
+        "supersededAt": row["superseded_at"].isoformat() if row["superseded_at"] is not None else None,
+    }
+
+
 def map_dev_preference_signal(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "devPreferenceSignalId": int(row["dev_preference_signal_id"]),
@@ -3854,6 +5287,63 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                         return
                     self.send_json(200, detail)
                     return
+                if parsed.path == "/v1/internal/reviews/ui/runs":
+                    self.require_internal_token()
+                    surface = query.get("surface", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 25
+                    runs = repository.list_ui_review_runs(surface=surface, limit=limit)
+                    self.send_json(200, {"runs": runs, "source": "dev-memory", "total": len(runs)})
+                    return
+                if (
+                    len(path_parts) == 6
+                    and path_parts[:5] == ["v1", "internal", "reviews", "ui", "runs"]
+                    and path_parts[5].isdigit()
+                ):
+                    self.require_internal_token()
+                    run = repository.get_ui_review_run(int(path_parts[5]))
+                    if run is None:
+                        self.send_json(404, {"error": "not found"})
+                        return
+                    self.send_json(200, run)
+                    return
+                if parsed.path == "/v1/internal/reviews/ui/findings":
+                    self.require_internal_token()
+                    ui_review_run_id = as_optional_int(query.get("uiReviewRunId", [None])[0])
+                    status = query.get("status", [None])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    findings = repository.list_ui_review_findings(
+                        ui_review_run_id=ui_review_run_id,
+                        status=status,
+                        limit=limit,
+                    )
+                    self.send_json(
+                        200,
+                        {
+                            "findings": findings,
+                            "source": "dev-memory",
+                            "total": len(findings),
+                        },
+                    )
+                    return
+                if parsed.path == "/v1/internal/reviews/ui/baselines":
+                    self.require_internal_token()
+                    surface = query.get("surface", [None])[0]
+                    status = query.get("status", [UI_REVIEW_BASELINE_STATUS_ACTIVE])[0]
+                    limit = as_optional_int(query.get("limit", [None])[0]) or 200
+                    baselines = repository.list_ui_review_baselines(
+                        surface=surface,
+                        status=status,
+                        limit=limit,
+                    )
+                    self.send_json(
+                        200,
+                        {
+                            "baselines": baselines,
+                            "source": "dev-memory",
+                            "total": len(baselines),
+                        },
+                    )
+                    return
                 if parsed.path == "/v1/internal/preferences/suggestions":
                     self.require_internal_token()
                     runtime_account_id = query.get("runtimeAccountId", [None])[0]
@@ -3947,6 +5437,52 @@ def create_handler(repository: MemoryRepository) -> type[BaseHTTPRequestHandler]
                             queue_name=str(payload.get("queueName", DEFAULT_AGENT_TASK_QUEUE)),
                             priority=int(payload.get("priority", 0)),
                             payload=ensure_dict(payload.get("payload")),
+                        ),
+                    )
+                    return
+                if parsed.path == "/v1/internal/reviews/ui/runs":
+                    self.require_internal_token()
+                    self.send_json(
+                        201,
+                        repository.start_ui_review(
+                            payload=payload,
+                            requested_by_account_id=str(payload["requestedByAccountId"])
+                            if payload.get("requestedByAccountId")
+                            else None,
+                        ),
+                    )
+                    return
+                if (
+                    len(path_parts) == 7
+                    and path_parts[:5] == ["v1", "internal", "reviews", "ui", "findings"]
+                    and path_parts[5].isdigit()
+                    and path_parts[6] == "review"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        200,
+                        repository.review_ui_finding(
+                            int(path_parts[5]),
+                            status=str(payload["status"]),
+                            reviewed_by_account_id=str(payload["reviewedByAccountId"]),
+                            review_payload=ensure_dict(payload.get("reviewPayload")),
+                        ),
+                    )
+                    return
+                if (
+                    len(path_parts) == 7
+                    and path_parts[:5] == ["v1", "internal", "reviews", "ui", "runs"]
+                    and path_parts[5].isdigit()
+                    and path_parts[6] == "promote-baseline"
+                ):
+                    self.require_internal_token()
+                    self.send_json(
+                        200,
+                        repository.trigger_ui_review_baseline_promotion(
+                            int(path_parts[5]),
+                            approved_by_account_id=str(payload["approvedByAccountId"]),
+                            queue_name=str(payload.get("queueName", DEFAULT_AGENT_TASK_QUEUE)),
+                            priority=int(payload.get("priority", 0)),
                         ),
                     )
                     return

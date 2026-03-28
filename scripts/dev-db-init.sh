@@ -17,3 +17,4 @@ clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0004_dev_preference_sugg
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0005_agent_task_queue.sql"
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0006_dev_console_preferences.sql"
 clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0007_hardware_inventory.sql"
+clartk_psql_file "$dev_url" "clartk_dev" "db/migrations/0008_ui_review.sql"

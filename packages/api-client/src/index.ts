@@ -21,6 +21,11 @@ import type {
   InventoryRuntimePublishResponse,
   InventoryUnit,
   InventoryUnitCollection,
+  UiReviewBaselineCollection,
+  UiReviewFinding,
+  UiReviewFindingCollection,
+  UiReviewRun,
+  UiReviewRunCollection,
   SeedInventoryResponse,
   EffectiveOperatorProfile,
   EvaluationResultRecord,
@@ -354,6 +359,116 @@ export class DevConsoleClient extends JsonClient {
 
   async getRun(agentRunId: number): Promise<AgentRunDetail> {
     return this.getJson<AgentRunDetail>(`/v1/coordination/runs/${agentRunId}`);
+  }
+
+  uiReviewAssetUrl(relativePath: string): string {
+    const url = new URL("/v1/reviews/ui/assets", this.url("/"));
+    url.searchParams.set("path", relativePath);
+    return url.toString();
+  }
+
+  async listUiReviewRuns(query: { surface?: string; limit?: number } = {}): Promise<UiReviewRunCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.surface === "string" && query.surface) {
+      params.set("surface", query.surface);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/reviews/ui/runs?${suffix}` : "/v1/reviews/ui/runs";
+    return this.getJson<UiReviewRunCollection>(route);
+  }
+
+  async getUiReviewRun(uiReviewRunId: number): Promise<UiReviewRun> {
+    return this.getJson<UiReviewRun>(`/v1/reviews/ui/runs/${uiReviewRunId}`);
+  }
+
+  async startUiReview(payload: {
+    surface?: string;
+    scenarioSet?: string;
+    baseUrl?: string;
+    recordVideo?: boolean;
+    queueName?: string;
+    priority?: number;
+    viewportJson?: JsonObject;
+    manifestJson?: JsonObject;
+  }): Promise<UiReviewRun> {
+    return this.sendJson<UiReviewRun>("/v1/reviews/ui/runs", {
+      method: "POST",
+      body: payload
+    });
+  }
+
+  async listUiReviewFindings(query: {
+    uiReviewRunId?: number;
+    status?: string;
+    limit?: number;
+  } = {}): Promise<UiReviewFindingCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.uiReviewRunId === "number") {
+      params.set("uiReviewRunId", String(query.uiReviewRunId));
+    }
+    if (typeof query.status === "string" && query.status) {
+      params.set("status", query.status);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/reviews/ui/findings?${suffix}` : "/v1/reviews/ui/findings";
+    return this.getJson<UiReviewFindingCollection>(route);
+  }
+
+  async reviewUiFinding(payload: {
+    findingId: number;
+    status: string;
+    reviewPayload?: JsonObject;
+  }): Promise<UiReviewFinding> {
+    return this.sendJson<UiReviewFinding>(`/v1/reviews/ui/findings/${payload.findingId}/review`, {
+      method: "POST",
+      body: {
+        status: payload.status,
+        reviewPayload: payload.reviewPayload
+      }
+    });
+  }
+
+  async listUiReviewBaselines(query: {
+    surface?: string;
+    status?: string;
+    limit?: number;
+  } = {}): Promise<UiReviewBaselineCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.surface === "string" && query.surface) {
+      params.set("surface", query.surface);
+    }
+    if (typeof query.status === "string" && query.status) {
+      params.set("status", query.status);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/reviews/ui/baselines?${suffix}` : "/v1/reviews/ui/baselines";
+    return this.getJson<UiReviewBaselineCollection>(route);
+  }
+
+  async promoteUiReviewBaseline(payload: {
+    uiReviewRunId: number;
+    queueName?: string;
+    priority?: number;
+  }): Promise<UiReviewRun> {
+    return this.sendJson<UiReviewRun>(
+      `/v1/reviews/ui/runs/${payload.uiReviewRunId}/promote-baseline`,
+      {
+        method: "POST",
+        body: {
+          queueName: payload.queueName,
+          priority: payload.priority
+        }
+      }
+    );
   }
 
   async listSourceDocuments(): Promise<ResourceCollection<SourceDocumentRecord>> {

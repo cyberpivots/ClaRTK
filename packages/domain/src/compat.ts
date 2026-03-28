@@ -265,6 +265,78 @@ export interface InventoryEventCollection {
   total: number;
 }
 
+export interface UiReviewRun {
+  uiReviewRunId: number;
+  surface: string;
+  scenarioSet: string;
+  status: string;
+  baseUrl: string;
+  browser: string;
+  viewportJson: JsonObject;
+  currentTaskId: number | null;
+  captureTaskId: number | null;
+  analyzeTaskId: number | null;
+  fixDraftTaskId: number | null;
+  manifestJson: JsonObject;
+  captureSummaryJson: JsonObject;
+  analysisSummaryJson: JsonObject;
+  createdAt: TimestampIsoString;
+  updatedAt: TimestampIsoString;
+  completedAt: TimestampIsoString | null;
+}
+
+export interface UiReviewRunCollection {
+  runs: UiReviewRun[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface UiReviewFinding {
+  uiReviewFindingId: number;
+  uiReviewRunId: number;
+  category: string;
+  severity: string;
+  status: string;
+  title: string;
+  summary: string;
+  scenarioName: string | null;
+  checkpointName: string | null;
+  evidenceJson: JsonObject;
+  analyzerJson: JsonObject;
+  fixDraftJson: JsonObject;
+  reviewedByAccountId: string | null;
+  reviewedAt: TimestampIsoString | null;
+  createdAt: TimestampIsoString;
+}
+
+export interface UiReviewFindingCollection {
+  findings: UiReviewFinding[];
+  source: "dev-memory";
+  total: number;
+}
+
+export interface UiReviewBaseline {
+  uiReviewBaselineId: number;
+  surface: string;
+  scenarioName: string;
+  checkpointName: string;
+  browser: string;
+  viewportKey: string;
+  relativePath: string;
+  status: string;
+  sourceRunId: number | null;
+  approvedByAccountId: string | null;
+  metadataJson: JsonObject;
+  createdAt: TimestampIsoString;
+  supersededAt: TimestampIsoString | null;
+}
+
+export interface UiReviewBaselineCollection {
+  baselines: UiReviewBaseline[];
+  source: "dev-memory";
+  total: number;
+}
+
 export interface InventoryBuildStartResponse {
   build: InventoryBuild;
   tasks: AgentTaskRecord[];

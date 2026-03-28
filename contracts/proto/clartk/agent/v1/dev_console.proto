@@ -268,6 +268,99 @@ message InventoryEventCollection {
   int32 total = 3;
 }
 
+message UiReviewRun {
+  int64 ui_review_run_id = 1;
+  string surface = 2;
+  string scenario_set = 3;
+  string status = 4;
+  string base_url = 5;
+  string browser = 6;
+  string viewport_json = 7;
+  int64 current_task_id = 8;
+  int64 capture_task_id = 9;
+  int64 analyze_task_id = 10;
+  int64 fix_draft_task_id = 11;
+  string manifest_json = 12;
+  string capture_summary_json = 13;
+  string analysis_summary_json = 14;
+  string created_at = 15;
+  string updated_at = 16;
+  string completed_at = 17;
+}
+
+message UiReviewRunCollection {
+  repeated UiReviewRun runs = 1;
+  string source = 2;
+  int32 total = 3;
+}
+
+message UiReviewFinding {
+  int64 ui_review_finding_id = 1;
+  int64 ui_review_run_id = 2;
+  string category = 3;
+  string severity = 4;
+  string status = 5;
+  string title = 6;
+  string summary = 7;
+  string scenario_name = 8;
+  string checkpoint_name = 9;
+  string evidence_json = 10;
+  string analyzer_json = 11;
+  string fix_draft_json = 12;
+  string reviewed_by_account_id = 13;
+  string reviewed_at = 14;
+  string created_at = 15;
+}
+
+message UiReviewFindingCollection {
+  repeated UiReviewFinding findings = 1;
+  string source = 2;
+  int32 total = 3;
+}
+
+message UiReviewBaseline {
+  int64 ui_review_baseline_id = 1;
+  string surface = 2;
+  string scenario_name = 3;
+  string checkpoint_name = 4;
+  string browser = 5;
+  string viewport_key = 6;
+  string relative_path = 7;
+  string status = 8;
+  int64 source_run_id = 9;
+  string approved_by_account_id = 10;
+  string metadata_json = 11;
+  string created_at = 12;
+  string superseded_at = 13;
+}
+
+message UiReviewBaselineCollection {
+  repeated UiReviewBaseline baselines = 1;
+  string source = 2;
+  int32 total = 3;
+}
+
+message StartUiReviewRequest {
+  string surface = 1;
+  string scenario_set = 2;
+  string base_url = 3;
+  bool record_video = 4;
+  string queue_name = 5;
+  int32 priority = 6;
+  string viewport_json = 7;
+  string manifest_json = 8;
+}
+
+message ReviewUiFindingRequest {
+  string status = 1;
+  string review_payload_json = 2;
+}
+
+message PromoteUiReviewBaselineRequest {
+  string queue_name = 1;
+  int32 priority = 2;
+}
+
 message StartHardwareBuildRequest {
   string build_name = 1;
   string build_kind = 2;

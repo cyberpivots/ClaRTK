@@ -317,6 +317,108 @@ pub struct InventoryEventCollection {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct UiReviewRun {
+    pub ui_review_run_id: i64,
+    pub surface: String,
+    pub scenario_set: String,
+    pub status: String,
+    pub base_url: String,
+    pub browser: String,
+    pub viewport_json: String,
+    pub current_task_id: i64,
+    pub capture_task_id: i64,
+    pub analyze_task_id: i64,
+    pub fix_draft_task_id: i64,
+    pub manifest_json: String,
+    pub capture_summary_json: String,
+    pub analysis_summary_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiReviewRunCollection {
+    pub runs: Vec<UiReviewRun>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiReviewFinding {
+    pub ui_review_finding_id: i64,
+    pub ui_review_run_id: i64,
+    pub category: String,
+    pub severity: String,
+    pub status: String,
+    pub title: String,
+    pub summary: String,
+    pub scenario_name: String,
+    pub checkpoint_name: String,
+    pub evidence_json: String,
+    pub analyzer_json: String,
+    pub fix_draft_json: String,
+    pub reviewed_by_account_id: String,
+    pub reviewed_at: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiReviewFindingCollection {
+    pub findings: Vec<UiReviewFinding>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiReviewBaseline {
+    pub ui_review_baseline_id: i64,
+    pub surface: String,
+    pub scenario_name: String,
+    pub checkpoint_name: String,
+    pub browser: String,
+    pub viewport_key: String,
+    pub relative_path: String,
+    pub status: String,
+    pub source_run_id: i64,
+    pub approved_by_account_id: String,
+    pub metadata_json: String,
+    pub created_at: String,
+    pub superseded_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiReviewBaselineCollection {
+    pub baselines: Vec<UiReviewBaseline>,
+    pub source: String,
+    pub total: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StartUiReviewRequest {
+    pub surface: String,
+    pub scenario_set: String,
+    pub base_url: String,
+    pub record_video: bool,
+    pub queue_name: String,
+    pub priority: i32,
+    pub viewport_json: String,
+    pub manifest_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewUiFindingRequest {
+    pub status: String,
+    pub review_payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromoteUiReviewBaselineRequest {
+    pub queue_name: String,
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct StartHardwareBuildRequest {
     pub build_name: String,
     pub build_kind: String,

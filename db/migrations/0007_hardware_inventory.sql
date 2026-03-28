@@ -147,12 +147,32 @@ CREATE INDEX IF NOT EXISTS inventory_event_subject_idx
 CREATE INDEX IF NOT EXISTS inventory_event_task_idx
   ON inventory.event (agent_task_id);
 
-ALTER TABLE inventory.build
-  ADD CONSTRAINT inventory_build_base_unit_fk
-  FOREIGN KEY (base_unit_id) REFERENCES inventory.unit (unit_id) ON DELETE SET NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'inventory_build_base_unit_fk'
+  ) THEN
+    ALTER TABLE inventory.build
+      ADD CONSTRAINT inventory_build_base_unit_fk
+      FOREIGN KEY (base_unit_id) REFERENCES inventory.unit (unit_id) ON DELETE SET NULL;
+  END IF;
+END;
+$$;
 
-ALTER TABLE inventory.build
-  ADD CONSTRAINT inventory_build_rover_unit_fk
-  FOREIGN KEY (rover_unit_id) REFERENCES inventory.unit (unit_id) ON DELETE SET NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'inventory_build_rover_unit_fk'
+  ) THEN
+    ALTER TABLE inventory.build
+      ADD CONSTRAINT inventory_build_rover_unit_fk
+      FOREIGN KEY (rover_unit_id) REFERENCES inventory.unit (unit_id) ON DELETE SET NULL;
+  END IF;
+END;
+$$;
 
 COMMIT;
