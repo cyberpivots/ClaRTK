@@ -6,6 +6,7 @@ import json
 import math
 import os
 import socket
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -455,6 +456,19 @@ def maintenance_task_specs(chunk_size: int) -> dict[str, dict[str, Any]]:
 class MemoryRepository:
     def __init__(self, database_url: str | None) -> None:
         self.database_url = database_url
+        self.connect_timeout_seconds = max(
+            1,
+            int(os.environ.get("CLARTK_AGENT_MEMORY_DB_CONNECT_TIMEOUT_SECONDS", "10")),
+        )
+        self.session_idle_timeout_ms = max(
+            1000,
+            int(os.environ.get("CLARTK_AGENT_MEMORY_DB_SESSION_IDLE_TIMEOUT_MS", "60000")),
+        )
+        self.db_connection_limit = max(
+            1,
+            int(os.environ.get("CLARTK_AGENT_MEMORY_DB_MAX_CONNECTIONS", "4")),
+        )
+        self.connection_slots = threading.BoundedSemaphore(self.db_connection_limit)
 
     @property
     def configured(self) -> bool:
@@ -468,11 +482,23 @@ class MemoryRepository:
     ) -> Iterator[psycopg.Connection[Any]]:
         if not self.database_url:
             raise RuntimeError("CLARTK_DEV_DATABASE_URL is not configured")
+        acquired = self.connection_slots.acquire(timeout=self.connect_timeout_seconds + 1)
+        if not acquired:
+            raise RuntimeError("agent-memory database connection slots are exhausted")
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            if register_vectors:
-                register_vector(connection)
-            yield connection
+        try:
+            with psycopg.connect(
+                self.database_url,
+                row_factory=dict_row,
+                connect_timeout=self.connect_timeout_seconds,
+                application_name="clartk-agent-memory",
+                options=f"-c idle_session_timeout={self.session_idle_timeout_ms}",
+            ) as connection:
+                if register_vectors:
+                    register_vector(connection)
+                yield connection
+        finally:
+            self.connection_slots.release()
 
     def list_source_documents(self, limit: int = 50) -> list[dict[str, Any]]:
         if not self.configured:

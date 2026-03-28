@@ -125,6 +125,7 @@ export function App() {
   const [authMode, setAuthMode] = React.useState<"login" | "bootstrap">("login");
   const lastPanelSignal = React.useRef<PanelKey | null>(null);
   const lastDetailSignal = React.useRef<"compact" | "expanded" | null>(null);
+  const consoleLoadInFlight = React.useRef(false);
 
   React.useEffect(() => {
     void loadSession();
@@ -135,13 +136,16 @@ export function App() {
       return;
     }
     const interval = window.setInterval(() => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
       void loadConsoleData(state.selectedRunId ?? undefined, false);
-    }, 10000);
+    }, 30000);
     return () => window.clearInterval(interval);
   }, [state.me, state.selectedRunId]);
 
   React.useEffect(() => {
-    if (!state.me || state.me.account.role !== "admin") {
+    if (!state.me || state.me.account.role !== "admin" || state.loading || !state.devProfile) {
       return;
     }
     if (lastPanelSignal.current === state.selectedPanel) {
@@ -163,10 +167,10 @@ export function App() {
           : current.devProfile
       }));
     }).catch(() => {});
-  }, [state.me, state.selectedPanel]);
+  }, [state.me, state.selectedPanel, state.loading, state.devProfile]);
 
   React.useEffect(() => {
-    if (!state.me || state.me.account.role !== "admin") {
+    if (!state.me || state.me.account.role !== "admin" || state.loading || !state.devProfile) {
       return;
     }
     if (lastDetailSignal.current === state.detailDepth) {
@@ -187,7 +191,7 @@ export function App() {
           : current.devProfile
       }));
     }).catch(() => {});
-  }, [state.me, state.detailDepth]);
+  }, [state.me, state.detailDepth, state.loading, state.devProfile]);
 
   async function loadSession() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -217,6 +221,10 @@ export function App() {
   }
 
   async function loadConsoleData(selectedRunId?: number, resetNotice = false) {
+    if (consoleLoadInFlight.current) {
+      return;
+    }
+    consoleLoadInFlight.current = true;
     setState((current) => ({
       ...current,
       loading: true,
@@ -224,29 +232,68 @@ export function App() {
       ...(resetNotice ? { notice: null } : {})
     }));
     try {
-      const [
-        overview,
-        tasks,
-        runs,
-        sourceDocuments,
-        claims,
-        evaluations,
-        docs,
-        skills,
-        devProfile
-      ] = await Promise.all([
+      const warnings: string[] = [];
+      const previousState = state;
+      const primaryResults = await Promise.allSettled([
         devConsoleApi.getWorkspaceOverview(),
         devConsoleApi.listTasks(),
         devConsoleApi.listRuns(),
+        devConsoleApi.listDocsCatalog(),
+        devConsoleApi.listSkills()
+      ]);
+      const secondaryResults = await Promise.allSettled([
         devConsoleApi.listSourceDocuments(),
         devConsoleApi.listClaims(),
         devConsoleApi.listEvaluations(),
-        devConsoleApi.listDocsCatalog(),
-        devConsoleApi.listSkills(),
         devConsoleApi.getDevProfile()
       ]);
-      const nextRunId = selectedRunId ?? runs.items[0]?.agentRunId ?? null;
-      const runDetail = nextRunId === null ? null : await devConsoleApi.getRun(nextRunId);
+
+      const overview = resolveSettledResult(
+        primaryResults[0],
+        previousState.overview,
+        "workspace overview",
+        warnings
+      );
+      const tasks = resolveSettledResult(primaryResults[1], previousState.tasks, "coordination tasks", warnings);
+      const runs = resolveSettledResult(primaryResults[2], previousState.runs, "coordination runs", warnings);
+      const docs = resolveSettledResult(primaryResults[3], previousState.docs, "docs catalog", warnings);
+      const skills = resolveSettledResult(primaryResults[4], previousState.skills, "skills catalog", warnings);
+      const sourceDocuments = resolveSettledResult(
+        secondaryResults[0],
+        previousState.sourceDocuments,
+        "source documents",
+        warnings
+      );
+      const claims = resolveSettledResult(secondaryResults[1], previousState.claims, "claims", warnings);
+      const evaluations = resolveSettledResult(
+        secondaryResults[2],
+        previousState.evaluations,
+        "evaluations",
+        warnings
+      );
+      const devProfile = resolveSettledResult(
+        secondaryResults[3],
+        previousState.devProfile,
+        "dev profile",
+        warnings
+      );
+
+      const nextRunId = selectedRunId ?? runs?.items[0]?.agentRunId ?? null;
+      let runDetail = nextRunId === null ? null : previousState.runDetail;
+      if (nextRunId !== null) {
+        try {
+          runDetail = await devConsoleApi.getRun(nextRunId);
+        } catch {
+          warnings.push("run detail");
+        }
+      }
+
+      const nextNotice =
+        warnings.length > 0
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : resetNotice
+            ? null
+            : previousState.notice;
       setState((current) => ({
         ...current,
         overview,
@@ -260,6 +307,7 @@ export function App() {
         devProfile,
         runs,
         selectedRunId: nextRunId,
+        notice: nextNotice,
         loading: false
       }));
     } catch (error) {
@@ -268,6 +316,8 @@ export function App() {
         loading: false,
         error: error instanceof Error ? error.message : String(error)
       }));
+    } finally {
+      consoleLoadInFlight.current = false;
     }
   }
 
@@ -619,6 +669,20 @@ export function App() {
       )}
     </AppFrame>
   );
+}
+
+function resolveSettledResult<T>(
+  result: PromiseSettledResult<T>,
+  fallback: T,
+  label: string,
+  warnings: string[]
+): T {
+  if (result.status === "fulfilled") {
+    return result.value;
+  }
+
+  warnings.push(label);
+  return fallback;
 }
 
 function PreviewPanel(props: {

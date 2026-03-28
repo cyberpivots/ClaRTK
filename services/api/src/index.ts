@@ -54,6 +54,12 @@ const config = {
   host: process.env.CLARTK_API_HOST ?? "0.0.0.0",
   port: Number(process.env.PORT ?? process.env.CLARTK_API_PORT ?? "3000"),
   runtimeDatabaseUrl: process.env.CLARTK_RUNTIME_DATABASE_URL,
+  runtimeDatabasePoolMax: Number(process.env.CLARTK_API_DB_POOL_MAX ?? "8"),
+  runtimeDatabaseIdleTimeoutMs: Number(process.env.CLARTK_API_DB_IDLE_TIMEOUT_MS ?? "10000"),
+  runtimeDatabaseConnectTimeoutMs: Number(process.env.CLARTK_API_DB_CONNECT_TIMEOUT_MS ?? "10000"),
+  runtimeDatabaseSessionIdleTimeoutMs: Number(
+    process.env.CLARTK_API_DB_SESSION_IDLE_TIMEOUT_MS ?? "60000"
+  ),
   gatewayDiagnosticsBaseUrl:
     process.env.CLARTK_GATEWAY_DIAGNOSTICS_BASE_URL ?? "http://localhost:3200",
   agentMemoryBaseUrl: process.env.CLARTK_AGENT_MEMORY_BASE_URL ?? "http://localhost:3100",
@@ -71,7 +77,15 @@ const allowedBrowserOrigins = new Set([
 
 const pool = config.runtimeDatabaseUrl
   ? new Pool({
-      connectionString: config.runtimeDatabaseUrl
+      connectionString: config.runtimeDatabaseUrl,
+      application_name: "clartk-runtime-api",
+      max: clampPositiveInteger(config.runtimeDatabasePoolMax, 8),
+      idleTimeoutMillis: clampPositiveInteger(config.runtimeDatabaseIdleTimeoutMs, 10000),
+      connectionTimeoutMillis: clampPositiveInteger(config.runtimeDatabaseConnectTimeoutMs, 10000),
+      options: `-c idle_session_timeout=${clampPositiveInteger(
+        config.runtimeDatabaseSessionIdleTimeoutMs,
+        60000
+      )}`
     })
   : null;
 
@@ -1533,6 +1547,15 @@ function expandLoopbackOrigins(origin: string): string[] {
   } catch {
     return [origin];
   }
+}
+
+function clampPositiveInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(value);
+  return rounded > 0 ? rounded : fallback;
 }
 
 function createOpaqueId(prefix: string): string {
