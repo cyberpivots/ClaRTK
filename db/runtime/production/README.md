@@ -10,17 +10,22 @@ without copying one large monolithic config file:
 - `postgresql.runtime.tls.sample.conf`
 - `postgresql.runtime.archive.sample.conf`
 - `postgresql.runtime.observability.sample.conf`
+- `runtime.host-managed.sample.env`
 
 Suggested host-managed integration:
 
-1. Copy the relevant sample files into the PostgreSQL config directory for the
-   target host.
-2. Replace placeholder values such as `<runtime-app-subnet-cidr>` and
-   `<server-cert-path>`.
-3. Add `include_if_exists` entries in `postgresql.conf` for the TLS, archive,
+1. Copy `runtime.host-managed.sample.env` outside the repo and fill the
+   environment-specific CIDRs, certificate paths, archive destination, and
+   host config paths there.
+2. Export those variables and run
+   `bash scripts/runtime-db-render-production-config.sh`.
+3. Copy the rendered files from `.clartk/runtime/production-rendered/` into the
+   PostgreSQL config directory for the target host.
+4. Add `include_if_exists` entries in `postgresql.conf` for the TLS, archive,
    and observability snippets.
-4. Merge the `pg_hba` sample entries into the host's active `pg_hba.conf`.
-5. Reload or restart PostgreSQL as required by the changed settings.
+5. Merge the rendered `pg_hba.runtime.conf` entries into the host's active
+   `pg_hba.conf`.
+6. Reload or restart PostgreSQL as required by the changed settings.
 
 These templates assume the dedicated runtime roles created by the repo-owned
 bootstrap automation:
@@ -39,4 +44,5 @@ They also assume PostgreSQL 17.x with:
 - `pg_stat_statements` loaded through `shared_preload_libraries`
 
 Do not drop these files into production unchanged. They are templates, not
-environment-specific final configs.
+environment-specific final configs. The renderer exits nonzero if any
+placeholder survives into the rendered output.

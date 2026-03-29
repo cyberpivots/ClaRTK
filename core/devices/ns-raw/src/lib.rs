@@ -36,10 +36,20 @@ mod tests {
     }
 
     #[test]
-    fn tags_ns_raw_fixture_transport() {
+    fn tags_ns_raw_navigation_fixture_transport() {
         let bytes = decode_hex_fixture(include_str!("../../../../fixtures/skytraq/venus8-nav.hex"));
         let sample = sample_from_bytes(&bytes).expect("fixture should decode");
         assert_eq!(sample.transport, "usb-or-txd1");
         assert_eq!(sample.frame.message_id, 0xDC);
+    }
+
+    #[test]
+    fn decodes_ns_raw_extended_raw_fixture() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../fixtures/skytraq/ns-raw-ext-raw.hex"
+        ));
+        let sample = sample_from_bytes(&bytes).expect("fixture should decode");
+        assert_eq!(sample.transport, "usb-or-txd1");
+        assert_eq!(sample.frame.message_id, 0xE5);
     }
 }

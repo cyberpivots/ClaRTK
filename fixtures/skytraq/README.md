@@ -8,6 +8,14 @@ Deterministic framing fixtures for SkyTraq Venus8 and Phoenix protocol parsing l
   Source device: synthetic Venus8 navigation sample
   Protocol generation: SkyTraq Venus8 framed binary
   Capture assumptions: frame envelope, big-endian length, XOR checksum, and `0x0D 0x0A` terminator follow documented SkyTraq framing; fixture is synthetic and intended to be replaced by field capture when available.
+- `venus8-ext-raw.hex`
+  Source device: SkyTraq Venus8 extended raw measurement example from the official AN0030 binary message note
+  Protocol generation: official example for message `0xE5` extended raw measurements
+  Capture assumptions: payload structure and field widths follow the official SkyTraq document and are used here to verify raw-observation parsing before live captures land in-repo.
+- `ns-raw-ext-raw.hex`
+  Source device: NavSpark NS-RAW protocol-equivalent proxy fixture using the official SkyTraq Venus8 `0xE5` example
+  Protocol generation: reused official AN0030 example because NS-RAW shares the SkyTraq/Venus8 raw framing path that ClaRTK consumes
+  Capture assumptions: this is not claimed as a live NS-RAW field capture; it exists to give the `core/devices/ns-raw` lane a first-class deterministic fixture until bench captures are committed.
 - `phoenix-status.hex`
   Source device: synthetic PX1122R Phoenix status sample
   Protocol generation: SkyTraq Phoenix framed binary

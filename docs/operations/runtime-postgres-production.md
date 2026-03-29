@@ -20,6 +20,8 @@
   - `bash scripts/runtime-db-pitr-status.sh`
   - `bash scripts/runtime-db-basebackup.sh`
   - `bash scripts/runtime-db-restore-drill.sh`
+- Host-managed runtime config rendering:
+  - `bash scripts/runtime-db-render-production-config.sh`
 - Observability configuration and collection:
   - `bash scripts/runtime-db-enable-observability.sh`
   - `bash scripts/runtime-db-observability-report.sh`
@@ -49,6 +51,21 @@
   - `CLARTK_RUNTIME_RESTORE_DRILL_DIR`
   - `CLARTK_RUNTIME_RESTORE_DRILL_PORT`
   - `CLARTK_RUNTIME_OBSERVABILITY_DIR`
+- Host-managed render inputs:
+  - `CLARTK_RUNTIME_PRODUCTION_RENDER_DIR`
+  - `CLARTK_RUNTIME_API_CIDR`
+  - `CLARTK_RUNTIME_GATEWAY_CIDR`
+  - `CLARTK_RUNTIME_SUPPORT_CIDR`
+  - `CLARTK_RUNTIME_ADMIN_CIDR`
+  - `CLARTK_RUNTIME_BACKUP_CIDR`
+  - `CLARTK_RUNTIME_TLS_CERT_FILE`
+  - `CLARTK_RUNTIME_TLS_KEY_FILE`
+  - `CLARTK_RUNTIME_TLS_CA_FILE`
+  - `CLARTK_RUNTIME_TLS_CRL_FILE`
+  - `CLARTK_RUNTIME_WAL_ARCHIVE_DESTINATION`
+  - `CLARTK_RUNTIME_POSTGRESQL_CONF_DIR`
+  - `CLARTK_RUNTIME_PG_HBA_PATH`
+  - `CLARTK_RUNTIME_POSTGRES_SERVICE_NAME`
 
 ## Self-hosted baseline
 
@@ -59,7 +76,10 @@
 - `pg_dump` remains useful for logical export and local workflows, but production recovery work should use base backups plus WAL archiving.
 - The runtime bootstrap script creates dedicated runtime roles, transfers runtime object ownership to the migrator role, and applies role-level session safeguards.
 - The runtime gateway can now persist replay fixtures into `device.registry`, `telemetry.position_event`, and `rtk.solution`.
-- Serial and NTRIP now have parser-backed capture paths that write runtime ingest journal rows. Serial GGA capture also promotes positions into `telemetry.position_event`.
+- Serial and NTRIP now have parser-backed capture paths that write runtime ingest journal rows.
+- Live serial device paths and live NTRIP URLs now start background acquisition loops at gateway boot when the runtime DB is configured.
+- Serial GGA capture now promotes positions into `telemetry.position_event` and publishes an RTKLIB-backed single solution into `rtk.solution`.
+- Host-managed runtime PostgreSQL rollout can now be rendered into environment-specific config files from `db/runtime/production/runtime.host-managed.sample.env`.
 
 ## Local verification path
 
@@ -75,11 +95,12 @@
 10. `curl -X POST http://127.0.0.1:3200/v1/replay/run`
 11. `curl -X POST http://127.0.0.1:3200/v1/serial/capture/run`
 12. `curl -X POST http://127.0.0.1:3200/v1/ntrip/capture/run`
+13. `bash scripts/runtime-db-render-production-config.sh`
 
 ## Remaining production follow-on work
 
-- Apply a production `pg_hba.conf` and TLS policy for remote runtime connections.
-- Expand gateway transport capture from file-backed sources into live serial port reads and NTRIP network acquisition once upstream ingest/solver ownership under `TASK-0120` and `TASK-0130` lands.
+- Apply the rendered runtime config package to a real host-managed PostgreSQL primary with environment-owned CIDRs, certificate files, and service reload procedures.
+- Validate the new RTKLIB raw-plus-RTCM solve surface against a correction/base-observation fixture or live capture that actually produces a differential solution before treating SkyTraq raw publication as production-ready fused RTK output.
 
 ## Runtime evidence inputs
 

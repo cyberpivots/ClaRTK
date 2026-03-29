@@ -7,4 +7,5 @@ build = "build.rs"
 
 [dependencies]
 clartk-geo = { path = "../../geo" }
-
+serde.workspace = true
+thiserror.workspace = true

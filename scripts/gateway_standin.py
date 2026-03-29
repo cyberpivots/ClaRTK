@@ -10,12 +10,16 @@ from urllib.parse import urlparse
 def build_payload() -> dict[str, object]:
     fixture_path = os.environ.get("CLARTK_GATEWAY_FIXTURE_PATH")
     serial_port = os.environ.get("CLARTK_GATEWAY_SERIAL_PORT")
+    rover_serial_port = os.environ.get("CLARTK_GATEWAY_ROVER_SERIAL_PORT")
+    base_serial_port = os.environ.get("CLARTK_GATEWAY_BASE_SERIAL_PORT")
     ntrip_url = os.environ.get("CLARTK_GATEWAY_NTRIP_URL")
 
     active_inputs = []
     if fixture_path:
         active_inputs.append("fixture_replay")
-    if serial_port:
+    if rover_serial_port and base_serial_port:
+        active_inputs.append("serial_pair")
+    elif rover_serial_port or serial_port:
         active_inputs.append("serial")
     if ntrip_url:
         active_inputs.append("ntrip")
@@ -26,6 +30,10 @@ def build_payload() -> dict[str, object]:
         "mode": os.environ.get("CLARTK_GATEWAY_MODE", "hybrid"),
         "diagnosticsPort": int(os.environ.get("CLARTK_GATEWAY_DIAGNOSTICS_PORT", "3200")),
         "runtimeDatabaseConfigured": bool(os.environ.get("CLARTK_RUNTIME_DATABASE_URL")),
+        "serialProtocol": os.environ.get("CLARTK_GATEWAY_SERIAL_PROTOCOL", "nmea"),
+        "serialPort": serial_port or rover_serial_port,
+        "roverSerialPort": rover_serial_port,
+        "baseSerialPort": base_serial_port,
         "activeInputs": active_inputs,
         "note": "Rust host prerequisites are unavailable on this machine; this stand-in preserves the diagnostics boundary."
     }

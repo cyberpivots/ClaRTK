@@ -27,6 +27,7 @@
     "runtime:db:pitr:status": "scripts/runtime-db-pitr-status.sh",
     "runtime:db:basebackup": "scripts/runtime-db-basebackup.sh",
     "runtime:db:restore:drill": "scripts/runtime-db-restore-drill.sh",
+    "runtime:db:production:render": "scripts/runtime-db-render-production-config.sh",
     "runtime:db:observability:enable": "scripts/runtime-db-enable-observability.sh",
     "runtime:db:observability:report": "scripts/runtime-db-observability-report.sh",
     "dev:auth:bootstrap": "scripts/dev-bootstrap-auth.sh",

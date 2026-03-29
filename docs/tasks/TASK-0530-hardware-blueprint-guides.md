@@ -35,6 +35,7 @@
 - Official vendor documentation verified during this slice confirms:
   - PX1122R breakout board expects `5V +/-5%`, exposes `USART x1 + UART x2`, and requires an active antenna
   - Digi XBee 900HP/XSC documentation covers S3B-family modules, UART operation, and regulated `2.1V - 3.6V` supply guidance, but the exact submodel currently on hand is not pinned in the canonical inventory
+  - NavSpark NS-RAW is a host-attached raw-measurement sensor, not a user-programmable board, and NavSpark’s published pair workflow relies on USB/UART plus RTKLIB with a manually entered base position
 
 ## Planned Outputs
 
@@ -67,3 +68,4 @@
   - exact Digi radio submodel
   - active antenna availability
   - support power and adapter kit
+  - live NS-RAW bench capture evidence for a repeatable ClaRTK pair-solve walkthrough

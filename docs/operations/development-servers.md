@@ -55,6 +55,7 @@ Fallback model:
 - `scripts/runtime-db-configure-pitr.sh` enables compose-backed WAL archiving into `.clartk/runtime/wal-archive/`.
 - `scripts/runtime-db-basebackup.sh` captures a tar-format base backup under `.clartk/runtime/basebackups/<timestamp>/`.
 - `scripts/runtime-db-restore-drill.sh` restores a runtime base backup plus WAL archive into a disposable PostgreSQL target and runs verification SQL.
+- `scripts/runtime-db-render-production-config.sh` renders environment-specific host-managed runtime PostgreSQL config from the repo-owned templates.
 - `scripts/runtime-db-enable-observability.sh` enables `pg_stat_statements`, slow-query logging, and autovacuum logging for the runtime PostgreSQL instance.
 - `scripts/runtime-db-observability-report.sh` writes a JSON runtime PostgreSQL stats report under `.clartk/dev/runtime-postgres-observability/latest.json`.
 - `scripts/dev-db-backup.sh` always writes logical dumps for `clartk_runtime` and `clartk_dev` into `.clartk/dev/backups/<timestamp>/`.
@@ -120,6 +121,20 @@ agent-memory worker ---------------> clartk_dev
 | `CLARTK_RUNTIME_RESTORE_DRILL_DIR` | `.clartk/runtime/restore-drills` | disposable runtime restore drills |
 | `CLARTK_RUNTIME_RESTORE_DRILL_PORT` | `55433` | disposable runtime restore drill target |
 | `CLARTK_RUNTIME_OBSERVABILITY_DIR` | `.clartk/dev/runtime-postgres-observability` | runtime PostgreSQL observability JSON reports |
+| `CLARTK_RUNTIME_PRODUCTION_RENDER_DIR` | `.clartk/runtime/production-rendered` | rendered host-managed runtime PostgreSQL config package |
+| `CLARTK_RUNTIME_API_CIDR` | empty | rendered host-managed runtime PostgreSQL `pg_hba` app CIDR |
+| `CLARTK_RUNTIME_GATEWAY_CIDR` | empty | rendered host-managed runtime PostgreSQL `pg_hba` gateway CIDR |
+| `CLARTK_RUNTIME_SUPPORT_CIDR` | empty | rendered host-managed runtime PostgreSQL `pg_hba` readonly CIDR |
+| `CLARTK_RUNTIME_ADMIN_CIDR` | empty | rendered host-managed runtime PostgreSQL `pg_hba` migrator/admin CIDR |
+| `CLARTK_RUNTIME_BACKUP_CIDR` | empty | rendered host-managed runtime PostgreSQL backup/replication CIDR |
+| `CLARTK_RUNTIME_TLS_CERT_FILE` | empty | rendered host-managed runtime PostgreSQL TLS server cert path |
+| `CLARTK_RUNTIME_TLS_KEY_FILE` | empty | rendered host-managed runtime PostgreSQL TLS server key path |
+| `CLARTK_RUNTIME_TLS_CA_FILE` | empty | rendered host-managed runtime PostgreSQL TLS CA path |
+| `CLARTK_RUNTIME_TLS_CRL_FILE` | empty | rendered host-managed runtime PostgreSQL TLS CRL path |
+| `CLARTK_RUNTIME_WAL_ARCHIVE_DESTINATION` | empty | rendered host-managed runtime PostgreSQL WAL archive destination |
+| `CLARTK_RUNTIME_POSTGRESQL_CONF_DIR` | empty | rendered host-managed runtime PostgreSQL config directory |
+| `CLARTK_RUNTIME_PG_HBA_PATH` | empty | rendered host-managed runtime PostgreSQL `pg_hba.conf` target |
+| `CLARTK_RUNTIME_POSTGRES_SERVICE_NAME` | `postgresql` | host-managed runtime PostgreSQL service reload target |
 | `CLARTK_RESOLVED_POSTGRES_HOST` | generated | host-run scripts after `scripts/dev-db-up.sh` |
 | `CLARTK_RESOLVED_POSTGRES_PORT` | generated | host-run scripts after `scripts/dev-db-up.sh` |
 | `CLARTK_RESOLVED_POSTGRES_SOURCE` | generated | `scripts/dev-status.sh` and troubleshooting |
@@ -148,7 +163,17 @@ agent-memory worker ---------------> clartk_dev
 | `CLARTK_GATEWAY_MODE` | `hybrid` | gateway |
 | `CLARTK_GATEWAY_FIXTURE_PATH` | empty | gateway replay input |
 | `CLARTK_GATEWAY_SERIAL_PORT` | empty | gateway hardware input or file-backed serial capture source |
+| `CLARTK_GATEWAY_ROVER_SERIAL_PORT` | empty | gateway NS-RAW rover input for paired raw capture |
+| `CLARTK_GATEWAY_BASE_SERIAL_PORT` | empty | gateway NS-RAW base input for paired raw capture |
+| `CLARTK_GATEWAY_SERIAL_PROTOCOL` | `nmea` | gateway serial parser mode; use `ns-raw` for canonical NS-RAW raw ingestion, `skytraq-venus8-raw` remains a compatibility alias |
+| `CLARTK_GATEWAY_SERIAL_BAUD` | `115200` | gateway live serial transport baud rate |
+| `CLARTK_GATEWAY_ROVER_SERIAL_BAUD` | `115200` | gateway NS-RAW rover serial baud for paired raw capture |
+| `CLARTK_GATEWAY_BASE_SERIAL_BAUD` | `115200` | gateway NS-RAW base serial baud for paired raw capture |
+| `CLARTK_GATEWAY_BASE_POSITION_LAT_DEG` | empty | manual base latitude for NS-RAW pair solve |
+| `CLARTK_GATEWAY_BASE_POSITION_LON_DEG` | empty | manual base longitude for NS-RAW pair solve |
+| `CLARTK_GATEWAY_BASE_POSITION_ALT_M` | empty | manual base altitude for NS-RAW pair solve |
 | `CLARTK_GATEWAY_NTRIP_URL` | empty | gateway hardware input or `file://` capture source |
+| `CLARTK_GATEWAY_CAPTURE_SECONDS` | `3` | gateway live transport acquisition window per capture cycle |
 | `CLARTK_BOOTSTRAP_ADMIN_EMAIL` | `admin@clartk.local` | bootstrap auth seeding |
 | `CLARTK_BOOTSTRAP_ADMIN_PASSWORD` | `clartk-admin` | bootstrap auth seeding |
 | `CLARTK_BOOTSTRAP_ADMIN_DISPLAY_NAME` | `ClaRTK Admin` | bootstrap auth seeding |
@@ -160,6 +185,7 @@ agent-memory worker ---------------> clartk_dev
 - Dev-console API: `/health`, `/v1/workspace/overview`, `/v1/coordination/*`, `/v1/knowledge/*`, `/v1/docs/catalog`, `/v1/skills`, `/v1/preferences/*`
 - Coordinator snapshot: `scripts/dev-coordinator-status.mjs` prefers authenticated `GET /v1/workspace/coordinator-status` and falls back to `scripts/dev-coordinator-status-db.py` for direct DB-backed degraded summaries
 - Gateway diagnostics: `/health`, `/v1/inputs`, `/v1/persistence/status`, `/v1/replay/run`, `/v1/serial/capture/run`, `/v1/ntrip/capture/run`
+- Gateway boot also starts background serial/NTRIP acquisition loops when live sources and a runtime DB are configured
 - Runtime auth/profile: `/v1/auth/*`, `/v1/me`, `/v1/me/profile`, `/v1/me/views`, `/v1/me/preference-observations`, `/v1/me/suggestions`, `/v1/admin/accounts`
 - Internal review flow: runtime API brokers suggestion review and publication into agent-memory
 - Development-interface flow: the browser talks to `services/dev-console-api`, which authenticates through runtime `/v1/me`, brokers dev-plane calls into agent-memory, and reads docs/skills directly from the repo filesystem
