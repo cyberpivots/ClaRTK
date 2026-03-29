@@ -1,7 +1,7 @@
 # TASK-0240 Runtime PostgreSQL Production Hardening
 
 - Owner: implementation owner
-- Write Set: `db/**`, `scripts/`, `services/api/`, `packages/api-client/`, `packages/domain/`, `docs/tasks/`, `docs/adr/`, `docs/operations/`, `.env.example`, `package.json`
+- Write Set: `db/**`, `scripts/`, `services/api/`, `services/rtk-gateway/`, `packages/api-client/`, `packages/domain/`, `docs/tasks/`, `docs/adr/`, `docs/operations/`, `compose.yaml`, `.env.example`, `package.json`
 - Worktree: shared current worktree
 - Depends On: TASK-0200, TASK-0210, ADR-003, ADR-004, ADR-005
 - Checks: `bash scripts/runtime-db-migrate.sh`, `bash scripts/runtime-db-status.sh`, `bash scripts/runtime-db-telemetry-partitions.sh`, `bash scripts/dev-db-smoke.sh`, `corepack yarn workspace @clartk/api-service typecheck`, `corepack yarn workspace @clartk/api-client typecheck`
@@ -20,9 +20,17 @@
 - Added query filters and bounded limits for runtime device, telemetry, and RTK list endpoints.
 - Aligned `.env.example` with the documented local PostgreSQL port contract.
 
+## Additional Implemented Slice
+
+- Added runtime role/bootstrap automation for dedicated migrator, API, gateway, readonly, and backup roles.
+- Added compose-backed WAL archiving configuration, base-backup capture, and PITR status helpers.
+- Added a disposable runtime restore-drill script for base backup + WAL archive verification.
+- Added runtime PostgreSQL observability enable/report scripts with JSON artifacts under `.clartk/dev/runtime-postgres-observability/`.
+- Added replay-backed runtime persistence to `services/rtk-gateway` for fixture-driven ingest verification.
+- Added runtime production config templates under `db/runtime/production/` for non-compose pg_hba, TLS, WAL archive, and observability baselines.
+
 ## Remaining Gaps
 
-- Gateway ingest persistence is still owned by `TASK-0220`; `services/rtk-gateway` does not yet write device/telemetry/RTK rows.
-- Self-hosted production roles, `pg_hba.conf`, TLS, and WAL archiving are documented as the baseline but are not yet applied through a repo-owned production bootstrap script.
 - Runtime list/filter contracts remain on the compatibility surface; full generated-contract adoption stays with `TASK-0210`.
-- PITR backup/restore drills and production observability collection remain follow-on implementation work.
+- Host-specific TLS certificate distribution and final non-compose deployment application remain follow-on work.
+- Gateway live serial/NTRIP transport acquisition and solver-backed RTK publication remain blocked on `TASK-0120` and `TASK-0130`.

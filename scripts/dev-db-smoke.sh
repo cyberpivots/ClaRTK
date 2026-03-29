@@ -312,6 +312,20 @@ assert_query_equals \
   "SELECT (to_regclass('rtk.rtk_solution_observed_idx') IS NOT NULL)::int;"
 
 assert_query_equals \
+  "runtime ingest session table present" \
+  "1" \
+  "$runtime_url" \
+  "clartk_runtime" \
+  "SELECT (to_regclass('telemetry.ingest_session') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "runtime ingest sample table present" \
+  "1" \
+  "$runtime_url" \
+  "clartk_runtime" \
+  "SELECT (to_regclass('telemetry.ingest_sample') IS NOT NULL)::int;"
+
+assert_query_equals \
   "dev vector extension present" \
   "1" \
   "$dev_url" \

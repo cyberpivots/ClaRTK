@@ -26,5 +26,7 @@ The baseline is:
 
 - Production runtime work now has a dedicated task slice in `TASK-0240`.
 - Runtime schema/index/partition maintenance becomes explicit operational work rather than an implicit side effect of `dev-db-init.sh`.
-- Gateway persistence, PITR, and production role/bootstrap work remain required follow-ons.
+- Dedicated runtime role/bootstrap automation, compose-backed WAL archiving, base-backup capture, observability collection, and replay-backed gateway persistence are now repo-owned surfaces.
+- Disposable restore-drill automation and non-compose production config templates are now repo-owned surfaces.
+- Final host-specific deployment rollout remains a follow-on.
 - Runtime authorization stays service-layer-owned in this phase; row-level security is deferred.

@@ -51,6 +51,12 @@ Fallback model:
 - `scripts/runtime-db-migrate.sh` is the repo-owned runtime migration path and records applied runtime SQL in `meta.schema_migration`.
 - `scripts/runtime-db-status.sh` reports runtime migration ledger state, pending runtime SQL, and checksum drift.
 - `scripts/runtime-db-telemetry-partitions.sh` creates bounded monthly partitions for `telemetry.position_event` and runs parent-table analyze after partition maintenance.
+- `scripts/runtime-db-bootstrap-roles.sh` creates dedicated runtime roles, assigns runtime object ownership to the migrator role, and applies role-level session safety defaults.
+- `scripts/runtime-db-configure-pitr.sh` enables compose-backed WAL archiving into `.clartk/runtime/wal-archive/`.
+- `scripts/runtime-db-basebackup.sh` captures a tar-format base backup under `.clartk/runtime/basebackups/<timestamp>/`.
+- `scripts/runtime-db-restore-drill.sh` restores a runtime base backup plus WAL archive into a disposable PostgreSQL target and runs verification SQL.
+- `scripts/runtime-db-enable-observability.sh` enables `pg_stat_statements`, slow-query logging, and autovacuum logging for the runtime PostgreSQL instance.
+- `scripts/runtime-db-observability-report.sh` writes a JSON runtime PostgreSQL stats report under `.clartk/dev/runtime-postgres-observability/latest.json`.
 - `scripts/dev-db-backup.sh` always writes logical dumps for `clartk_runtime` and `clartk_dev` into `.clartk/dev/backups/<timestamp>/`.
 - `scripts/dev-db-backup.sh --with-volume` adds `postgres-volume.tar` for compose-backed local PostgreSQL only. The script stops PostgreSQL temporarily before archiving the volume and then reruns `scripts/dev-db-up.sh` so the resolved endpoint stays authoritative.
 - `scripts/dev-db-restore.sh --from <backup-dir> --mode logical --yes` is the portable restore path for both compose-backed and host-managed PostgreSQL endpoints.
@@ -103,6 +109,17 @@ agent-memory worker ---------------> clartk_dev
 | `CLARTK_POSTGRES_SUPERUSER_URL` | `postgresql://clartk:clartk@127.0.0.1:55432/postgres` | bootstrap and migrations |
 | `CLARTK_RUNTIME_DATABASE_URL` | `postgresql://clartk:clartk@127.0.0.1:55432/clartk_runtime` | API, gateway |
 | `CLARTK_DEV_DATABASE_URL` | `postgresql://clartk:clartk@127.0.0.1:55432/clartk_dev` | agent-memory |
+| `CLARTK_RUNTIME_DB_BOOTSTRAP_URL` | empty | optional admin DSN for runtime role/bootstrap automation |
+| `CLARTK_RUNTIME_MIGRATOR_PASSWORD` | empty | runtime role bootstrap |
+| `CLARTK_RUNTIME_API_PASSWORD` | empty | runtime role bootstrap |
+| `CLARTK_RUNTIME_GATEWAY_PASSWORD` | empty | runtime role bootstrap |
+| `CLARTK_RUNTIME_READONLY_PASSWORD` | empty | runtime role bootstrap |
+| `CLARTK_RUNTIME_BACKUP_PASSWORD` | empty | runtime role bootstrap |
+| `CLARTK_RUNTIME_WAL_ARCHIVE_DIR` | `.clartk/runtime/wal-archive` | runtime PITR/WAL archiving |
+| `CLARTK_RUNTIME_BASEBACKUP_DIR` | `.clartk/runtime/basebackups` | runtime base backups |
+| `CLARTK_RUNTIME_RESTORE_DRILL_DIR` | `.clartk/runtime/restore-drills` | disposable runtime restore drills |
+| `CLARTK_RUNTIME_RESTORE_DRILL_PORT` | `55433` | disposable runtime restore drill target |
+| `CLARTK_RUNTIME_OBSERVABILITY_DIR` | `.clartk/dev/runtime-postgres-observability` | runtime PostgreSQL observability JSON reports |
 | `CLARTK_RESOLVED_POSTGRES_HOST` | generated | host-run scripts after `scripts/dev-db-up.sh` |
 | `CLARTK_RESOLVED_POSTGRES_PORT` | generated | host-run scripts after `scripts/dev-db-up.sh` |
 | `CLARTK_RESOLVED_POSTGRES_SOURCE` | generated | `scripts/dev-status.sh` and troubleshooting |
@@ -130,8 +147,8 @@ agent-memory worker ---------------> clartk_dev
 | `CLARTK_GATEWAY_DIAGNOSTICS_PORT` | `3200` | gateway |
 | `CLARTK_GATEWAY_MODE` | `hybrid` | gateway |
 | `CLARTK_GATEWAY_FIXTURE_PATH` | empty | gateway replay input |
-| `CLARTK_GATEWAY_SERIAL_PORT` | empty | gateway hardware input |
-| `CLARTK_GATEWAY_NTRIP_URL` | empty | gateway hardware input |
+| `CLARTK_GATEWAY_SERIAL_PORT` | empty | gateway hardware input or file-backed serial capture source |
+| `CLARTK_GATEWAY_NTRIP_URL` | empty | gateway hardware input or `file://` capture source |
 | `CLARTK_BOOTSTRAP_ADMIN_EMAIL` | `admin@clartk.local` | bootstrap auth seeding |
 | `CLARTK_BOOTSTRAP_ADMIN_PASSWORD` | `clartk-admin` | bootstrap auth seeding |
 | `CLARTK_BOOTSTRAP_ADMIN_DISPLAY_NAME` | `ClaRTK Admin` | bootstrap auth seeding |
@@ -142,7 +159,7 @@ agent-memory worker ---------------> clartk_dev
 - Agent-memory: `/health`, `/v1/source-documents`, `/v1/claims`, `/v1/claims/search`, `/v1/evaluations`
 - Dev-console API: `/health`, `/v1/workspace/overview`, `/v1/coordination/*`, `/v1/knowledge/*`, `/v1/docs/catalog`, `/v1/skills`, `/v1/preferences/*`
 - Coordinator snapshot: `scripts/dev-coordinator-status.mjs` prefers authenticated `GET /v1/workspace/coordinator-status` and falls back to `scripts/dev-coordinator-status-db.py` for direct DB-backed degraded summaries
-- Gateway diagnostics: `/health`, `/v1/inputs`
+- Gateway diagnostics: `/health`, `/v1/inputs`, `/v1/persistence/status`, `/v1/replay/run`, `/v1/serial/capture/run`, `/v1/ntrip/capture/run`
 - Runtime auth/profile: `/v1/auth/*`, `/v1/me`, `/v1/me/profile`, `/v1/me/views`, `/v1/me/preference-observations`, `/v1/me/suggestions`, `/v1/admin/accounts`
 - Internal review flow: runtime API brokers suggestion review and publication into agent-memory
 - Development-interface flow: the browser talks to `services/dev-console-api`, which authenticates through runtime `/v1/me`, brokers dev-plane calls into agent-memory, and reads docs/skills directly from the repo filesystem

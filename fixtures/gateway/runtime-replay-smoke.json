@@ -1,0 +1,37 @@
+{
+  "devices": [
+    {
+      "externalId": "fixture-rover-001",
+      "hardwareFamily": "px1122r",
+      "firmwareVersion": "fixture-1.0",
+      "config": {
+        "source": "gateway_fixture",
+        "profile": "smoke"
+      }
+    }
+  ],
+  "telemetryPositions": [
+    {
+      "externalId": "fixture-rover-001",
+      "receivedAt": "2026-03-28T12:00:00Z",
+      "payload": {
+        "lat": 39.7392,
+        "lon": -104.9903,
+        "altMeters": 1609.3,
+        "source": "gateway_fixture"
+      }
+    }
+  ],
+  "rtkSolutions": [
+    {
+      "externalId": "fixture-rover-001",
+      "observedAt": "2026-03-28T12:00:01Z",
+      "quality": "rtk_fix",
+      "summary": {
+        "baselineMeters": 0.42,
+        "satellites": 18,
+        "source": "gateway_fixture"
+      }
+    }
+  ]
+}

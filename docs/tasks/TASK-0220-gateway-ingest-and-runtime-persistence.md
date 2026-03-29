@@ -17,8 +17,15 @@
 - Implement runtime persistence and solver orchestration around stable data-plane contracts.
 - Preserve the local diagnostics surface while adding real ingest behavior.
 
-## Verified Current Gaps
+## Verified Current Progress
 
-- `services/rtk-gateway/src/main.rs` is currently a diagnostics-first TCP service that serves `/health` and `/v1/inputs` only.
+- `services/rtk-gateway/src/main.rs` now supports replay-backed runtime persistence into `device.registry`, `telemetry.position_event`, and `rtk.solution`.
+- Serial capture now uses the existing NMEA parser path and promotes GGA sentences into `telemetry.position_event` while journaling ingest evidence in `telemetry.ingest_session` and `telemetry.ingest_sample`.
+- NTRIP capture now uses the existing RTCM parser path and persists parser-backed ingest evidence in `telemetry.ingest_session` and `telemetry.ingest_sample`.
+
+## Remaining Gaps
+
+- Live serial port acquisition and reconnect handling are not implemented yet; the current serial path is file-backed.
+- Live NTRIP client acquisition and reconnect handling are not implemented yet; the current NTRIP path accepts `file://` capture input.
 - `core/solvers/rtklib-bridge/src/lib.rs` is still minimal and does not yet provide a real validated ingest or solver bridge surface.
-- Runtime persistence and input-specific ingest flows are not present yet and remain blocked on `TASK-0120` and `TASK-0130`.
+- Solver-backed RTK publication from live serial/NTRIP inputs remains blocked on `TASK-0130`.
