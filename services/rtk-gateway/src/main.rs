@@ -1,3 +1,5 @@
+mod navspark_session;
+
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use chrono::{DateTime, Utc};

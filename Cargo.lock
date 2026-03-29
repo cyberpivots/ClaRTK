@@ -173,6 +173,7 @@ dependencies = [
  "clartk-px1122r",
  "clartk-rtcm",
  "clartk-rtklib-bridge",
+ "clartk-skytraq-phoenix",
  "clartk-skytraq-venus8",
  "postgres",
  "serde",

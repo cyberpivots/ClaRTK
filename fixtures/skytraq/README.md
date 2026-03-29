@@ -20,3 +20,13 @@ Deterministic framing fixtures for SkyTraq Venus8 and Phoenix protocol parsing l
   Source device: synthetic PX1122R Phoenix status sample
   Protocol generation: SkyTraq Phoenix framed binary
   Capture assumptions: uses the same framed envelope and checksum model as the current Phoenix parser expectations; fixture is synthetic and deterministic.
+
+## Live Capture Plan
+
+- Future command/response fixtures must identify:
+  - physical device family and exact board or module
+  - transport used (`USB`, `TXD1`, UART-to-USB bridge, or equivalent)
+  - baud rate and host command sequence used to produce the capture
+  - whether the bytes are a host-issued request, receiver `ACK`, receiver `NACK`, or terminal status output
+- Do not label any future fixture as a bench-verified configuration success unless the capture contains both the request frame and the matching receiver-side acknowledgement or status output.
+- Official vendor examples may continue to back deterministic command/status tests, but must remain labeled as vendor-example fixtures rather than live bench captures.

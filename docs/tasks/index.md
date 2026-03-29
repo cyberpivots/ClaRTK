@@ -46,5 +46,9 @@
   Status: in progress
 - `TASK-0540-hardware-deployment-interface.md`: Add the bench-first hardware deployment interface, deployment state, and supervised runtime handoff gate
   Status: in progress
+- `TASK-0550-navspark-binary-control-research-and-integration.md`: Add verified NavSpark/SkyTraq command surfaces, session abstractions, and durable protocol research for direct host communication
+  Status: in progress
 - `TASK-0600-user-preference-profile.md`: Implement real-account operator profiles, reviewable preference suggestions, and dashboard-first preference management
   Status: completed
+- `TASK-0610-heltec-wifi-lora32-v2-integration-research.md`: Add verified Heltec WiFi LoRa32 V2 ecosystem research, DB-backed source evidence, and ClaRTK fit analysis without overstating inventory or bench support
+  Status: in progress

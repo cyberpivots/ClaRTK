@@ -14,6 +14,7 @@ clartk-nmea = { path = "../../core/transforms/nmea" }
 clartk-px1122r = { path = "../../core/devices/px1122r" }
 clartk-rtcm = { path = "../../core/transforms/rtcm" }
 clartk-rtklib-bridge = { path = "../../core/solvers/rtklib-bridge" }
+clartk-skytraq-phoenix = { path = "../../core/protocols/skytraq-phoenix" }
 clartk-skytraq-venus8 = { path = "../../core/protocols/skytraq-venus8" }
 postgres = { version = "0.19.10", features = ["with-chrono-0_4", "with-serde_json-1"] }
 serde.workspace = true
