@@ -47,6 +47,7 @@ import type {
   PreferenceSuggestionCollection,
   ResourceCollection,
   RuntimeApiHealth,
+  RuntimeApiReadiness,
   RuntimeDevice,
   RuntimePositionEvent,
   RuntimeRtkSolution,
@@ -128,6 +129,10 @@ export class ApiClient extends JsonClient {
     return this.url("/health");
   }
 
+  readinessUrl(): string {
+    return this.url("/ready");
+  }
+
   devicesUrl(): string {
     return this.url("/v1/devices");
   }
@@ -170,16 +175,80 @@ export class ApiClient extends JsonClient {
     return this.getJson<RuntimeApiHealth>("/health");
   }
 
-  async listDevices(): Promise<ResourceCollection<RuntimeDevice>> {
-    return this.getJson<ResourceCollection<RuntimeDevice>>("/v1/devices");
+  async getReadiness(): Promise<RuntimeApiReadiness> {
+    return this.getJson<RuntimeApiReadiness>("/ready");
   }
 
-  async listPositions(): Promise<ResourceCollection<RuntimePositionEvent>> {
-    return this.getJson<ResourceCollection<RuntimePositionEvent>>("/v1/telemetry/positions");
+  async listDevices(query: {
+    hardwareFamily?: string;
+    createdBefore?: string;
+    limit?: number;
+  } = {}): Promise<ResourceCollection<RuntimeDevice>> {
+    const params = new URLSearchParams();
+    if (query.hardwareFamily) {
+      params.set("hardwareFamily", query.hardwareFamily);
+    }
+    if (query.createdBefore) {
+      params.set("createdBefore", query.createdBefore);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/devices?${suffix}` : "/v1/devices";
+    return this.getJson<ResourceCollection<RuntimeDevice>>(route);
   }
 
-  async listSolutions(): Promise<ResourceCollection<RuntimeRtkSolution>> {
-    return this.getJson<ResourceCollection<RuntimeRtkSolution>>("/v1/rtk/solutions");
+  async listPositions(query: {
+    deviceId?: string;
+    receivedAfter?: string;
+    receivedBefore?: string;
+    limit?: number;
+  } = {}): Promise<ResourceCollection<RuntimePositionEvent>> {
+    const params = new URLSearchParams();
+    if (query.deviceId) {
+      params.set("deviceId", query.deviceId);
+    }
+    if (query.receivedAfter) {
+      params.set("receivedAfter", query.receivedAfter);
+    }
+    if (query.receivedBefore) {
+      params.set("receivedBefore", query.receivedBefore);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/telemetry/positions?${suffix}` : "/v1/telemetry/positions";
+    return this.getJson<ResourceCollection<RuntimePositionEvent>>(route);
+  }
+
+  async listSolutions(query: {
+    deviceId?: string;
+    observedAfter?: string;
+    observedBefore?: string;
+    quality?: string;
+    limit?: number;
+  } = {}): Promise<ResourceCollection<RuntimeRtkSolution>> {
+    const params = new URLSearchParams();
+    if (query.deviceId) {
+      params.set("deviceId", query.deviceId);
+    }
+    if (query.observedAfter) {
+      params.set("observedAfter", query.observedAfter);
+    }
+    if (query.observedBefore) {
+      params.set("observedBefore", query.observedBefore);
+    }
+    if (query.quality) {
+      params.set("quality", query.quality);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const route = suffix ? `/v1/rtk/solutions?${suffix}` : "/v1/rtk/solutions";
+    return this.getJson<ResourceCollection<RuntimeRtkSolution>>(route);
   }
 
   async listSavedViews(): Promise<ResourceCollection<RuntimeSavedView>> {

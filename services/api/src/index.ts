@@ -1,6 +1,9 @@
 import * as crypto from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import Fastify from "fastify";
 import { Pool, type PoolClient } from "pg";
+import { fileURLToPath } from "node:url";
 import type {
   Account,
   AccountId,
@@ -24,6 +27,7 @@ import type {
   PublishedProfileChange,
   ResourceCollection,
   RuntimeApiHealth,
+  RuntimeApiReadiness,
   RuntimeSessionState,
   RuntimeDevice,
   RuntimePositionEvent,
@@ -38,6 +42,8 @@ import type {
 import { createDefaultProfileDefaults } from "@clartk/domain";
 
 const { createHash, randomBytes, timingSafeEqual } = crypto;
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const runtimeMigrationsDir = path.join(repoRoot, "db", "migrations");
 const argon2Sync = (
   crypto as typeof crypto & {
     argon2Sync: (
@@ -176,6 +182,12 @@ app.get("/health", async () => {
     agentMemoryBaseUrl: config.agentMemoryBaseUrl
   };
 
+  return payload;
+});
+
+app.get("/ready", async (_request, reply) => {
+  const payload = await buildRuntimeApiReadiness();
+  reply.code(payload.status === "ok" ? 200 : 503);
   return payload;
 });
 
@@ -684,59 +696,155 @@ app.post("/v1/admin/accounts", async (request, reply) => {
 
 app.get("/v1/devices", async (request) => {
   await requireAuth(request);
-  return loadCollection(
-    `
-    SELECT device_id, external_id, hardware_family, firmware_version, config, created_at
-    FROM device.registry
-    ORDER BY created_at DESC
-    LIMIT 50
-    `,
-    (row): RuntimeDevice => ({
-      deviceId: String(row.device_id),
-      externalId: String(row.external_id),
-      hardwareFamily: String(row.hardware_family),
-      firmwareVersion: row.firmware_version ? String(row.firmware_version) : null,
-      config: asJsonObject(row.config),
-      createdAt: toIsoString(row.created_at)
-    })
-  );
+  const query = (request.query as Record<string, unknown>) ?? {};
+  const hardwareFamily = optionalString(query.hardwareFamily);
+  const createdBefore = optionalTimestamp(query.createdBefore, "createdBefore");
+  const limit = normalizeListLimit(query.limit, 50);
+
+  return withRuntimeClient(async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+
+    if (hardwareFamily) {
+      values.push(hardwareFamily);
+      clauses.push(`hardware_family = $${values.length}`);
+    }
+    if (createdBefore) {
+      values.push(createdBefore);
+      clauses.push(`created_at < $${values.length}`);
+    }
+
+    values.push(limit);
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const result = await client.query(
+      `
+      SELECT device_id, external_id, hardware_family, firmware_version, config, created_at
+      FROM device.registry
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${values.length}
+      `,
+      values
+    );
+
+    return {
+      items: result.rows.map((row): RuntimeDevice => ({
+        deviceId: String(row.device_id),
+        externalId: String(row.external_id),
+        hardwareFamily: String(row.hardware_family),
+        firmwareVersion: row.firmware_version ? String(row.firmware_version) : null,
+        config: asJsonObject(row.config),
+        createdAt: toIsoString(row.created_at)
+      })),
+      source: "database"
+    } satisfies ResourceCollection<RuntimeDevice>;
+  });
 });
 
 app.get("/v1/telemetry/positions", async (request) => {
   await requireAuth(request);
-  return loadCollection(
-    `
-    SELECT event_id, device_id, received_at, payload
-    FROM telemetry.position_event
-    ORDER BY received_at DESC
-    LIMIT 50
-    `,
-    (row): RuntimePositionEvent => ({
-      eventId: Number(row.event_id),
-      deviceId: String(row.device_id),
-      receivedAt: toIsoString(row.received_at),
-      payload: asJsonObject(row.payload)
-    })
-  );
+  const query = (request.query as Record<string, unknown>) ?? {};
+  const deviceId = optionalPositiveInteger(query.deviceId, "deviceId");
+  const receivedAfter = optionalTimestamp(query.receivedAfter, "receivedAfter");
+  const receivedBefore = optionalTimestamp(query.receivedBefore, "receivedBefore");
+  const limit = normalizeListLimit(query.limit, 50);
+
+  return withRuntimeClient(async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+
+    if (deviceId !== null) {
+      values.push(deviceId);
+      clauses.push(`device_id = $${values.length}`);
+    }
+    if (receivedAfter) {
+      values.push(receivedAfter);
+      clauses.push(`received_at >= $${values.length}`);
+    }
+    if (receivedBefore) {
+      values.push(receivedBefore);
+      clauses.push(`received_at < $${values.length}`);
+    }
+
+    values.push(limit);
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const result = await client.query(
+      `
+      SELECT event_id, device_id, received_at, payload
+      FROM telemetry.position_event
+      ${whereClause}
+      ORDER BY received_at DESC, event_id DESC
+      LIMIT $${values.length}
+      `,
+      values
+    );
+
+    return {
+      items: result.rows.map((row): RuntimePositionEvent => ({
+        eventId: Number(row.event_id),
+        deviceId: String(row.device_id),
+        receivedAt: toIsoString(row.received_at),
+        payload: asJsonObject(row.payload)
+      })),
+      source: "database"
+    } satisfies ResourceCollection<RuntimePositionEvent>;
+  });
 });
 
 app.get("/v1/rtk/solutions", async (request) => {
   await requireAuth(request);
-  return loadCollection(
-    `
-    SELECT solution_id, device_id, observed_at, quality, summary
-    FROM rtk.solution
-    ORDER BY observed_at DESC
-    LIMIT 50
-    `,
-    (row): RuntimeRtkSolution => ({
-      solutionId: Number(row.solution_id),
-      deviceId: String(row.device_id),
-      observedAt: toIsoString(row.observed_at),
-      quality: String(row.quality),
-      summary: asJsonObject(row.summary)
-    })
-  );
+  const query = (request.query as Record<string, unknown>) ?? {};
+  const deviceId = optionalPositiveInteger(query.deviceId, "deviceId");
+  const observedAfter = optionalTimestamp(query.observedAfter, "observedAfter");
+  const observedBefore = optionalTimestamp(query.observedBefore, "observedBefore");
+  const quality = optionalString(query.quality);
+  const limit = normalizeListLimit(query.limit, 50);
+
+  return withRuntimeClient(async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+
+    if (deviceId !== null) {
+      values.push(deviceId);
+      clauses.push(`device_id = $${values.length}`);
+    }
+    if (observedAfter) {
+      values.push(observedAfter);
+      clauses.push(`observed_at >= $${values.length}`);
+    }
+    if (observedBefore) {
+      values.push(observedBefore);
+      clauses.push(`observed_at < $${values.length}`);
+    }
+    if (quality) {
+      values.push(quality);
+      clauses.push(`quality = $${values.length}`);
+    }
+
+    values.push(limit);
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const result = await client.query(
+      `
+      SELECT solution_id, device_id, observed_at, quality, summary
+      FROM rtk.solution
+      ${whereClause}
+      ORDER BY observed_at DESC, solution_id DESC
+      LIMIT $${values.length}
+      `,
+      values
+    );
+
+    return {
+      items: result.rows.map((row): RuntimeRtkSolution => ({
+        solutionId: Number(row.solution_id),
+        deviceId: String(row.device_id),
+        observedAt: toIsoString(row.observed_at),
+        quality: String(row.quality),
+        summary: asJsonObject(row.summary)
+      })),
+      source: "database"
+    } satisfies ResourceCollection<RuntimeRtkSolution>;
+  });
 });
 
 app.get("/v1/ui/views", async (request) => {
@@ -802,6 +910,173 @@ async function loadCollection<T>(
     items: result.rows.map(mapRow),
     source: "database"
   };
+}
+
+async function buildRuntimeApiReadiness(): Promise<RuntimeApiReadiness> {
+  const basePayload: RuntimeApiReadiness = {
+    service: "api",
+    status: "degraded",
+    workspace: "clartk",
+    runtimeDatabaseConfigured: Boolean(config.runtimeDatabaseUrl),
+    runtimeDatabaseReachable: false,
+    runtimeDatabaseName: "clartk_runtime",
+    databaseRole: null,
+    currentDatabase: null,
+    serverVersion: null,
+    migration: {
+      status: config.runtimeDatabaseUrl ? "missing_ledger" : "unconfigured",
+      ledgerPresent: false,
+      expectedCount: 0,
+      appliedCount: 0,
+      pendingCount: 0,
+      driftCount: 0,
+      latestAppliedFilename: null,
+      latestAppliedAt: null,
+      pendingFilenames: [],
+      driftedFilenames: []
+    }
+  };
+
+  if (!pool) {
+    return basePayload;
+  }
+
+  try {
+    return await withRuntimeClient(async (client) => {
+      const [databaseResult, migration] = await Promise.all([
+        client.query<{
+          current_user: string;
+          current_database: string;
+          server_version: string;
+        }>(
+          `
+          SELECT
+            current_user,
+            current_database() AS current_database,
+            current_setting('server_version') AS server_version
+          `
+        ),
+        loadRuntimeMigrationStatus(client)
+      ]);
+
+      const databaseRow = databaseResult.rows[0];
+      return {
+        service: "api",
+        status: migration.status === "ready" ? "ok" : "degraded",
+        workspace: "clartk",
+        runtimeDatabaseConfigured: true,
+        runtimeDatabaseReachable: true,
+        runtimeDatabaseName: "clartk_runtime",
+        databaseRole: databaseRow ? String(databaseRow.current_user) : null,
+        currentDatabase: databaseRow ? String(databaseRow.current_database) : null,
+        serverVersion: databaseRow ? String(databaseRow.server_version) : null,
+        migration
+      };
+    });
+  } catch (error) {
+    app.log.warn(error);
+    return basePayload;
+  }
+}
+
+async function loadRuntimeMigrationStatus(
+  client: PoolClient
+): Promise<RuntimeApiReadiness["migration"]> {
+  const migrationFiles = await listRuntimeMigrationFiles();
+  const ledgerResult = await client.query<{ ledger_present: boolean }>(
+    "SELECT (to_regclass('meta.schema_migration') IS NOT NULL) AS ledger_present"
+  );
+
+  if (!ledgerResult.rows[0]?.ledger_present) {
+    return {
+      status: "missing_ledger",
+      ledgerPresent: false,
+      expectedCount: migrationFiles.length,
+      appliedCount: 0,
+      pendingCount: migrationFiles.length,
+      driftCount: 0,
+      latestAppliedFilename: null,
+      latestAppliedAt: null,
+      pendingFilenames: migrationFiles.map((file) => file.filename),
+      driftedFilenames: []
+    };
+  }
+
+  const appliedResult = await client.query<{
+    filename: string;
+    checksum_sha256: string;
+    applied_at: Date;
+  }>(
+    `
+    SELECT filename, checksum_sha256, applied_at
+    FROM meta.schema_migration
+    WHERE database_name = $1
+    ORDER BY applied_at ASC, schema_migration_id ASC
+    `,
+    ["clartk_runtime"]
+  );
+
+  const appliedByFilename = new Map(
+    appliedResult.rows.map((row) => [
+      row.filename,
+      {
+        checksum: String(row.checksum_sha256),
+        appliedAt: toIsoString(row.applied_at)
+      }
+    ])
+  );
+
+  const pendingFilenames: string[] = [];
+  const driftedFilenames: string[] = [];
+
+  for (const migration of migrationFiles) {
+    const applied = appliedByFilename.get(migration.filename);
+    if (!applied) {
+      pendingFilenames.push(migration.filename);
+      continue;
+    }
+    if (applied.checksum !== migration.checksumSha256) {
+      driftedFilenames.push(migration.filename);
+    }
+  }
+
+  const latestApplied = appliedResult.rows.at(-1) ?? null;
+
+  return {
+    status:
+      driftedFilenames.length > 0
+        ? "drift"
+        : pendingFilenames.length > 0
+          ? "pending"
+          : "ready",
+    ledgerPresent: true,
+    expectedCount: migrationFiles.length,
+    appliedCount: appliedResult.rows.length,
+    pendingCount: pendingFilenames.length,
+    driftCount: driftedFilenames.length,
+    latestAppliedFilename: latestApplied ? String(latestApplied.filename) : null,
+    latestAppliedAt: latestApplied ? toIsoString(latestApplied.applied_at) : null,
+    pendingFilenames,
+    driftedFilenames
+  };
+}
+
+async function listRuntimeMigrationFiles(): Promise<Array<{ filename: string; checksumSha256: string }>> {
+  const entries = await fs.readdir(runtimeMigrationsDir, { withFileTypes: true });
+  const files = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql") && entry.name.includes("runtime"))
+    .map((entry) => entry.name)
+    .sort();
+
+  return Promise.all(
+    files.map(async (filename) => {
+      const buffer = await fs.readFile(path.join(runtimeMigrationsDir, filename));
+      return {
+        filename,
+        checksumSha256: createHash("sha256").update(buffer).digest("hex")
+      };
+    })
+  );
 }
 
 async function requireAuth(request: {
@@ -1766,6 +2041,10 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   return Math.round(number);
 }
 
+function normalizeListLimit(value: unknown, fallback: number, maximum = 200): number {
+  return Math.min(normalizePositiveInteger(value, fallback), maximum);
+}
+
 function asBody(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return {};
@@ -1794,6 +2073,27 @@ function optionalString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function optionalPositiveInteger(value: unknown, fieldName: string): number | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  return requirePositiveInteger(value, fieldName);
+}
+
+function optionalTimestamp(value: unknown, fieldName: string): string | null {
+  const text = optionalString(value);
+  if (!text) {
+    return null;
+  }
+
+  const timestamp = new Date(text);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new ApiError(400, `${fieldName} must be an ISO-8601 timestamp`);
+  }
+
+  return timestamp.toISOString();
 }
 
 function requireJsonObject(value: unknown, fieldName: string): JsonObject {

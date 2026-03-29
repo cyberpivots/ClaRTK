@@ -20,6 +20,8 @@
   Status: in progress
 - `TASK-0230-dashboard-runtime-integration.md`: Harden the dashboard against stable generated client types and the runtime API only
   Status: in progress
+- `TASK-0240-runtime-postgres-production-hardening.md`: Harden `clartk_runtime` for a self-hosted, reliability-first production path
+  Status: in progress
 - `TASK-0300-native-app.md`: Umbrella milestone for native foundation and operator workflows
   Status: in progress
 - `TASK-0310-native-foundation-and-shared-client-adoption.md`: Replace the native shell with shared auth, profile, and runtime client wiring

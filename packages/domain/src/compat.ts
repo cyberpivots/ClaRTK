@@ -51,6 +51,30 @@ export interface RuntimeApiHealth {
   agentMemoryBaseUrl: string;
 }
 
+export interface RuntimeApiReadiness {
+  service: "api";
+  status: ServiceStatus;
+  workspace: "clartk";
+  runtimeDatabaseConfigured: boolean;
+  runtimeDatabaseReachable: boolean;
+  runtimeDatabaseName: typeof CLARTK_RUNTIME_DATABASE_NAME;
+  databaseRole: string | null;
+  currentDatabase: string | null;
+  serverVersion: string | null;
+  migration: {
+    status: "ready" | "pending" | "drift" | "missing_ledger" | "unconfigured";
+    ledgerPresent: boolean;
+    expectedCount: number;
+    appliedCount: number;
+    pendingCount: number;
+    driftCount: number;
+    latestAppliedFilename: string | null;
+    latestAppliedAt: TimestampIsoString | null;
+    pendingFilenames: string[];
+    driftedFilenames: string[];
+  };
+}
+
 export interface RuntimeDevice {
   deviceId: DeviceId;
   externalId: string;

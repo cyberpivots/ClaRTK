@@ -291,6 +291,27 @@ assert_query_equals \
   "SELECT (to_regclass('ui.operator_profile') IS NOT NULL)::int;"
 
 assert_query_equals \
+  "runtime migration ledger present" \
+  "1" \
+  "$runtime_url" \
+  "clartk_runtime" \
+  "SELECT (to_regclass('meta.schema_migration') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "runtime saved view owner index present" \
+  "1" \
+  "$runtime_url" \
+  "clartk_runtime" \
+  "SELECT (to_regclass('ui.ui_saved_view_owner_created_idx') IS NOT NULL)::int;"
+
+assert_query_equals \
+  "runtime rtk observed index present" \
+  "1" \
+  "$runtime_url" \
+  "clartk_runtime" \
+  "SELECT (to_regclass('rtk.rtk_solution_observed_idx') IS NOT NULL)::int;"
+
+assert_query_equals \
   "dev vector extension present" \
   "1" \
   "$dev_url" \

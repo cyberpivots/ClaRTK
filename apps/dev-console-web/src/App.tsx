@@ -1577,6 +1577,7 @@ export function App() {
   } else if (state.selectedPanel === "hardware") {
     selectedPanelContent = (
       <HardwareSurface
+        tasks={state.tasks}
         inventoryItems={state.inventoryItems}
         inventoryUnits={state.inventoryUnits}
         inventoryBuilds={state.inventoryBuilds}
@@ -3359,6 +3360,7 @@ function CoordinationSurface(props: {
 }
 
 function HardwareSurface(props: {
+  tasks: AgentTaskCollection | null;
   inventoryItems: InventoryItemCollection | null;
   inventoryUnits: InventoryUnitCollection | null;
   inventoryBuilds: InventoryBuildCollection | null;
@@ -3400,9 +3402,38 @@ function HardwareSurface(props: {
   const units = props.inventoryUnits?.units ?? [];
   const builds = props.inventoryBuilds?.builds ?? [];
   const deploymentRuns = props.deploymentRuns?.runs ?? [];
+  const hardwareQueues = (props.tasks?.queues ?? []).filter((queue) =>
+    queue.queueName.startsWith("hardware")
+  );
+  const hardwareTaskById = new Map(
+    (props.tasks?.items ?? []).map((task) => [task.agentTaskId, task])
+  );
+  const hardwareQueueSummary = summarizeQueueHealth(hardwareQueues);
   const filteredItems = includeFixtures ? items : items.filter((item) => item.deployable);
   const filteredUnits = includeFixtures ? units : units.filter((unit) => unit.deployable);
   const selectedDeployment = props.selectedDeployment;
+  const deploymentSummary = asRecord(selectedDeployment?.run.summaryJson ?? null);
+  const deploymentProgress = asRecord(deploymentSummary?.progress ?? null);
+  const deploymentLatestTask = asRecord(deploymentSummary?.latestTask ?? null);
+  const deploymentCurrentStep = asRecord(deploymentSummary?.currentStep ?? null);
+  const requiredSteps = asFiniteNumber(deploymentProgress?.requiredSteps) ?? 0;
+  const completedRequiredSteps = asFiniteNumber(deploymentProgress?.completedRequiredSteps) ?? 0;
+  const artifactCount = asFiniteNumber(deploymentSummary?.artifactCount) ?? 0;
+  const probeCount = asFiniteNumber(deploymentSummary?.probeCount) ?? 0;
+  const toolStatusCount = asFiniteNumber(deploymentSummary?.toolStatusCount) ?? 0;
+  const queueName =
+    pickString(deploymentSummary ?? {}, ["queueName"]) ??
+    pickString(deploymentLatestTask ?? {}, ["queueName"]) ??
+    "hardware.build";
+  const linkedTasks = selectedDeployment
+    ? selectedDeployment.steps
+        .map((step) => ({
+          step,
+          task:
+            step.agentTaskId !== null ? hardwareTaskById.get(step.agentTaskId) ?? null : null
+        }))
+        .filter((entry) => entry.step.agentTaskId !== null || entry.task !== null)
+    : [];
   const selectedBuild =
     (selectedDeployment
       ? builds.find((build) => build.buildId === selectedDeployment.run.buildId)
@@ -3563,7 +3594,27 @@ function HardwareSurface(props: {
                     { label: "Run", value: `#${selectedDeployment.run.deploymentRunId}` },
                     { label: "Build", value: `#${selectedDeployment.run.buildId}` },
                     { label: "Status", value: selectedDeployment.run.status },
-                    { label: "Bench host", value: selectedDeployment.run.benchHost ?? "not set" }
+                    { label: "Bench host", value: selectedDeployment.run.benchHost ?? "not set" },
+                    { label: "Queue", value: queueName },
+                    { label: "Progress", value: `${completedRequiredSteps}/${requiredSteps || selectedDeployment.steps.length}` },
+                    { label: "Artifacts", value: String(artifactCount) }
+                  ]}
+                />
+                <FactGrid
+                  entries={[
+                    {
+                      label: "Current step",
+                      value:
+                        pickString(deploymentCurrentStep ?? {}, ["displayLabel", "stepKind"]) ?? "not set"
+                    },
+                    {
+                      label: "Latest task",
+                      value:
+                        pickString(deploymentLatestTask ?? {}, ["status"]) ??
+                        "no agent task linked"
+                    },
+                    { label: "Probes", value: String(probeCount) },
+                    { label: "Tools", value: String(toolStatusCount) }
                   ]}
                 />
                 <label className="preview-field">
@@ -3573,34 +3624,78 @@ function HardwareSurface(props: {
                 <button type="button" onClick={() => void props.onResumeDeployment(selectedDeployment.run.deploymentRunId)}>
                   Resume / queue next step
                 </button>
+                <ListBlock
+                  emptyLabel="No deployment runs recorded yet."
+                  items={deploymentRuns.slice(0, 8).map((run) => {
+                    const runSummary = asRecord(run.summaryJson ?? null);
+                    const runProgress = asRecord(runSummary?.progress ?? null);
+                    const runQueue =
+                      pickString(runSummary ?? {}, ["queueName"]) ?? "hardware.build";
+                    const runRequired = asFiniteNumber(runProgress?.requiredSteps) ?? 0;
+                    const runCompleted = asFiniteNumber(runProgress?.completedRequiredSteps) ?? 0;
+                    return {
+                      title: `Run #${run.deploymentRunId} · ${run.status}`,
+                      subtitle: `${run.hardwareFamily} · ${runQueue}`,
+                      body: (
+                        <div className="action-strip">
+                          <span>{runCompleted}/{runRequired || 0} required steps</span>
+                          <button type="button" onClick={() => void props.onSelectDeployment(run.deploymentRunId)}>
+                            Inspect run
+                          </button>
+                        </div>
+                      )
+                    };
+                  })}
+                />
               </div>
             ) : (
               <p className="empty-copy">Select or start a deployment run first.</p>
             )}
           </Panel>
-          <Panel title="Host Probes And Tools" eyebrow="Bench Evidence">
-            {selectedDeployment ? (
-              <div className="detail-stack">
-                <ListBlock
-                  emptyLabel="No host probe artifacts yet."
-                  items={selectedDeployment.probes.map((probe) => ({
-                    title: probe.probeKind,
-                    subtitle: probe.status,
-                    body: <StructuredValue value={probe.detailJson} emptyLabel="No probe detail." />
-                  }))}
-                />
-                <ListBlock
-                  emptyLabel="No tool status recorded yet."
-                  items={selectedDeployment.toolStatuses.map((tool) => ({
-                    title: tool.toolName,
-                    subtitle: `${tool.status}${tool.version ? ` · ${tool.version}` : ""}`,
-                    body: <StructuredValue value={tool.detailJson} emptyLabel="No tool detail." />
-                  }))}
-                />
-              </div>
-            ) : (
-              <p className="empty-copy">No deployment run selected.</p>
-            )}
+          <Panel title="Hardware Queue Health" eyebrow="DB-Backed">
+            <div className="detail-stack">
+              <FactGrid
+                entries={[
+                  { label: "Queued", value: hardwareQueueSummary.queuedCount },
+                  { label: "Leased", value: hardwareQueueSummary.leasedCount },
+                  { label: "Failed", value: hardwareQueueSummary.failedCount },
+                  { label: "State", value: hardwareQueueSummary.statusLabel }
+                ]}
+              />
+              <QueuePulseBars queues={hardwareQueues} />
+              <ListBlock
+                emptyLabel={props.loading ? "Loading hardware queues…" : "No hardware queues are currently active."}
+                items={hardwareQueues.map((queue) => ({
+                  title: queue.queueName,
+                  subtitle: `${queue.queuedCount} queued · ${queue.leasedCount} leased · ${queue.failedCount} failed`,
+                  body: (
+                    <p className="detail-copy">
+                      {queue.recentTasks.length} recent tasks tracked in `clartk_dev`.
+                    </p>
+                  )
+                }))}
+              />
+              {selectedDeployment ? (
+                <>
+                  <ListBlock
+                    emptyLabel="No host probe artifacts yet."
+                    items={selectedDeployment.probes.map((probe) => ({
+                      title: probe.probeKind,
+                      subtitle: probe.status,
+                      body: <StructuredValue value={probe.detailJson} emptyLabel="No probe detail." />
+                    }))}
+                  />
+                  <ListBlock
+                    emptyLabel="No tool status recorded yet."
+                    items={selectedDeployment.toolStatuses.map((tool) => ({
+                      title: tool.toolName,
+                      subtitle: `${tool.status}${tool.version ? ` · ${tool.version}` : ""}`,
+                      body: <StructuredValue value={tool.detailJson} emptyLabel="No tool detail." />
+                    }))}
+                  />
+                </>
+              ) : null}
+            </div>
           </Panel>
         </div>
       )
@@ -3620,6 +3715,35 @@ function HardwareSurface(props: {
                 subtitle: `${step.executionMode} · ${step.status}`,
                 body: (
                   <div className="detail-stack">
+                    {step.agentTaskId !== null ? (
+                      <FactGrid
+                        entries={[
+                          { label: "Task kind", value: step.taskKind ?? "manual step" },
+                          { label: "Agent task", value: `#${step.agentTaskId}` },
+                          {
+                            label: "Queue",
+                            value:
+                              hardwareTaskById.get(step.agentTaskId)?.queueName ?? queueName
+                          },
+                          {
+                            label: "Task status",
+                            value:
+                              hardwareTaskById.get(step.agentTaskId)?.status ??
+                              "not currently loaded"
+                          },
+                          {
+                            label: "Lease owner",
+                            value:
+                              hardwareTaskById.get(step.agentTaskId)?.leaseOwner ?? "unleased"
+                          },
+                          {
+                            label: "Lease expiry",
+                            value:
+                              hardwareTaskById.get(step.agentTaskId)?.leaseExpiresAt ?? "none"
+                          }
+                        ]}
+                      />
+                    ) : null}
                     <StructuredValue value={step.payloadJson} emptyLabel="No step payload." />
                     {step.executionMode === "manual" &&
                     ["awaiting_confirmation", "pending", "blocked"].includes(step.status) ? (
@@ -3669,21 +3793,66 @@ function HardwareSurface(props: {
         <div className="surface-page-grid surface-page-grid-2">
           <Panel title="Run Summary" eyebrow="Deployment">
             {selectedDeployment ? (
-              <StructuredValue value={selectedDeployment.run.summaryJson} emptyLabel="No deployment summary." />
+              <div className="detail-stack">
+                <FactGrid
+                  entries={[
+                    { label: "Queue", value: queueName },
+                    { label: "Artifacts", value: String(artifactCount) },
+                    { label: "Probes", value: String(probeCount) },
+                    { label: "Tools", value: String(toolStatusCount) },
+                    {
+                      label: "Current step",
+                      value:
+                        pickString(deploymentCurrentStep ?? {}, ["displayLabel", "stepKind"]) ?? "not set"
+                    },
+                    {
+                      label: "Latest task",
+                      value:
+                        pickString(deploymentLatestTask ?? {}, ["status"]) ??
+                        "no agent task linked"
+                    }
+                  ]}
+                />
+                <StructuredValue value={selectedDeployment.run.summaryJson} emptyLabel="No deployment summary." />
+              </div>
             ) : (
               <p className="empty-copy">No deployment selected.</p>
             )}
           </Panel>
           <Panel title="Step Results" eyebrow="Recorded">
             {selectedDeployment ? (
-              <StructuredValue
-                value={selectedDeployment.steps.map((step) => ({
-                  stepKind: step.stepKind,
-                  status: step.status,
-                  result: step.resultJson
-                }))}
-                emptyLabel="No step results yet."
-              />
+              <div className="detail-stack">
+                <StructuredValue
+                  value={selectedDeployment.steps.map((step) => ({
+                    stepKind: step.stepKind,
+                    status: step.status,
+                    result: step.resultJson
+                  }))}
+                  emptyLabel="No step results yet."
+                />
+                <ListBlock
+                  emptyLabel="No linked agent tasks recorded for this deployment."
+                  items={linkedTasks.map(({ step, task }) => ({
+                    title: `${step.displayLabel} · ${task?.status ?? step.status}`,
+                    subtitle:
+                      task !== null
+                        ? `${task.queueName} · ${task.taskKind}`
+                        : `${step.taskKind ?? "manual"} · task #${step.agentTaskId}`,
+                    body: (
+                      <FactGrid
+                        entries={[
+                          { label: "Step", value: step.stepKind },
+                          { label: "Task", value: step.agentTaskId ?? "none" },
+                          { label: "Queue", value: task?.queueName ?? queueName },
+                          { label: "Lease owner", value: task?.leaseOwner ?? "unleased" },
+                          { label: "Lease expiry", value: task?.leaseExpiresAt ?? "none" },
+                          { label: "Attempts", value: task ? `${task.attemptCount}/${task.maxAttempts}` : "n/a" }
+                        ]}
+                      />
+                    )
+                  }))}
+                />
+              </div>
             ) : (
               <p className="empty-copy">No step evidence loaded.</p>
             )}
@@ -5528,6 +5697,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
 }
 
 function parseScorecardChoice<T extends string>(

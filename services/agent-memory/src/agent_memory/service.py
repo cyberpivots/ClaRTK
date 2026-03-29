@@ -841,6 +841,10 @@ def maintenance_task_specs(chunk_size: int) -> dict[str, dict[str, Any]]:
 def resolve_task_queue_name(task_kind: str, queue_name: str | None) -> str:
     normalized = queue_name.strip() if isinstance(queue_name, str) else ""
     if normalized and normalized != DEFAULT_AGENT_TASK_QUEUE:
+        if task_kind.startswith("hardware."):
+            if normalized == HARDWARE_TASK_QUEUE or normalized.startswith("hardware.bench."):
+                return normalized
+            return HARDWARE_TASK_QUEUE
         return normalized
     return TASK_KIND_DEFAULT_QUEUES.get(task_kind, DEFAULT_AGENT_TASK_QUEUE)
 
@@ -1638,6 +1642,158 @@ class MemoryRepository:
             },
         ]
 
+    def _refresh_hardware_deployment_summary(
+        self,
+        connection: psycopg.Connection[Any],
+        deployment_run_id: int,
+        *,
+        requested_queue_name: str | None = None,
+    ) -> None:
+        run_row = connection.execute(
+            """
+            SELECT summary_json
+            FROM inventory.deployment_run
+            WHERE deployment_run_id = %s
+            """,
+            (deployment_run_id,),
+        ).fetchone()
+        if run_row is None:
+            return
+
+        step_rows = connection.execute(
+            """
+            SELECT
+              deployment_step_id,
+              sequence_index,
+              step_kind,
+              display_label,
+              execution_mode,
+              status,
+              required,
+              agent_task_id,
+              completed_at
+            FROM inventory.deployment_step
+            WHERE deployment_run_id = %s
+            ORDER BY sequence_index ASC, deployment_step_id ASC
+            """,
+            (deployment_run_id,),
+        ).fetchall()
+
+        latest_task_id: int | None = None
+        step_counts: dict[str, int] = {"total": len(step_rows)}
+        required_steps = 0
+        completed_required_steps = 0
+        current_step: dict[str, Any] | None = None
+        for row in step_rows:
+            status = str(row["status"])
+            step_counts[status] = step_counts.get(status, 0) + 1
+            if bool(row["required"]):
+                required_steps += 1
+                if status == HARDWARE_DEPLOYMENT_STEP_STATUS_COMPLETED:
+                    completed_required_steps += 1
+            agent_task_id = as_int(row["agent_task_id"])
+            if agent_task_id is not None:
+                latest_task_id = agent_task_id
+            if current_step is None and status not in {
+                HARDWARE_DEPLOYMENT_STEP_STATUS_COMPLETED,
+                HARDWARE_DEPLOYMENT_STEP_STATUS_CANCELLED,
+            }:
+                current_step = {
+                    "deploymentStepId": int(row["deployment_step_id"]),
+                    "sequenceIndex": int(row["sequence_index"]),
+                    "stepKind": str(row["step_kind"]),
+                    "displayLabel": str(row["display_label"]),
+                    "executionMode": str(row["execution_mode"]),
+                    "status": status,
+                    "agentTaskId": agent_task_id,
+                }
+
+        latest_task: dict[str, Any] | None = None
+        if latest_task_id is not None:
+            task_row = connection.execute(
+                """
+                SELECT agent_task_id, queue_name, status, lease_owner, lease_expires_at
+                FROM agent.task
+                WHERE agent_task_id = %s
+                """,
+                (latest_task_id,),
+            ).fetchone()
+            if task_row is not None:
+                latest_task = {
+                    "agentTaskId": int(task_row["agent_task_id"]),
+                    "queueName": str(task_row["queue_name"]),
+                    "status": str(task_row["status"]),
+                    "leaseOwner": str(task_row["lease_owner"]) if task_row["lease_owner"] else None,
+                    "leaseExpiresAt": task_row["lease_expires_at"].isoformat()
+                    if task_row["lease_expires_at"] is not None
+                    else None,
+                }
+
+        probe_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM inventory.host_probe
+                WHERE deployment_run_id = %s
+                """,
+                (deployment_run_id,),
+            ).fetchone()["count"]
+        )
+        tool_status_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM inventory.tool_status
+                WHERE deployment_run_id = %s
+                """,
+                (deployment_run_id,),
+            ).fetchone()["count"]
+        )
+        artifact_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM agent.artifact
+                WHERE metadata->>'deploymentRunId' = %s
+                """,
+                (str(deployment_run_id),),
+            ).fetchone()["count"]
+        )
+
+        summary = ensure_dict(run_row["summary_json"])
+        effective_queue_name = (
+            latest_task["queueName"]
+            if latest_task is not None
+            else str(summary.get("queueName") or HARDWARE_TASK_QUEUE)
+        )
+        summary.update(
+            {
+                "queueName": effective_queue_name,
+                "stepCounts": step_counts,
+                "progress": {
+                    "requiredSteps": required_steps,
+                    "completedRequiredSteps": completed_required_steps,
+                    "pendingRequiredSteps": max(required_steps - completed_required_steps, 0),
+                },
+                "probeCount": probe_count,
+                "toolStatusCount": tool_status_count,
+                "artifactCount": artifact_count,
+                "currentStep": current_step,
+                "latestTask": latest_task,
+            }
+        )
+        if requested_queue_name and requested_queue_name != effective_queue_name:
+            summary["requestedQueueName"] = requested_queue_name
+
+        connection.execute(
+            """
+            UPDATE inventory.deployment_run
+            SET summary_json = %s, updated_at = NOW()
+            WHERE deployment_run_id = %s
+            """,
+            (Jsonb(summary), deployment_run_id),
+        )
+
     def _advance_hardware_deployment(
         self,
         connection: psycopg.Connection[Any],
@@ -1680,6 +1836,7 @@ class MemoryRepository:
                     deployment_run_id,
                 ),
             )
+            self._refresh_hardware_deployment_summary(connection, deployment_run_id)
             return
 
         if str(next_step["execution_mode"]) == "automatic" and next_step["task_kind"]:
@@ -1698,6 +1855,7 @@ class MemoryRepository:
                     deployment_run_id,
                 ),
             )
+            self._refresh_hardware_deployment_summary(connection, deployment_run_id)
             return
 
         connection.execute(
@@ -1730,6 +1888,7 @@ class MemoryRepository:
                 deployment_run_id,
             ),
         )
+        self._refresh_hardware_deployment_summary(connection, deployment_run_id)
 
     def _ui_review_root(self) -> Path:
         configured_root = os.environ.get("CLARTK_UI_REVIEW_ROOT")
@@ -3547,6 +3706,11 @@ class MemoryRepository:
                 """,
                 (event_id, deployment_run_id),
             )
+            self._refresh_hardware_deployment_summary(
+                connection,
+                deployment_run_id,
+                requested_queue_name=str(payload.get("queueName") or "").strip() or None,
+            )
             connection.commit()
 
         detail = self.get_hardware_deployment(deployment_run_id)
@@ -3560,6 +3724,7 @@ class MemoryRepository:
         queue_name: str = DEFAULT_AGENT_TASK_QUEUE,
         priority: int = 0,
     ) -> dict[str, Any]:
+        requested_queue_name = queue_name
         queue_name = resolve_task_queue_name(HARDWARE_PROBE_HOST_TASK_KIND, queue_name)
         with self.connect() as connection:
             run_row = connection.execute(
@@ -3626,6 +3791,11 @@ class MemoryRepository:
                     """,
                     (HARDWARE_DEPLOYMENT_STATUS_AWAITING_INPUT, deployment_run_id),
                 )
+                self._refresh_hardware_deployment_summary(
+                    connection,
+                    deployment_run_id,
+                    requested_queue_name=requested_queue_name,
+                )
                 connection.commit()
                 detail = self.get_hardware_deployment(deployment_run_id)
                 if detail is None:
@@ -3672,6 +3842,11 @@ class MemoryRepository:
                 connection,
                 queue_name=queue_name,
                 task_kind=str(step_row["task_kind"]),
+            )
+            self._refresh_hardware_deployment_summary(
+                connection,
+                deployment_run_id,
+                requested_queue_name=requested_queue_name,
             )
             connection.commit()
 
@@ -3741,6 +3916,7 @@ class MemoryRepository:
                 },
             )
             self._advance_hardware_deployment(connection, deployment_run_id, latest_event_id=event_id)
+            self._refresh_hardware_deployment_summary(connection, deployment_run_id)
             connection.commit()
 
         detail = self.get_hardware_deployment(deployment_run_id)
@@ -3810,6 +3986,7 @@ class MemoryRepository:
                     deployment_run_id,
                 ),
             )
+            self._refresh_hardware_deployment_summary(connection, deployment_run_id)
             connection.commit()
 
         detail = self.get_hardware_deployment(deployment_run_id)
@@ -6929,6 +7106,7 @@ class MemoryRepository:
 
         if success:
             self._advance_hardware_deployment(connection, deployment_run_id, latest_event_id=event_id)
+            self._refresh_hardware_deployment_summary(connection, deployment_run_id)
             return
 
         connection.execute(
@@ -6949,6 +7127,7 @@ class MemoryRepository:
                 deployment_run_id,
             ),
         )
+        self._refresh_hardware_deployment_summary(connection, deployment_run_id)
 
     def _apply_ui_review_task_side_effects(
         self,

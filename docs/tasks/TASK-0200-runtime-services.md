@@ -22,3 +22,4 @@
 - `TASK-0210`: runtime schema and API hardening
 - `TASK-0220`: gateway ingest and runtime persistence
 - `TASK-0230`: dashboard runtime integration
+- `TASK-0240`: runtime PostgreSQL production hardening

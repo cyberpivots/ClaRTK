@@ -48,6 +48,9 @@ Fallback model:
 ## PostgreSQL Operations
 
 - `scripts/dev-db-smoke.sh` is the DB-only readiness check. It verifies the resolved endpoint, both logical databases, the `vector` extension in `clartk_dev`, and representative runtime/dev migration tables including the dev-console preference signal/score tables.
+- `scripts/runtime-db-migrate.sh` is the repo-owned runtime migration path and records applied runtime SQL in `meta.schema_migration`.
+- `scripts/runtime-db-status.sh` reports runtime migration ledger state, pending runtime SQL, and checksum drift.
+- `scripts/runtime-db-telemetry-partitions.sh` creates bounded monthly partitions for `telemetry.position_event` and runs parent-table analyze after partition maintenance.
 - `scripts/dev-db-backup.sh` always writes logical dumps for `clartk_runtime` and `clartk_dev` into `.clartk/dev/backups/<timestamp>/`.
 - `scripts/dev-db-backup.sh --with-volume` adds `postgres-volume.tar` for compose-backed local PostgreSQL only. The script stops PostgreSQL temporarily before archiving the volume and then reruns `scripts/dev-db-up.sh` so the resolved endpoint stays authoritative.
 - `scripts/dev-db-restore.sh --from <backup-dir> --mode logical --yes` is the portable restore path for both compose-backed and host-managed PostgreSQL endpoints.

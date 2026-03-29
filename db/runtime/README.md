@@ -14,3 +14,9 @@ Primary schemas:
 - `ui`
 
 `jsonb` is the default flexible payload type. High-volume telemetry should use partitioned tables.
+
+Repo-owned runtime database operations:
+
+- runtime migration runner: `bash scripts/runtime-db-migrate.sh`
+- runtime migration status: `bash scripts/runtime-db-status.sh`
+- telemetry partition maintenance: `bash scripts/runtime-db-telemetry-partitions.sh`
