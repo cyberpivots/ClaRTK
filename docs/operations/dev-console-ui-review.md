@@ -26,6 +26,7 @@
 - Uses Playwright-native Chromium launch when the local Linux browser runtime is available.
 - Falls back to Windows Edge over local CDP on this WSL host when the bundled Linux Chromium cannot start because of missing shared libraries.
 - Records a Playwright trace on every run.
+- Loads the app in `ui_review=1` mode so automated capture does not emit supervised preference signals back into `clartk_dev`.
 - Records named shell-level checkpoint screenshots for each reviewed panel.
 - Records a secondary mission-surface crop for each reviewed panel so shell and tray evidence can be inspected together.
 - Keeps video as secondary evidence only:
@@ -88,6 +89,8 @@
   stored only when a baseline comparison exceeds the configured threshold
 - Approved baselines:
   stored under `.clartk/dev/ui-review/baselines/<surface>/<browser>/<viewport>/`
+- Volatile live data:
+  dynamic telemetry, run metadata, timestamps, and health blocks marked with `data-review-volatile` stay visible in stored screenshots but are masked out of deterministic pixel comparison so baselines measure layout drift, not routine data churn
 
 ## Agent guidance
 

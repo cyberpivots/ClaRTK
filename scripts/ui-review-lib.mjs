@@ -218,6 +218,33 @@ function buildViewportKey(viewport) {
   return `${viewport.width}x${viewport.height}`;
 }
 
+function buildReviewUrl(baseUrl) {
+  const reviewUrl = new URL(baseUrl);
+  reviewUrl.searchParams.set("ui_review", "1");
+  return reviewUrl.toString();
+}
+
+function maskVolatileRects(png, volatileRects) {
+  if (!Array.isArray(volatileRects) || volatileRects.length === 0) {
+    return;
+  }
+  for (const rect of volatileRects) {
+    const left = Math.max(0, Math.min(png.width, Number(rect?.x ?? 0)));
+    const top = Math.max(0, Math.min(png.height, Number(rect?.y ?? 0)));
+    const right = Math.max(left, Math.min(png.width, left + Number(rect?.width ?? 0)));
+    const bottom = Math.max(top, Math.min(png.height, top + Number(rect?.height ?? 0)));
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        const index = (png.width * y + x) * 4;
+        png.data[index] = 0;
+        png.data[index + 1] = 0;
+        png.data[index + 2] = 0;
+        png.data[index + 3] = 0;
+      }
+    }
+  }
+}
+
 async function collectPanelSnapshot(page, expectedTexts, requiredShellTexts = shellExpectedTexts) {
   return page.evaluate(({ texts, shellTexts }) => {
     const shellRoot = document.querySelector("[data-review-shell='true']") ?? document.body;
@@ -236,6 +263,29 @@ async function collectPanelSnapshot(page, expectedTexts, requiredShellTexts = sh
     const reviewButtons = Array.from(
       shellRoot.querySelectorAll("[data-review-shell-button]")
     );
+    const volatileRects = Array.from(shellRoot.querySelectorAll("[data-review-volatile='true']"))
+      .map((node) => {
+        const element = node;
+        const rect = element.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) {
+          return null;
+        }
+        const left = Math.max(0, Math.floor(rect.left) - 2);
+        const top = Math.max(0, Math.floor(rect.top) - 2);
+        const right = Math.min(window.innerWidth, Math.ceil(rect.right) + 2);
+        const bottom = Math.min(window.innerHeight, Math.ceil(rect.bottom) + 2);
+        if (right <= left || bottom <= top) {
+          return null;
+        }
+        return {
+          label: element.getAttribute("data-review-volatile-label") ?? "volatile",
+          x: left,
+          y: top,
+          width: right - left,
+          height: bottom - top
+        };
+      })
+      .filter(Boolean);
     const truncatedLabels = reviewButtons
       .map((button) => {
         const element = button;
@@ -266,6 +316,7 @@ async function collectPanelSnapshot(page, expectedTexts, requiredShellTexts = sh
       documentVerticalOverflowPx,
       shellBottomOverflowPx: Math.max(0, shellRect.bottom - window.innerHeight),
       truncatedLabels,
+      volatileRects,
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight
@@ -616,7 +667,7 @@ export async function captureDevConsoleReview(options = {}) {
       });
     });
 
-    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.goto(buildReviewUrl(baseUrl), { waitUntil: "domcontentloaded" });
     await loginIfNeeded(page, email, password);
 
     for (const scenario of panelScenarios) {
@@ -830,6 +881,9 @@ export async function analyzeDevConsoleReview(options = {}) {
       shellBottomOverflowPx: Number(step.panelSnapshot?.shellBottomOverflowPx ?? 0),
       truncatedLabels: Array.isArray(step.panelSnapshot?.truncatedLabels)
         ? step.panelSnapshot.truncatedLabels
+        : [],
+      volatileRects: Array.isArray(step.panelSnapshot?.volatileRects)
+        ? step.panelSnapshot.volatileRects
         : []
     };
 
@@ -938,6 +992,8 @@ export async function analyzeDevConsoleReview(options = {}) {
 
     const current = await loadPng(screenshotPath);
     const baseline = await loadPng(baselinePath);
+    maskVolatileRects(current, snapshot.volatileRects);
+    maskVolatileRects(baseline, snapshot.volatileRects);
     if (current.width !== baseline.width || current.height !== baseline.height) {
       findings.push({
         category: "visual_diff",

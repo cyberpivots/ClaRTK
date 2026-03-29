@@ -241,6 +241,11 @@ export function App() {
     password: "clartk-admin",
     displayName: "ClaRTK Admin"
   });
+  const [isUiReviewMode] = React.useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("ui_review") === "1"
+  );
   const [authMode, setAuthMode] = React.useState<"login" | "bootstrap">("login");
   const [activeLauncher, setActiveLauncher] = React.useState<LauncherDrawerKey | null>("status");
   const lastPanelSignal = React.useRef<PanelKey | null>(null);
@@ -283,21 +288,10 @@ export function App() {
       return;
     }
     lastPanelSignal.current = state.selectedPanel;
-    void devConsoleApi.createDevPreferenceSignal({
-      signalKind: "landing_panel_selected",
+    void recordPreferenceSignal("landing_panel_selected", {
       panelKey: state.selectedPanel,
       payload: { value: state.selectedPanel }
-    }).then((signal) => {
-      setState((current) => ({
-        ...current,
-        devProfile: current.devProfile
-          ? {
-              ...current.devProfile,
-              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
-            }
-          : current.devProfile
-      }));
-    }).catch(() => {});
+    });
   }, [state.me, state.selectedPanel, state.loading, state.devProfile]);
 
   React.useEffect(() => {
@@ -308,20 +302,9 @@ export function App() {
       return;
     }
     lastDetailSignal.current = state.detailDepth;
-    void devConsoleApi.createDevPreferenceSignal({
-      signalKind: "detail_depth_selected",
+    void recordPreferenceSignal("detail_depth_selected", {
       payload: { detailDepth: state.detailDepth, value: state.detailDepth }
-    }).then((signal) => {
-      setState((current) => ({
-        ...current,
-        devProfile: current.devProfile
-          ? {
-              ...current.devProfile,
-              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
-            }
-          : current.devProfile
-      }));
-    }).catch(() => {});
+    });
   }, [state.me, state.detailDepth, state.loading, state.devProfile]);
 
   React.useEffect(() => {
@@ -332,20 +315,9 @@ export function App() {
       return;
     }
     lastHudDensitySignal.current = state.hudDensity;
-    void devConsoleApi.createDevPreferenceSignal({
-      signalKind: "hud_density_selected",
+    void recordPreferenceSignal("hud_density_selected", {
       payload: { density: state.hudDensity, value: state.hudDensity }
-    }).then((signal) => {
-      setState((current) => ({
-        ...current,
-        devProfile: current.devProfile
-          ? {
-              ...current.devProfile,
-              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
-            }
-          : current.devProfile
-      }));
-    }).catch(() => {});
+    });
   }, [state.me, state.hudDensity, state.loading, state.devProfile]);
 
   React.useEffect(() => {
@@ -356,20 +328,9 @@ export function App() {
       return;
     }
     lastMotionModeSignal.current = state.motionMode;
-    void devConsoleApi.createDevPreferenceSignal({
-      signalKind: "motion_mode_selected",
+    void recordPreferenceSignal("motion_mode_selected", {
       payload: { motionMode: state.motionMode, value: state.motionMode }
-    }).then((signal) => {
-      setState((current) => ({
-        ...current,
-        devProfile: current.devProfile
-          ? {
-              ...current.devProfile,
-              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
-            }
-          : current.devProfile
-      }));
-    }).catch(() => {});
+    });
   }, [state.me, state.motionMode, state.loading, state.devProfile]);
 
   React.useEffect(() => {
@@ -459,6 +420,9 @@ export function App() {
       payload?: Record<string, unknown>;
     } = {}
   ) {
+    if (isUiReviewMode) {
+      return null;
+    }
     if (!stateRef.current.me || stateRef.current.me.account.role !== "admin") {
       return null;
     }
@@ -494,6 +458,9 @@ export function App() {
     questionKey?: string;
     optionKey?: string;
   }) {
+    if (isUiReviewMode) {
+      return;
+    }
     if (!stateRef.current.me || stateRef.current.me.account.role !== "admin") {
       return;
     }
@@ -1296,20 +1263,10 @@ export function App() {
       return;
     }
     try {
-      const signal = await devConsoleApi.createDevPreferenceSignal({
-        signalKind: "preview_subpane_selected",
+      await recordPreferenceSignal("preview_subpane_selected", {
         panelKey: "preview",
         payload: { subpane: mode, value: mode }
       });
-      setState((current) => ({
-        ...current,
-        devProfile: current.devProfile
-          ? {
-              ...current.devProfile,
-              recentSignals: [signal, ...current.devProfile.recentSignals].slice(0, 20)
-            }
-          : current.devProfile
-      }));
     } catch {
       // preference learning stays best-effort
     }
@@ -1964,21 +1921,23 @@ export function App() {
                 </div>
               </Panel>
               <Panel title="Telemetry" eyebrow="Derived" accent="muted">
-                <div className="detail-stack">
-                  <StatusRing
-                    label="Run health"
-                    values={[
-                      { label: "preview", value: state.previewRuns?.runs.length ?? 0, tone: "ok" },
-                      { label: "review", value: state.reviewRuns?.runs.length ?? 0, tone: "neutral" },
-                      { label: "failed queues", value: queueSummary.failedCount, tone: "degraded" }
-                    ]}
-                  />
-                  <SparkBars
-                    label="Learning pulse"
-                    values={learningStats.sparkValues}
-                    captions={["signals", "decisions", "accepted", "rejected", "overridden"]}
-                  />
-                </div>
+                <ReviewVolatile label="command-rail-telemetry">
+                  <div className="detail-stack">
+                    <StatusRing
+                      label="Run health"
+                      values={[
+                        { label: "preview", value: state.previewRuns?.runs.length ?? 0, tone: "ok" },
+                        { label: "review", value: state.reviewRuns?.runs.length ?? 0, tone: "neutral" },
+                        { label: "failed queues", value: queueSummary.failedCount, tone: "degraded" }
+                      ]}
+                    />
+                    <SparkBars
+                      label="Learning pulse"
+                      values={learningStats.sparkValues}
+                      captions={["signals", "decisions", "accepted", "rejected", "overridden"]}
+                    />
+                  </div>
+                </ReviewVolatile>
               </Panel>
             </aside>
 
@@ -1988,13 +1947,15 @@ export function App() {
 
             <aside className="context-rail" data-review-shell-region="context-rail">
               <Panel title="Current Focus" eyebrow={activePanel.eyebrow} accent="muted">
-                <div className="console-focus-grid">
-                  <InfoCard label="Panel" value={activePanel.label} detail={activePanel.description} />
-                  <InfoCard label="Density" value={state.hudDensity} detail={`${state.motionMode} motion`} />
-                  <InfoCard label="Selected run" value={selectedRunLabel} detail={state.runDetail?.run.taskSlug ?? "No coordination run selected."} />
-                  <InfoCard label="Preview" value={state.selectedPreviewRun?.status ?? "idle"} detail={state.selectedPreviewRun?.deckKey ?? "No preview run selected."} />
-                  <InfoCard label="Review" value={state.selectedReviewRun?.status ?? "idle"} detail={state.reviewFindings?.findings.length ? `${state.reviewFindings.findings.length} findings loaded` : "No findings loaded."} />
-                </div>
+                <ReviewVolatile label="context-focus">
+                  <div className="console-focus-grid">
+                    <InfoCard label="Panel" value={activePanel.label} detail={activePanel.description} />
+                    <InfoCard label="Density" value={state.hudDensity} detail={`${state.motionMode} motion`} />
+                    <InfoCard label="Selected run" value={selectedRunLabel} detail={state.runDetail?.run.taskSlug ?? "No coordination run selected."} />
+                    <InfoCard label="Preview" value={state.selectedPreviewRun?.status ?? "idle"} detail={state.selectedPreviewRun?.deckKey ?? "No preview run selected."} />
+                    <InfoCard label="Review" value={state.selectedReviewRun?.status ?? "idle"} detail={state.reviewFindings?.findings.length ? `${state.reviewFindings.findings.length} findings loaded` : "No findings loaded."} />
+                  </div>
+                </ReviewVolatile>
               </Panel>
               <Panel title="Mission Brief" eyebrow="Ops Context" accent="muted">
                 <div className="detail-stack">
@@ -2008,14 +1969,18 @@ export function App() {
                       evidence streams belong in bounded list panes, not in document scroll.
                     </p>
                   </div>
-                  <div className="detail-card">
-                    <QueuePulseBars queues={state.tasks?.queues ?? []} />
-                  </div>
-                  <div className="detail-card">
-                    <VisualAlertStrip
-                      items={collectVisualAlerts(state.selectedPreviewRun, state.selectedReviewRun)}
-                    />
-                  </div>
+                  <ReviewVolatile label="mission-queue-pulse">
+                    <div className="detail-card">
+                      <QueuePulseBars queues={state.tasks?.queues ?? []} />
+                    </div>
+                  </ReviewVolatile>
+                  <ReviewVolatile label="mission-visual-alerts">
+                    <div className="detail-card">
+                      <VisualAlertStrip
+                        items={collectVisualAlerts(state.selectedPreviewRun, state.selectedReviewRun)}
+                      />
+                    </div>
+                  </ReviewVolatile>
                 </div>
               </Panel>
             </aside>
@@ -2092,6 +2057,19 @@ function TelemetryChip(props: { label: string; value: React.ReactNode }) {
       <span>{props.label}</span>
       <strong>{props.value}</strong>
     </div>
+  );
+}
+
+function ReviewVolatile(props: {
+  label: string;
+  inline?: boolean;
+  children: React.ReactNode;
+}) {
+  const Tag = props.inline ? "span" : "div";
+  return (
+    <Tag data-review-volatile="true" data-review-volatile-label={props.label}>
+      {props.children}
+    </Tag>
   );
 }
 
@@ -2400,7 +2378,9 @@ function IconNavButton(props: {
       <Glyph icon={props.panelKey} />
       <span className="icon-nav-copy">
         <strong>{props.label}</strong>
-        <span>{props.detail}</span>
+        <ReviewVolatile inline label={`panel-metric-${props.panelKey}`}>
+          {props.detail}
+        </ReviewVolatile>
         {props.shortcut ? <small>{props.shortcut}</small> : null}
       </span>
     </button>
@@ -2560,7 +2540,7 @@ function SurfaceCarousel(props: {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeIndex, props]);
+  }, [activeIndex, props.onPageChange, props.pages]);
 
   return (
     <section className="surface-carousel">
@@ -2644,7 +2624,7 @@ function QuestionnairePage(props: {
 
   React.useEffect(() => {
     void props.onEvent(props.panelKey, props.questionnaireKey, null, null, "started");
-  }, [props]);
+  }, [props.panelKey, props.questionnaireKey]);
 
   React.useEffect(() => {
     function handleQuestionnaireShortcut(event: KeyboardEvent) {
@@ -2828,7 +2808,7 @@ function PreviewSurface(props: {
 
   React.useEffect(() => {
     void props.onSurfacePageChange("preview", page, "auto");
-  }, [page, props]);
+  }, [page]);
 
   React.useEffect(() => {
     if (!selectedDeckKey && decks.length) {
@@ -2842,14 +2822,14 @@ function PreviewSurface(props: {
 
   React.useEffect(() => {
     void props.onStageModeChange(stageMode);
-  }, [props, stageMode]);
+  }, [stageMode]);
 
   React.useEffect(() => {
     if (!previewDecksLoaded || previewRunsLoaded) {
       return;
     }
     void props.onHydratePreviewState();
-  }, [previewDecksLoaded, previewRunsLoaded, props]);
+  }, [previewDecksLoaded, previewRunsLoaded]);
 
   function changePage(pageKey: string, origin: SurfacePageOrigin) {
     if (pageKey === "questions") {
@@ -3203,7 +3183,7 @@ function CoordinationSurface(props: {
 
   React.useEffect(() => {
     void props.onSurfacePageChange("coordination", page, "auto");
-  }, [page, props]);
+  }, [page]);
 
   function changePage(pageKey: string, origin: SurfacePageOrigin) {
     if (pageKey === "questions") {
@@ -3430,7 +3410,7 @@ function HardwareSurface(props: {
 
   React.useEffect(() => {
     void props.onSurfacePageChange("hardware", page, "auto");
-  }, [page, props]);
+  }, [page]);
 
   React.useEffect(() => {
     if (!baseUnitId && filteredUnits[0]) {
@@ -3793,7 +3773,7 @@ function ReviewSurface(props: {
 
   React.useEffect(() => {
     void props.onSurfacePageChange("review", page, "auto");
-  }, [page, props]);
+  }, [page]);
 
   function changePage(pageKey: string, origin: SurfacePageOrigin) {
     if (pageKey === "questions") {
@@ -3814,28 +3794,32 @@ function ReviewSurface(props: {
           <Panel title="Review Control" eyebrow="Dispatch">
             <div className="detail-stack">
               <button type="button" onClick={() => void props.onStartReview()}>Start UI review</button>
-              <StatusRing value={runs.length} total={Math.max(runs.length, 1)} label="Stored runs" />
+              <ReviewVolatile label="review-stored-runs">
+                <StatusRing value={runs.length} total={Math.max(runs.length, 1)} label="Stored runs" />
+              </ReviewVolatile>
             </div>
           </Panel>
           <Panel title="Recent Runs" eyebrow="Selection">
-            <ListBlock
-              emptyLabel={props.loading ? "Loading review runs…" : "No review runs recorded yet."}
-              items={runs.slice(0, 10).map((run) => ({
-                title: `Review #${run.uiReviewRunId}`,
-                subtitle: `${run.status} · ${formatTimestamp(run.updatedAt)}`,
-                body: (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void props.onSelectReviewRun(run.uiReviewRunId);
-                      void props.onSurfaceCardSignal("review", `run:${run.uiReviewRunId}`);
-                    }}
-                  >
-                    Inspect review
-                  </button>
-                )
-              }))}
-            />
+            <ReviewVolatile label="review-recent-runs">
+              <ListBlock
+                emptyLabel={props.loading ? "Loading review runs…" : "No review runs recorded yet."}
+                items={runs.slice(0, 10).map((run) => ({
+                  title: `Review #${run.uiReviewRunId}`,
+                  subtitle: `${run.status} · ${formatTimestamp(run.updatedAt)}`,
+                  body: (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void props.onSelectReviewRun(run.uiReviewRunId);
+                        void props.onSurfaceCardSignal("review", `run:${run.uiReviewRunId}`);
+                      }}
+                    >
+                      Inspect review
+                    </button>
+                  )
+                }))}
+              />
+            </ReviewVolatile>
           </Panel>
         </div>
       )
@@ -3995,7 +3979,7 @@ function PreferencesSurface(props: {
 
   React.useEffect(() => {
     void props.onSurfacePageChange("preferences", page, "auto");
-  }, [page, props]);
+  }, [page]);
 
   function changePage(pageKey: string, origin: SurfacePageOrigin) {
     if (pageKey === "questions") {
@@ -4015,7 +3999,9 @@ function PreferencesSurface(props: {
       content: (
         <div className="surface-page-grid surface-page-grid-2">
           <Panel title="Derived Defaults" eyebrow="Profile">
-            <StructuredValue value={scorecard} emptyLabel="No derived scorecard yet." />
+            <ReviewVolatile label="preferences-derived-defaults">
+              <StructuredValue value={scorecard} emptyLabel="No derived scorecard yet." />
+            </ReviewVolatile>
           </Panel>
           <Panel title="Manual Overrides" eyebrow="Supervised">
             <div className="surface-page-grid">
@@ -4133,7 +4119,7 @@ function IndexSurface(props: {
 
   React.useEffect(() => {
     void props.onSurfacePageChange("index", page, "auto");
-  }, [page, props]);
+  }, [page]);
 
   function changePage(pageKey: string, origin: SurfacePageOrigin) {
     setPage(pageKey);
@@ -4149,24 +4135,28 @@ function IndexSurface(props: {
       content: (
         <div className="surface-page-grid surface-page-grid-2">
           <Panel title="Workspace Status" eyebrow="Health">
-            <FactGrid
-              entries={[
-                { label: "Status", value: props.overview?.status ?? "unknown" },
-                { label: "Postgres host", value: props.overview?.postgres.host ?? "n/a" },
-                { label: "Postgres port", value: props.overview?.postgres.port ?? "n/a" },
-                { label: "Reachable", value: props.overview?.postgres.reachable ? "yes" : "no" }
-              ]}
-            />
+            <ReviewVolatile label="index-workspace-status">
+              <FactGrid
+                entries={[
+                  { label: "Status", value: props.overview?.status ?? "unknown" },
+                  { label: "Postgres host", value: props.overview?.postgres.host ?? "n/a" },
+                  { label: "Postgres port", value: props.overview?.postgres.port ?? "n/a" },
+                  { label: "Reachable", value: props.overview?.postgres.reachable ? "yes" : "no" }
+                ]}
+              />
+            </ReviewVolatile>
           </Panel>
           <Panel title="Services" eyebrow="Telemetry">
-            <ListBlock
-              emptyLabel={props.loading ? "Loading workspace overview…" : "No services reported."}
-              items={(props.overview?.services ?? []).map((service) => ({
-                title: service.service,
-                subtitle: `${service.status} · ${service.url}`,
-                body: <StructuredValue value={service.detail} emptyLabel="No additional detail." />
-              }))}
-            />
+            <ReviewVolatile label="index-services">
+              <ListBlock
+                emptyLabel={props.loading ? "Loading workspace overview…" : "No services reported."}
+                items={(props.overview?.services ?? []).map((service) => ({
+                  title: service.service,
+                  subtitle: `${service.status} · ${service.url}`,
+                  body: <StructuredValue value={service.detail} emptyLabel="No additional detail." />
+                }))}
+              />
+            </ReviewVolatile>
           </Panel>
         </div>
       )
