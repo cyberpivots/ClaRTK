@@ -26,6 +26,13 @@
 - Meshtastic firmware still ships `heltec_v2` and `heltec_v2.1` variants, but marks V2 as `not actively supported`.
 - MeshCore currently keeps a first-party `heltec_v2` target with repeater, room-server, companion-radio, and ESP-NOW bridge build profiles.
 - Espressif documents `ESP-NOW`, `espressif/esp-now`, and `ESP-WIFI-MESH` as distinct surfaces.
+- Repo outputs added in this slice:
+  - `docs/research/heltec-wifi-lora32-v2-integration.md`
+  - `docs/research/vendor-links.md` Heltec ecosystem additions
+  - `docs/tasks/index.md` task index entry
+- Dev-memory records added in this slice:
+  - source documents `9` through `18`
+  - knowledge claims `10` through `19`
 
 ## Remaining Gaps
 
