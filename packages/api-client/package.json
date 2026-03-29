@@ -5,9 +5,9 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts",
-      "react-native": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js",
+      "react-native": "./dist/index.js"
     }
   },
   "dependencies": {

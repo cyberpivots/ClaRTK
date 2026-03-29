@@ -11,9 +11,11 @@ import {
 } from "react-native";
 import { ApiClient } from "@clartk/api-client";
 import type {
+  HardwareDeploymentRunCollection,
   HardwareDeploymentRun,
   HardwareDeploymentRunDetail,
   InventoryBuild,
+  InventoryBuildCollection,
   RuntimeApiHealth
 } from "@clartk/domain";
 import { tokens } from "@clartk/design-tokens";
@@ -59,8 +61,7 @@ export function App() {
     }));
 
     try {
-      const client = createNativeApiClient(connection);
-      const health = await client.getHealth();
+      const health = await fetchNativeJson<RuntimeApiHealth>(connection, "/health");
       if (!connection.bearerToken.trim()) {
         setState({
           health,
@@ -74,11 +75,19 @@ export function App() {
       }
 
       const [builds, deployments, selectedDeployment] = await Promise.all([
-        client.listRuntimeHardwareBuilds({ limit: 6 }).then((response) => response.builds),
-        client.listRuntimeHardwareDeployments({ limit: 6 }).then((response) => response.runs),
+        fetchNativeJson<InventoryBuildCollection>(connection, "/v1/hardware/builds?limit=6").then(
+          (response) => response.builds
+        ),
+        fetchNativeJson<HardwareDeploymentRunCollection>(
+          connection,
+          "/v1/hardware/deployments?limit=6"
+        ).then((response) => response.runs),
         selectedDeploymentRunId === undefined
           ? Promise.resolve(null)
-          : client.getRuntimeHardwareDeployment(selectedDeploymentRunId)
+          : fetchNativeJson<HardwareDeploymentRunDetail>(
+              connection,
+              `/v1/hardware/deployments/${selectedDeploymentRunId}`
+            )
       ]);
       setState({
         health,
@@ -311,16 +320,21 @@ function defaultNativeApiBaseUrl(): string {
 
 function createNativeApiClient(connection: NativeConnectionState): ApiClient {
   return new ApiClient({
-    baseUrl: connection.baseUrl,
-    fetchFn: (input, init) => {
-      const headers = new Headers(init?.headers);
-      if (connection.bearerToken.trim()) {
-        headers.set("Authorization", `Bearer ${connection.bearerToken.trim()}`);
-      }
-      return fetch(input, {
-        ...init,
-        headers
-      });
-    }
+    baseUrl: connection.baseUrl
   });
+}
+
+async function fetchNativeJson<T>(connection: NativeConnectionState, path: string): Promise<T> {
+  const client = createNativeApiClient(connection);
+  const response = await fetch(client.url(path), {
+    headers: connection.bearerToken.trim()
+      ? {
+          Authorization: `Bearer ${connection.bearerToken.trim()}`
+        }
+      : undefined
+  });
+  if (!response.ok) {
+    throw new Error(`request failed for ${path}: ${response.status}`);
+  }
+  return (await response.json()) as T;
 }

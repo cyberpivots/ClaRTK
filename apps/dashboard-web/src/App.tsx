@@ -4,10 +4,12 @@ import type {
   Account,
   AuthRole,
   AuthenticatedMe,
+  HardwareDeploymentRunCollection,
   EffectiveOperatorProfile,
   HardwareDeploymentRun,
   HardwareDeploymentRunDetail,
   InventoryBuild,
+  InventoryBuildCollection,
   JsonObject,
   MyViewsResponse,
   PreferenceSuggestion,
@@ -152,11 +154,11 @@ export function App() {
           api.listDevices(),
           api.listPositions(),
           api.listSolutions(),
-          api.listRuntimeHardwareBuilds({ limit: 8 }).then((response) => response.builds),
-          api.listRuntimeHardwareDeployments({ limit: 8 }).then((response) => response.runs),
+          listDashboardHardwareBuilds(),
+          listDashboardHardwareDeployments(),
           selectedDeploymentRunId === null
             ? Promise.resolve(null)
-            : api.getRuntimeHardwareDeployment(selectedDeploymentRunId),
+            : getDashboardHardwareDeployment(selectedDeploymentRunId),
           me.account.role === "admin" ? api.listAccounts() : Promise.resolve(null)
         ];
         const [
@@ -1157,6 +1159,36 @@ function isUnauthorized(error: unknown): boolean {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected dashboard error.";
+}
+
+async function listDashboardHardwareBuilds(): Promise<InventoryBuild[]> {
+  const response = await fetchDashboardJson<InventoryBuildCollection>("/v1/hardware/builds?limit=8");
+  return response.builds;
+}
+
+async function listDashboardHardwareDeployments(): Promise<HardwareDeploymentRun[]> {
+  const response = await fetchDashboardJson<HardwareDeploymentRunCollection>(
+    "/v1/hardware/deployments?limit=8"
+  );
+  return response.runs;
+}
+
+async function getDashboardHardwareDeployment(
+  deploymentRunId: number
+): Promise<HardwareDeploymentRunDetail> {
+  return fetchDashboardJson<HardwareDeploymentRunDetail>(
+    `/v1/hardware/deployments/${deploymentRunId}`
+  );
+}
+
+async function fetchDashboardJson<T>(path: string): Promise<T> {
+  const response = await fetch(api.url(path), {
+    credentials: "include"
+  });
+  if (!response.ok) {
+    throw new Error(`request failed for ${path}: ${response.status}`);
+  }
+  return (await response.json()) as T;
 }
 
 function gridStyle(): React.CSSProperties {
