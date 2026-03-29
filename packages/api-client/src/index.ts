@@ -766,6 +766,54 @@ export class DevConsoleClient extends JsonClient {
     return this.getJson<HardwareDeploymentRunDetail>(`/v1/inventory/deployments/${deploymentRunId}`);
   }
 
+  async listRuntimeHardwareBuilds(query: {
+    status?: string;
+    buildKind?: string;
+    limit?: number;
+  } = {}): Promise<InventoryBuildCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.status === "string" && query.status) {
+      params.set("status", query.status);
+    }
+    if (typeof query.buildKind === "string" && query.buildKind) {
+      params.set("buildKind", query.buildKind);
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const path = suffix ? `/v1/hardware/builds?${suffix}` : "/v1/hardware/builds";
+    return this.getJson<InventoryBuildCollection>(path);
+  }
+
+  async getRuntimeHardwareBuild(buildId: number): Promise<InventoryBuild> {
+    return this.getJson<InventoryBuild>(`/v1/hardware/builds/${buildId}`);
+  }
+
+  async listRuntimeHardwareDeployments(query: {
+    buildId?: number;
+    limit?: number;
+  } = {}): Promise<HardwareDeploymentRunCollection> {
+    const params = new URLSearchParams();
+    if (typeof query.buildId === "number") {
+      params.set("buildId", String(query.buildId));
+    }
+    if (typeof query.limit === "number") {
+      params.set("limit", String(query.limit));
+    }
+    const suffix = params.toString();
+    const path = suffix ? `/v1/hardware/deployments?${suffix}` : "/v1/hardware/deployments";
+    return this.getJson<HardwareDeploymentRunCollection>(path);
+  }
+
+  async getRuntimeHardwareDeployment(
+    deploymentRunId: number
+  ): Promise<HardwareDeploymentRunDetail> {
+    return this.getJson<HardwareDeploymentRunDetail>(
+      `/v1/hardware/deployments/${deploymentRunId}`
+    );
+  }
+
   async startHardwareDeployment(payload: {
     buildId: number;
     deploymentKind: string;

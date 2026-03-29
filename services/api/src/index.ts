@@ -10,6 +10,10 @@ import type {
   AuthSessionResult,
   AuthenticatedMe,
   EffectiveOperatorProfile,
+  HardwareDeploymentRunCollection,
+  HardwareDeploymentRunDetail,
+  InventoryBuild,
+  InventoryBuildCollection,
   JsonObject,
   MyViewsResponse,
   PreferenceObservation,
@@ -573,6 +577,75 @@ app.post("/v1/me/suggestions/:suggestionId/publish", async (request) => {
   };
   return response;
 });
+
+app.get("/v1/hardware/builds", async (request): Promise<InventoryBuildCollection> => {
+  await requireAuth(request);
+  const query = (request.query as Record<string, unknown>) ?? {};
+  const params = new URLSearchParams();
+  const status = optionalString(query.status);
+  const buildKind = optionalString(query.buildKind);
+  if (status) {
+    params.set("status", status);
+  }
+  if (buildKind) {
+    params.set("buildKind", buildKind);
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(normalizePositiveInteger(query.limit, 20)));
+  }
+  const suffix = params.toString();
+  const path = suffix ? `/v1/internal/inventory/builds?${suffix}` : "/v1/internal/inventory/builds";
+  return agentMemoryRequest<InventoryBuildCollection>(path, {
+    method: "GET"
+  });
+});
+
+app.get("/v1/hardware/builds/:buildId", async (request): Promise<InventoryBuild> => {
+  await requireAuth(request);
+  const buildId = requirePositiveInteger(
+    (request.params as Record<string, unknown>).buildId,
+    "buildId"
+  );
+  return agentMemoryRequest<InventoryBuild>(`/v1/internal/inventory/builds/${buildId}`, {
+    method: "GET"
+  });
+});
+
+app.get("/v1/hardware/deployments", async (request): Promise<HardwareDeploymentRunCollection> => {
+  await requireAuth(request);
+  const query = (request.query as Record<string, unknown>) ?? {};
+  const params = new URLSearchParams();
+  if (query.buildId !== undefined) {
+    params.set("buildId", String(requirePositiveInteger(query.buildId, "buildId")));
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(normalizePositiveInteger(query.limit, 20)));
+  }
+  const suffix = params.toString();
+  const path = suffix
+    ? `/v1/internal/inventory/deployments?${suffix}`
+    : "/v1/internal/inventory/deployments";
+  return agentMemoryRequest<HardwareDeploymentRunCollection>(path, {
+    method: "GET"
+  });
+});
+
+app.get(
+  "/v1/hardware/deployments/:deploymentRunId",
+  async (request): Promise<HardwareDeploymentRunDetail> => {
+    await requireAuth(request);
+    const deploymentRunId = requirePositiveInteger(
+      (request.params as Record<string, unknown>).deploymentRunId,
+      "deploymentRunId"
+    );
+    return agentMemoryRequest<HardwareDeploymentRunDetail>(
+      `/v1/internal/inventory/deployments/${deploymentRunId}`,
+      {
+        method: "GET"
+      }
+    );
+  }
+);
 
 app.get("/v1/admin/accounts", async (request) => {
   const auth = await requireAuth(request);
@@ -1705,6 +1778,14 @@ function requireString(value: unknown, fieldName: string): string {
     throw new ApiError(400, `${fieldName} is required`);
   }
   return value.trim();
+}
+
+function requirePositiveInteger(value: unknown, fieldName: string): number {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new ApiError(400, `${fieldName} must be a positive integer`);
+  }
+  return number;
 }
 
 function optionalString(value: unknown): string | null {

@@ -5,6 +5,9 @@ import type {
   AuthRole,
   AuthenticatedMe,
   EffectiveOperatorProfile,
+  HardwareDeploymentRun,
+  HardwareDeploymentRunDetail,
+  InventoryBuild,
   JsonObject,
   MyViewsResponse,
   PreferenceSuggestion,
@@ -44,9 +47,13 @@ interface DashboardState {
   devices: ResourceCollection<RuntimeDevice> | null;
   positions: ResourceCollection<RuntimePositionEvent> | null;
   solutions: ResourceCollection<RuntimeRtkSolution> | null;
+  hardwareBuilds: InventoryBuild[] | null;
+  hardwareDeployments: HardwareDeploymentRun[] | null;
+  selectedDeployment: HardwareDeploymentRunDetail | null;
   accounts: ResourceCollection<Account> | null;
   selectedSuggestionAccountId: string | null;
   selectedViewId: number | null;
+  selectedDeploymentRunId: number | null;
   issuedBearerToken: string | null;
   notice: string | null;
   error: string | null;
@@ -84,9 +91,13 @@ export function App() {
     devices: null,
     positions: null,
     solutions: null,
+    hardwareBuilds: null,
+    hardwareDeployments: null,
+    selectedDeployment: null,
     accounts: null,
     selectedSuggestionAccountId: null,
     selectedViewId: null,
+    selectedDeploymentRunId: null,
     issuedBearerToken: null,
     notice: null,
     error: null
@@ -115,7 +126,8 @@ export function App() {
 
   async function refreshDashboard(
     targetAccountId = state.selectedSuggestionAccountId,
-    selectedViewId = state.selectedViewId
+    selectedViewId = state.selectedViewId,
+    selectedDeploymentRunId = state.selectedDeploymentRunId
   ) {
     try {
       const health = await api.getHealth();
@@ -130,6 +142,9 @@ export function App() {
           Promise<ResourceCollection<RuntimeDevice>>,
           Promise<ResourceCollection<RuntimePositionEvent>>,
           Promise<ResourceCollection<RuntimeRtkSolution>>,
+          Promise<InventoryBuild[]>,
+          Promise<HardwareDeploymentRun[]>,
+          Promise<HardwareDeploymentRunDetail | null>,
           Promise<ResourceCollection<Account>> | Promise<null>
         ] = [
           api.listMyViews(),
@@ -137,9 +152,24 @@ export function App() {
           api.listDevices(),
           api.listPositions(),
           api.listSolutions(),
+          api.listRuntimeHardwareBuilds({ limit: 8 }).then((response) => response.builds),
+          api.listRuntimeHardwareDeployments({ limit: 8 }).then((response) => response.runs),
+          selectedDeploymentRunId === null
+            ? Promise.resolve(null)
+            : api.getRuntimeHardwareDeployment(selectedDeploymentRunId),
           me.account.role === "admin" ? api.listAccounts() : Promise.resolve(null)
         ];
-        const [views, suggestions, devices, positions, solutions, accounts] = await Promise.all(requests);
+        const [
+          views,
+          suggestions,
+          devices,
+          positions,
+          solutions,
+          hardwareBuilds,
+          hardwareDeployments,
+          selectedDeployment,
+          accounts
+        ] = await Promise.all(requests);
 
         setProfileDraft(effectiveProfile.profile.defaults);
         setState((current) => ({
@@ -153,9 +183,13 @@ export function App() {
           devices,
           positions,
           solutions,
+          hardwareBuilds,
+          hardwareDeployments,
+          selectedDeployment,
           accounts,
           selectedSuggestionAccountId: suggestionAccountId,
           selectedViewId,
+          selectedDeploymentRunId,
           error: null
         }));
       } catch (error) {
@@ -171,9 +205,13 @@ export function App() {
             devices: null,
             positions: null,
             solutions: null,
+            hardwareBuilds: null,
+            hardwareDeployments: null,
+            selectedDeployment: null,
             accounts: null,
             selectedSuggestionAccountId: null,
             selectedViewId: null,
+            selectedDeploymentRunId: null,
             issuedBearerToken: null,
             error: null
           }));
@@ -451,6 +489,12 @@ export function App() {
   const selectedSuggestionAccount = state.accounts?.items.find(
     (account) => account.accountId === state.selectedSuggestionAccountId
   );
+  const selectedHardwareBuild =
+    state.selectedDeployment === null
+      ? null
+      : state.hardwareBuilds?.find(
+          (build) => build.buildId === state.selectedDeployment?.run.buildId
+        ) ?? null;
 
   return (
     <main
@@ -615,6 +659,128 @@ export function App() {
               <p>
                 Account overrides: <strong>{state.views?.overrides.length ?? 0}</strong>
               </p>
+              <p>
+                Hardware builds: <strong>{state.hardwareBuilds?.length ?? 0}</strong>
+              </p>
+              <p>
+                Deployment runs: <strong>{state.hardwareDeployments?.length ?? 0}</strong>
+              </p>
+            </section>
+          </section>
+
+          <section
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gap: tokens.space.lg,
+              marginTop: tokens.space.lg
+            }}
+          >
+            <section className="panel">
+              <h2>Hardware Deployment History</h2>
+              <p>
+                Read-only runtime surface for bench deployment state. Write actions stay in the dev
+                console lane.
+              </p>
+              {(state.hardwareDeployments ?? []).map((run) => (
+                <article key={run.deploymentRunId} style={cardStyle()}>
+                  <p>
+                    <strong>{run.hardwareFamily}</strong> {run.deploymentKind}
+                  </p>
+                  <p>
+                    Build <code>{run.buildId}</code> on{" "}
+                    <code>{run.benchHost ?? "unassigned-bench"}</code>
+                  </p>
+                  <p>
+                    Status: <strong>{run.status}</strong>
+                  </p>
+                  <p>
+                    Updated <code>{run.updatedAt}</code>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void refreshDashboard(
+                      state.selectedSuggestionAccountId,
+                      state.selectedViewId,
+                      run.deploymentRunId
+                    )}
+                  >
+                    Inspect deployment
+                  </button>
+                </article>
+              ))}
+              {!state.hardwareDeployments?.length ? <p>No deployment runs available.</p> : null}
+            </section>
+
+            <section className="panel">
+              <h2>Deployment Detail</h2>
+              {state.selectedDeployment ? (
+                <>
+                  <p>
+                    Run <code>{state.selectedDeployment.run.deploymentRunId}</code> for build{" "}
+                    <code>{state.selectedDeployment.run.buildId}</code>
+                  </p>
+                  <p>
+                    Target unit:{" "}
+                    <code>{String(state.selectedDeployment.run.targetUnitId ?? "unassigned")}</code>
+                  </p>
+                  <p>
+                    Bench host: <code>{state.selectedDeployment.run.benchHost ?? "unassigned"}</code>
+                  </p>
+                  <p>
+                    Status: <strong>{state.selectedDeployment.run.status}</strong>
+                  </p>
+                  {selectedHardwareBuild ? (
+                    <div style={detailBlockStyle()}>
+                      <p>
+                        <strong>{selectedHardwareBuild.buildName}</strong> ({selectedHardwareBuild.buildKind})
+                      </p>
+                      <p>
+                        Runtime publish state: <strong>{selectedHardwareBuild.status}</strong>
+                      </p>
+                      <pre style={consoleBlockStyle()}>
+                        {JSON.stringify(selectedHardwareBuild.deploymentSummaryJson, null, 2)}
+                      </pre>
+                    </div>
+                  ) : null}
+                  <div style={detailBlockStyle()}>
+                    <h3 style={subheadingStyle}>Steps</h3>
+                    {state.selectedDeployment.steps.map((step) => (
+                      <p key={step.deploymentStepId}>
+                        <strong>{step.sequenceIndex + 1}.</strong> {step.displayLabel}{" "}
+                        <code>{step.executionMode}</code> <strong>{step.status}</strong>
+                      </p>
+                    ))}
+                  </div>
+                  <div style={detailBlockStyle()}>
+                    <h3 style={subheadingStyle}>Bench Probes</h3>
+                    {state.selectedDeployment.probes.length ? (
+                      state.selectedDeployment.probes.map((probe) => (
+                        <p key={probe.hostProbeId}>
+                          <code>{probe.probeKind}</code> <strong>{probe.status}</strong>
+                        </p>
+                      ))
+                    ) : (
+                      <p>No host probes recorded.</p>
+                    )}
+                  </div>
+                  <div style={detailBlockStyle()}>
+                    <h3 style={subheadingStyle}>Tool Status</h3>
+                    {state.selectedDeployment.toolStatuses.length ? (
+                      state.selectedDeployment.toolStatuses.map((tool) => (
+                        <p key={tool.hardwareToolStatusId}>
+                          <code>{tool.toolName}</code> <strong>{tool.status}</strong>{" "}
+                          {tool.version ? <span>({tool.version})</span> : null}
+                        </p>
+                      ))
+                    ) : (
+                      <p>No tool checks recorded.</p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p>Select a deployment run to inspect bench state, step progression, and summary JSON.</p>
+              )}
             </section>
           </section>
 
@@ -1011,6 +1177,29 @@ function cardStyle(): React.CSSProperties {
   };
 }
 
+function detailBlockStyle(): React.CSSProperties {
+  return {
+    borderTop: "1px solid #d9e6e3",
+    marginTop: 16,
+    paddingTop: 16
+  };
+}
+
+function consoleBlockStyle(): React.CSSProperties {
+  return {
+    overflowX: "auto",
+    background: "#163038",
+    color: "#f2f9f8",
+    borderRadius: 12,
+    padding: 12
+  };
+}
+
+const subheadingStyle: React.CSSProperties = {
+  margin: 0,
+  marginBottom: 12
+};
+
 const fieldLabelStyle: React.CSSProperties = {
   display: "grid",
   gap: 6,
@@ -1124,13 +1313,7 @@ function SuggestionCard(props: {
         <code>{String(props.suggestion.basedOnProfileVersion ?? "unknown")}</code>
       </p>
       <pre
-        style={{
-          overflowX: "auto",
-          background: "#163038",
-          color: "#f2f9f8",
-          borderRadius: 12,
-          padding: 12
-        }}
+        style={consoleBlockStyle()}
       >
         {JSON.stringify(props.suggestion.candidatePatch, null, 2)}
       </pre>

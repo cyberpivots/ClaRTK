@@ -448,7 +448,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@clartk/native@workspace:apps/native"
   dependencies:
+    "@clartk/api-client": "workspace:*"
     "@clartk/design-tokens": "workspace:*"
+    "@clartk/domain": "workspace:*"
     "@clartk/ui-native": "workspace:*"
     "@types/react": "npm:^19.0.12"
     react: "npm:^19.0.0"
